@@ -1,0 +1,6 @@
+<bx:output>
+<div>
+	<h1 class="fantasy-heading">The Adventure Begins</h1>
+	<p>#message#</p>
+</div>
+</bx:output>

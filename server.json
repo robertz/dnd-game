@@ -1,0 +1,25 @@
+{
+    "name":"dnd-game",
+    "app":{
+        "cfengine":"boxlang@1",
+        "engineConfigFile":"./runtime/boxlang.json"
+    },
+    "jvm":{
+        "heapSize":"512",
+        "javaVersion":"openjdk21_jre",
+        "args":"-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=8889"
+    },
+    "web":{
+        "webroot":"public",
+        "rewrites":{
+            "enable":true
+        },
+        "aliases":{
+            "/coldbox/system/exceptions":"./lib/coldbox/system/exceptions/",
+            "/tests":"./tests/"
+        }
+    },
+    "scripts":{
+        "onServerInitialInstall":"install bx-esapi,bx-mysql"
+    }
+}

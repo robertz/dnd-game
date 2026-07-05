@@ -1,0 +1,7 @@
+class extends="cbwire.models.Component" {
+
+	data = {
+		"message": "hello world"
+	}
+
+}

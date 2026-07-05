@@ -1,0 +1,96 @@
+<bx:output>
+<!doctype html>
+<html lang="en">
+<head>
+	<!--- Metatags --->
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+	<meta name="description" content="A Dungeons &amp; Dragons style game demo">
+    <meta name="author" content="You">
+
+	<!---Base URL --->
+	<base href="#event.getHTMLBaseURL()#" />
+
+	<!--- Fonts --->
+	<link rel="preconnect" href="https://fonts.googleapis.com">
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+	<link href="https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700;900&family=IM+Fell+English:ital@0;1&display=swap" rel="stylesheet">
+
+	<style>
+		:root {
+			--parchment: ##e8dcc0;
+			--parchment-dark: ##d8c79f;
+			--ink: ##2b1d0e;
+			--gold: ##b9922f;
+			--blood: ##6e1414;
+			--night: ##14100c;
+		}
+
+		html, body {
+			height: 100%;
+			margin: 0;
+		}
+
+		body {
+			min-height: 100vh;
+			background:
+				radial-gradient( ellipse at center, ##2a2016 0%, ##14100c 70% ),
+				repeating-linear-gradient( 45deg, ##1a140d 0px, ##1a140d 2px, ##14100c 2px, ##14100c 4px );
+			color: var(--parchment);
+			font-family: "IM Fell English", serif;
+			display: flex;
+			flex-direction: column;
+			align-items: center;
+			padding: 3rem 1rem;
+		}
+
+		h1, h2, h3, .fantasy-heading {
+			font-family: "Cinzel Decorative", serif;
+			color: var(--gold);
+			text-shadow: 0 0 8px rgba(185, 146, 47, 0.5);
+			letter-spacing: 0.03em;
+		}
+
+		main.scroll {
+			width: 100%;
+			max-width: 780px;
+		}
+
+		.parchment-panel {
+			background:
+				radial-gradient( ellipse at top left, rgba(255,255,255,0.15), transparent 60% ),
+				linear-gradient( var(--parchment), var(--parchment-dark) );
+			color: var(--ink);
+			border: 2px solid var(--gold);
+			border-radius: 6px;
+			box-shadow:
+				0 0 0 6px var(--night),
+				0 0 0 8px var(--gold),
+				0 20px 50px rgba(0, 0, 0, 0.6);
+			padding: 2.5rem 2.5rem 2rem;
+			position: relative;
+		}
+
+		.parchment-panel::before {
+			content: "";
+			position: absolute;
+			inset: 10px;
+			border: 1px solid rgba(110, 20, 20, 0.35);
+			border-radius: 3px;
+			pointer-events: none;
+		}
+	</style>
+
+	<!--- Title --->
+	<title>The Adventure Begins</title>
+</head>
+<body>
+	<!---Container And Views --->
+	<main class="scroll">
+		<div class="parchment-panel">
+			#view()#
+		</div>
+	</main>
+</body>
+</html>
+</bx:output>

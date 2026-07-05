@@ -1,0 +1,7 @@
+<bx:output>
+
+<div class="container mb-5">
+	#wire(name="default")#
+</div>
+
+</bx:output>

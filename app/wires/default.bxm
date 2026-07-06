@@ -117,6 +117,15 @@
 				</bx:if>
 			</div>
 		</bx:if>
+
+		<div class="combat-log">
+			<h2 class="fantasy-heading">Combat Log</h2>
+			<ul class="log-list">
+				<bx:loop array="#log#" index="entry">
+					<li>#entry#</li>
+				</bx:loop>
+			</ul>
+		</div>
 	</div>
 
 	<div class="encounter-sidebar">
@@ -126,37 +135,27 @@
 				<h2 class="fantasy-heading">#player.name#</h2>
 				<p class="stat-subtitle">Level #player.level# #player.class##( player.hitPoints <= 0 ? " — Unconscious" : ( playerBloodied ? " — Bloodied" : "" ) )#</p>
 				<div class="hp-bar"><div class="hp-bar-fill#( playerBloodied ? ' hp-bar-fill-bloodied' : '' )#" style="width:#round( max( player.hitPoints, 0 ) / player.maxHitPoints * 100 )#%;"></div></div>
-				<ul class="stat-list">
-					<li><strong>AC</strong> #player.armorClass#</li>
-					<li><strong>HP</strong> #max( player.hitPoints, 0 )# / #player.maxHitPoints#</li>
-					<bx:if structKeyExists( player, "isDying" ) && player.isDying>
-						<li><strong>Death Saves</strong> #min( player.deathSaveSuccesses, 3 )# success(es), #min( player.deathSaveFailures, 3 )# failure(s)</li>
-					</bx:if>
-					<bx:if structKeyExists( player, "conditions" ) && structCount( player.conditions ) gt 0>
-						<li><strong>Conditions</strong> #arrayToList( structKeyArray( player.conditions ), ", " )#</li>
-					</bx:if>
-					<li><strong>Speed</strong> #player.speed# ft.</li>
-					<li><strong>Inventory</strong>
-						<ul class="inventory-list">
-							<bx:loop array="#player.inventory#" index="item">
-								<li>#item.name# (+#item.attackBonus# to hit, #item.damageDice#+#item.damageBonus# #item.damageType##( item.category == "ranged" ? ", range " & ( item.normalRange * 5 ) & "/" & ( item.longRange * 5 ) & " ft." : "" )#)</li>
-							</bx:loop>
-						</ul>
-					</li>
-					<li><strong>Saving Throws</strong> #arrayToList( player.savingThrowProficiencies, ", " )#</li>
-					<li><strong>Features</strong> #arrayToList( player.features, ", " )#</li>
-					<bx:if structKeyExists( player, "isSpellcaster" ) && player.isSpellcaster>
-						<li><strong>Spell Slots</strong>
-							<bx:if structCount( player.spellSlots ) == 0>
-								none
-							<bx:else>
-								<bx:loop collection="#player.spellSlots#" item="spellLevel">
-									L#spellLevel#: #player.spellSlots[ spellLevel ]#&nbsp;
-								</bx:loop>
-							</bx:if>
-						</li>
-					</bx:if>
-				</ul>
+				<div class="stat-inline">
+					<span><strong>AC</strong> #player.armorClass#</span>
+					<span><strong>HP</strong> #max( player.hitPoints, 0 )#/#player.maxHitPoints#</span>
+					<span><strong>Spd</strong> #player.speed# ft.</span>
+				</div>
+				<bx:if structKeyExists( player, "isDying" ) && player.isDying>
+					<p class="stat-note"><strong>Death Saves</strong> ✓#min( player.deathSaveSuccesses, 3 )# ✗#min( player.deathSaveFailures, 3 )#</p>
+				</bx:if>
+				<bx:if structKeyExists( player, "conditions" ) && structCount( player.conditions ) gt 0>
+					<p class="stat-note"><strong>Conditions</strong> #arrayToList( structKeyArray( player.conditions ), ", " )#</p>
+				</bx:if>
+				<bx:if player.inventory.len() gt 0>
+					<ul class="attack-list">
+						<bx:loop array="#player.inventory#" index="item">
+							<li>#item.name# <span class="attack-stat">+#item.attackBonus# · #item.damageDice#+#item.damageBonus#</span></li>
+						</bx:loop>
+					</ul>
+				</bx:if>
+				<bx:if structKeyExists( player, "isSpellcaster" ) && player.isSpellcaster && structCount( player.spellSlots ) gt 0>
+					<p class="stat-note"><strong>Slots</strong> <bx:loop collection="#player.spellSlots#" item="spellLevel">L#spellLevel#:#player.spellSlots[ spellLevel ]# </bx:loop></p>
+				</bx:if>
 			</div>
 
 			<bx:loop array="#opponents#" index="foe">
@@ -167,36 +166,31 @@
 					wire:click="selectTarget(#foe.mobIndex#)"
 				>
 					<h2 class="fantasy-heading">#foe.name##( foeTargeted && foe.hitPoints gt 0 ? ' 🎯' : '' )#</h2>
-					<p class="stat-subtitle">Medium #foe.creatureType##( foe.hitPoints <= 0 ? " — Destroyed" : ( foeBloodied ? " — Bloodied" : "" ) )#</p>
+					<p class="stat-subtitle">#foe.creatureType##( foe.hitPoints <= 0 ? " — Destroyed" : ( foeBloodied ? " — Bloodied" : "" ) )#</p>
 					<div class="hp-bar"><div class="hp-bar-fill#( foeBloodied ? ' hp-bar-fill-bloodied' : '' )#" style="width:#round( max( foe.hitPoints, 0 ) / foe.maxHitPoints * 100 )#%;"></div></div>
-					<ul class="stat-list">
-						<li><strong>AC</strong> #foe.armorClass#</li>
-						<li><strong>HP</strong> #max( foe.hitPoints, 0 )# / #foe.maxHitPoints#</li>
-						<bx:if structKeyExists( foe, "conditions" ) && structCount( foe.conditions ) gt 0>
-							<li><strong>Conditions</strong> #arrayToList( structKeyArray( foe.conditions ), ", " )#</li>
-						</bx:if>
-						<li><strong>Speed</strong> #foe.speed# ft.</li>
-						<li><strong>Inventory</strong>
-							<ul class="inventory-list">
-								<bx:loop array="#foe.inventory#" index="item">
-									<li>#item.name# (+#item.attackBonus# to hit, #item.damageDice#+#item.damageBonus# #item.damageType##( item.category == "ranged" ? ", range " & ( item.normalRange * 5 ) & "/" & ( item.longRange * 5 ) & " ft." : "" )#)</li>
-								</bx:loop>
-							</ul>
-						</li>
-						<li><strong>Vulnerable</strong> #arrayToList( foe.vulnerabilities, ", " )#</li>
-						<li><strong>Immune</strong> #arrayToList( foe.immunities, ", " )#</li>
-					</ul>
+					<div class="stat-inline">
+						<span><strong>AC</strong> #foe.armorClass#</span>
+						<span><strong>HP</strong> #max( foe.hitPoints, 0 )#/#foe.maxHitPoints#</span>
+						<span><strong>Spd</strong> #foe.speed# ft.</span>
+					</div>
+					<bx:if structKeyExists( foe, "conditions" ) && structCount( foe.conditions ) gt 0>
+						<p class="stat-note"><strong>Conditions</strong> #arrayToList( structKeyArray( foe.conditions ), ", " )#</p>
+					</bx:if>
+					<bx:if foe.inventory.len() gt 0>
+						<ul class="attack-list">
+							<bx:loop array="#foe.inventory#" index="item">
+								<li>#item.name# <span class="attack-stat">+#item.attackBonus# · #item.damageDice#+#item.damageBonus#</span></li>
+							</bx:loop>
+						</ul>
+					</bx:if>
+					<bx:if foe.vulnerabilities.len() gt 0>
+						<p class="stat-note stat-note-vuln"><strong>Vuln</strong> #arrayToList( foe.vulnerabilities, ", " )#</p>
+					</bx:if>
+					<bx:if foe.immunities.len() gt 0>
+						<p class="stat-note stat-note-immune"><strong>Immune</strong> #arrayToList( foe.immunities, ", " )#</p>
+					</bx:if>
 				</div>
 			</bx:loop>
-		</div>
-
-		<div class="combat-log">
-			<h2 class="fantasy-heading">Combat Log</h2>
-			<ul class="log-list">
-				<bx:loop array="#log#" index="entry">
-					<li>#entry#</li>
-				</bx:loop>
-			</ul>
 		</div>
 	</div>
 </div>

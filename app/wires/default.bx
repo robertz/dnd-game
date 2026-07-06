@@ -642,39 +642,19 @@ class extends="cbwire.models.Component" {
 			return;
 		}
 
-		var templates = _monsterTemplates();
-		var mobCount = randRange( MIN_MOB_COUNT, MAX_MOB_COUNT );
-		var opponents = [];
-		var takenPositions = [ variables.data.player.position ];
-
-		for ( var i = 1; i <= mobCount; i++ ) {
-			var mob = duplicate( templates[ randRange( 1, templates.len() ) ] );
-			var spawnPoint = variables.data.grid.opponentSpawn;
-			mob.position = ( i == 1 )
-				? { "x": spawnPoint.x, "y": spawnPoint.y }
-				: combatService.findOpenTileNear( variables.data.grid, spawnPoint, takenPositions );
-			mob.mobIndex = i;
-			arrayAppend( takenPositions, mob.position );
-			arrayAppend( opponents, mob );
-		}
-
-		variables.data.opponents = opponents;
-		variables.data.opponent  = opponents[ 1 ];
-		variables.data.selectedOpponentIndex = 1;
-
-		variables.data.gameOver        = false;
-		variables.data.outcome         = "";
+		variables.data.opponents        = [];
+		variables.data.opponent         = {};
+		variables.data.gameOver         = false;
+		variables.data.outcome          = "";
 		variables.data.initiativeRolled = false;
 		variables.data.player.inCombat  = false;
-		variables.data.restDone        = false;
-		variables.data.stateSaved      = false;
-		variables.data.round           = 1;
-		variables.data.currentTurn     = "player";
-		variables.data.autoBattling    = false;
-		variables.data.log             = [ "You press deeper into the dungeon." ];
-
-		combatService.startNewRound( variables.data );
-		_updateCombatState();
+		variables.data.restDone         = false;
+		variables.data.stateSaved       = false;
+		variables.data.round            = 1;
+		variables.data.currentTurn      = "player";
+		variables.data.autoBattling     = false;
+		variables.data.movementRemaining = variables.data.player.speed / 5;
+		variables.data.log              = [ "The dungeon is cleared. You stand victorious." ];
 	}
 
 	/**
@@ -697,7 +677,7 @@ class extends="cbwire.models.Component" {
 	 */
 	function spendHitDie() {
 		var player = variables.data.player;
-		if ( !variables.data.gameOver || ( structKeyExists( player, "inCombat" ) && player.inCombat ) || player.hitDiceSpent >= player.hitDiceMax || player.hitPoints >= player.maxHitPoints ) {
+		if ( !variables.data.gameOver || variables.data.outcome != "victory" || ( structKeyExists( player, "inCombat" ) && player.inCombat ) || player.hitDiceSpent >= player.hitDiceMax || player.hitPoints >= player.maxHitPoints ) {
 			return;
 		}
 		var result = combatService.shortRest( player );
@@ -711,7 +691,7 @@ class extends="cbwire.models.Component" {
 	 * (minimum 1), and resets all spell slots. Available after combat ends.
 	 */
 	function takeLongRest() {
-		if ( !variables.data.gameOver || ( structKeyExists( variables.data.player, "inCombat" ) && variables.data.player.inCombat ) ) {
+		if ( !variables.data.gameOver || variables.data.outcome != "victory" || ( structKeyExists( variables.data.player, "inCombat" ) && variables.data.player.inCombat ) ) {
 			return;
 		}
 		combatService.longRest( variables.data.player );

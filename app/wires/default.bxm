@@ -39,7 +39,7 @@
 					<button type="button" class="btn btn-attack" wire:click="confirmAbilityScoreImprovement()">Confirm</button>
 				</div>
 			</bx:if>
-			<bx:if !restDone && !(structKeyExists( player, "inCombat" ) && player.inCombat)>
+			<bx:if outcome == "victory" && !restDone && !(structKeyExists( player, "inCombat" ) && player.inCombat)>
 			<bx:set hitDiceRemaining = player.hitDiceMax - player.hitDiceSpent>
 			<div class="parchment-panel rest-panel">
 				<h2 class="fantasy-heading">Rest</h2>
@@ -60,11 +60,11 @@
 					<button type="button" class="btn" wire:click="takeLongRest()">Long Rest — Full Recovery</button>
 				</div>
 			</div>
+			</bx:if>
 			<bx:if outcome == "victory">
 				<div class="turn-actions">
 					<button type="button" class="btn btn-attack" wire:click="continueExploring()">Continue Exploring</button>
 				</div>
-			</bx:if>
 			</bx:if>
 		<bx:else>
 			<bx:if !initiativeRolled>

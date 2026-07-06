@@ -561,6 +561,65 @@ class singleton {
 	}
 
 	/**
+	 * Picks up to `count` distinct walkable tiles scattered within `radius`
+	 * squares (Chebyshev distance, matching this game's 8-directional
+	 * movement) of `center`, excluding anything in `excludePositions` — used
+	 * to spread multiple mobs across a level's designed opponentSpawn area
+	 * instead of the tight, nearest-tile-first cluster findOpenTileNear()
+	 * alone produces. Falls back to findOpenTileNear() (BFS outward from
+	 * center) to fill any slots the radius can't cover — e.g. a small room,
+	 * or a scatter radius that clips the level edge.
+	 *
+	 * @grid A level grid (`{width, height, tiles}`, from MapService).
+	 * @center The point to scatter around (typically the level's opponentSpawn).
+	 * @radius How many squares out (Chebyshev) to search for candidates.
+	 * @count How many positions to return.
+	 * @excludePositions Array of `{x, y}` points that don't count as open.
+	 */
+	function randomOpenTilesNear( grid, center, radius, count, excludePositions ) {
+		var excluded = duplicate( arguments.excludePositions );
+		var candidates = [];
+		for ( var dy = -arguments.radius; dy <= arguments.radius; dy++ ) {
+			for ( var dx = -arguments.radius; dx <= arguments.radius; dx++ ) {
+				var x = arguments.center.x + dx;
+				var y = arguments.center.y + dy;
+				if ( !isWalkable( arguments.grid, x, y ) ) {
+					continue;
+				}
+				var isExcluded = false;
+				for ( var p in excluded ) {
+					if ( p.x == x && p.y == y ) {
+						isExcluded = true;
+						break;
+					}
+				}
+				if ( !isExcluded ) {
+					arrayAppend( candidates, { "x": x, "y": y } );
+				}
+			}
+		}
+
+		var picked = [];
+		while ( candidates.len() > 0 && picked.len() < arguments.count ) {
+			var index = randRange( 1, candidates.len() );
+			arrayAppend( picked, candidates[ index ] );
+			arrayAppend( excluded, candidates[ index ] );
+			arrayDeleteAt( candidates, index );
+		}
+
+		while ( picked.len() < arguments.count ) {
+			var fallback = findOpenTileNear( arguments.grid, arguments.center, excluded );
+			if ( isNull( fallback ) ) {
+				break;
+			}
+			arrayAppend( picked, fallback );
+			arrayAppend( excluded, fallback );
+		}
+
+		return picked;
+	}
+
+	/**
 	 * Breadth-first search over `grid`'s walkable (8-directional) tiles from
 	 * `start` to the first tile satisfying `isGoal(x, y)`. Returns the path as
 	 * an array of `{x, y}` points including `start` and the goal tile, or an
@@ -2428,7 +2487,12 @@ class singleton {
 			"modifiers": modifiers,
 			"proficiencyBonus": row.proficiency_bonus[ 1 ],
 			"armorClass": row.armor_class[ 1 ],
-			"hitPoints": max( 1, row.hit_points[ 1 ] ),
+			// Floored at 0, not 1 — every damage application already clamps to
+			// 0 (never negative), and default.bx's onMount() specifically
+			// checks for a true 0 here to auto-heal a character loaded after a
+			// defeat (defeat no longer offers an in-encounter rest option).
+			// Flooring to 1 would hide that signal and leave them stuck.
+			"hitPoints": max( 0, row.hit_points[ 1 ] ),
 			"maxHitPoints": row.max_hit_points[ 1 ],
 			// Die size (e.g. 8 for a d8) used when spending Hit Dice on a short rest.
 			"hitDieSize": int( reReplace( row.hit_die[ 1 ], "[^0-9]*(\d+).*", "\1" ) ),

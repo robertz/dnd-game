@@ -1,0 +1,77 @@
+class extends="cbwire.models.Component" {
+
+	/**
+	 * Adventure module/map picker, shown between character selection and
+	 * the combat encounter. Drilling into a module (chooseModule) stays on
+	 * this component rather than navigating away, then selectMap() stores
+	 * the choice in session (like session.charid) so the combat route
+	 * doesn't need query-string plumbing, and redirects into the encounter.
+	 */
+	property name="mapService" inject="MapService";
+
+	data = {
+		"modules": [],
+		"maps": [],
+		"selectedModule": ""
+	}
+
+	/**
+	 * Loads every installed adventure module for display.
+	 */
+	function onMount( event, rc, prc, params ) {
+		var moduleRows = mapService.listModules();
+		var modules = [];
+		for ( var row in moduleRows ) {
+			arrayAppend( modules, { "slug": row.slug, "name": row.name, "description": row.description } );
+		}
+		variables.data.modules = modules;
+	}
+
+	/**
+	 * Drills into one module's map list without leaving this component.
+	 *
+	 * @moduleSlug adventure_modules.slug to browse.
+	 */
+	function chooseModule( moduleSlug ) {
+		variables.data.selectedModule = arguments.moduleSlug;
+		var mapRows = mapService.listMapsForModule( arguments.moduleSlug );
+		var maps = [];
+		for ( var mapRow in mapRows ) {
+			arrayAppend( maps, { "slug": mapRow.slug, "name": mapRow.name, "width": mapRow.width, "height": mapRow.height } );
+		}
+		variables.data.maps = maps;
+	}
+
+	/**
+	 * Backs out of a module's map list to the module list.
+	 */
+	function backToModules() {
+		variables.data.selectedModule = "";
+		variables.data.maps = [];
+	}
+
+	/**
+	 * Selects a database-backed adventure map and heads into the
+	 * encounter — see MapService.bx's getModuleMap(), read from session by
+	 * default.bx's onMount().
+	 *
+	 * @mapSlug adventure_maps.slug within the currently drilled-into module.
+	 */
+	function selectMap( mapSlug ) {
+		session.adventureModule = variables.data.selectedModule;
+		session.adventureMap = arguments.mapSlug;
+		redirect( "/combat" );
+	}
+
+	/**
+	 * Skips module selection and plays the hand-authored dungeon level —
+	 * clears any previously selected module so a stale session value from
+	 * an earlier run doesn't leak into this one.
+	 */
+	function selectClassicDungeon() {
+		structDelete( session, "adventureModule" );
+		structDelete( session, "adventureMap" );
+		redirect( "/combat" );
+	}
+
+}

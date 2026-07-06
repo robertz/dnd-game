@@ -1,0 +1,48 @@
+<bx:output>
+<div class="encounter">
+	<div class="encounter-main">
+		<bx:if len( selectedModule ) == 0>
+			<h1 class="fantasy-heading">Choose Your Adventure</h1>
+
+			<bx:if modules.len() == 0>
+				<p class="encounter-intro">No adventure modules installed yet.</p>
+			<bx:else>
+				<div class="creation-grid">
+					<bx:loop array="#modules#" index="moduleOption">
+						<div class="creation-card" wire:click="chooseModule('#moduleOption.slug#')">
+							<h3 class="fantasy-heading">#moduleOption.name#</h3>
+							<p class="stat-subtitle">#moduleOption.description#</p>
+						</div>
+					</bx:loop>
+				</div>
+			</bx:if>
+
+			<div class="turn-actions">
+				<div class="creation-card" wire:click="selectClassicDungeon()">
+					<h3 class="fantasy-heading">Classic Dungeon</h3>
+					<p class="stat-subtitle">The original hand-built dungeon crawl.</p>
+				</div>
+			</div>
+		<bx:else>
+			<h1 class="fantasy-heading">Choose Your Map</h1>
+
+			<bx:if maps.len() == 0>
+				<p class="encounter-intro">This module has no maps yet.</p>
+			<bx:else>
+				<div class="creation-grid">
+					<bx:loop array="#maps#" index="mapOption">
+						<div class="creation-card" wire:click="selectMap('#mapOption.slug#')">
+							<h3 class="fantasy-heading">#mapOption.name#</h3>
+							<p class="stat-subtitle">#mapOption.width# x #mapOption.height#</p>
+						</div>
+					</bx:loop>
+				</div>
+			</bx:if>
+
+			<div class="turn-actions">
+				<a class="btn" wire:click="backToModules()">Back to Modules</a>
+			</div>
+		</bx:if>
+	</div>
+</div>
+</bx:output>

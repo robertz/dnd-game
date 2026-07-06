@@ -193,7 +193,7 @@
 
 		<div class="turn-actions" style="margin-top: 1.5rem;">
 			<a class="btn" href="/">Back to Character Select</a>
-			<a class="btn btn-auto-battle" href="/combat">Adventure</a>
+			<a class="btn btn-auto-battle" href="/adventure">Adventure</a>
 		</div>
 
 	</div>

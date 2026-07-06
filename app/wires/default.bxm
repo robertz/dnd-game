@@ -39,28 +39,6 @@
 					<button type="button" class="btn btn-attack" wire:click="confirmAbilityScoreImprovement()">Confirm</button>
 				</div>
 			</bx:if>
-			<bx:if outcome == "victory" && !restDone && !(structKeyExists( player, "inCombat" ) && player.inCombat)>
-			<bx:set hitDiceRemaining = player.hitDiceMax - player.hitDiceSpent>
-			<div class="parchment-panel rest-panel">
-				<h2 class="fantasy-heading">Rest</h2>
-				<div class="stat-inline">
-					<span><strong>HP</strong> #max( player.hitPoints, 0 )#/#player.maxHitPoints#</span>
-					<span><strong>Hit Dice</strong> #hitDiceRemaining#/#player.hitDiceMax# (1d#player.hitDieSize#)</span>
-					<bx:if structKeyExists( player, "isSpellcaster" ) && player.isSpellcaster && structCount( player.spellSlots ) gt 0>
-						<span><strong>Slots</strong> <bx:loop collection="#player.spellSlots#" item="sl">L#sl#:#player.spellSlots[ sl ]# </bx:loop></span>
-					</bx:if>
-				</div>
-				<div class="turn-actions">
-					<button
-						type="button"
-						class="btn btn-attack"
-						wire:click="spendHitDie()"
-						#( hitDiceRemaining lte 0 || player.hitPoints gte player.maxHitPoints ? "disabled" : "" )#
-					>Short Rest — Spend Hit Die</button>
-					<button type="button" class="btn" wire:click="takeLongRest()">Long Rest — Full Recovery</button>
-				</div>
-			</div>
-			</bx:if>
 			<bx:if outcome == "victory">
 				<div class="turn-actions">
 					<button type="button" class="btn btn-attack" wire:click="continueExploring()">Continue Exploring</button>
@@ -78,6 +56,29 @@
 					<bx:if currentTurn == "player">(#movementRemaining# square(s) of movement left#( actionUsed ? ", action used" : "" )#)</bx:if>
 				</p>
 			</bx:if>
+		</bx:if>
+
+		<bx:if canRest()>
+		<bx:set hitDiceRemaining = player.hitDiceMax - player.hitDiceSpent>
+		<div class="parchment-panel rest-panel">
+			<h2 class="fantasy-heading">Rest</h2>
+			<div class="stat-inline">
+				<span><strong>HP</strong> #max( player.hitPoints, 0 )#/#player.maxHitPoints#</span>
+				<span><strong>Hit Dice</strong> #hitDiceRemaining#/#player.hitDiceMax# (1d#player.hitDieSize#)</span>
+				<bx:if structKeyExists( player, "isSpellcaster" ) && player.isSpellcaster && structCount( player.spellSlots ) gt 0>
+					<span><strong>Slots</strong> <bx:loop collection="#player.spellSlots#" item="sl">L#sl#:#player.spellSlots[ sl ]# </bx:loop></span>
+				</bx:if>
+			</div>
+			<div class="turn-actions">
+				<button
+					type="button"
+					class="btn btn-attack"
+					wire:click="spendHitDie()"
+					#( hitDiceRemaining lte 0 || player.hitPoints gte player.maxHitPoints ? "disabled" : "" )#
+				>Short Rest — Spend Hit Die</button>
+				<button type="button" class="btn" wire:click="takeLongRest()">Long Rest — Full Recovery</button>
+			</div>
+		</div>
 		</bx:if>
 
 		<bx:set viewport = viewportBounds()>
@@ -194,37 +195,39 @@
 			</div>
 
 			<bx:loop array="#opponents#" index="foe">
-				<bx:set foeBloodied = ( foe.hitPoints > 0 && foe.hitPoints <= foe.maxHitPoints / 2 )>
-				<bx:set foeTargeted = ( foe.mobIndex == selectedOpponentIndex )>
-				<div
-					class="stat-card stat-card-opponent#( foe.hitPoints <= 0 ? ' stat-card-down' : '' )##( foeTargeted && foe.hitPoints gt 0 ? ' stat-card-targeted' : '' )#"
-					wire:click="selectTarget(#foe.mobIndex#)"
-				>
-					<h2 class="fantasy-heading">#foe.name##( foeTargeted && foe.hitPoints gt 0 ? ' 🎯' : '' )#</h2>
-					<p class="stat-subtitle">#foe.creatureType##( foe.hitPoints <= 0 ? " — Destroyed" : ( foeBloodied ? " — Bloodied" : "" ) )#</p>
-					<div class="hp-bar"><div class="hp-bar-fill#( foeBloodied ? ' hp-bar-fill-bloodied' : '' )#" style="width:#round( max( foe.hitPoints, 0 ) / foe.maxHitPoints * 100 )#%;"></div></div>
-					<div class="stat-inline">
-						<span><strong>AC</strong> #foe.armorClass#</span>
-						<span><strong>HP</strong> #max( foe.hitPoints, 0 )#/#foe.maxHitPoints#</span>
-						<span><strong>Spd</strong> #foe.speed# ft.</span>
+				<bx:if foe.visible>
+					<bx:set foeBloodied = ( foe.hitPoints > 0 && foe.hitPoints <= foe.maxHitPoints / 2 )>
+					<bx:set foeTargeted = ( foe.mobIndex == selectedOpponentIndex )>
+					<div
+						class="stat-card stat-card-opponent#( foe.hitPoints <= 0 ? ' stat-card-down' : '' )##( foeTargeted && foe.hitPoints gt 0 ? ' stat-card-targeted' : '' )#"
+						wire:click="selectTarget(#foe.mobIndex#)"
+					>
+						<h2 class="fantasy-heading">#foe.name##( foeTargeted && foe.hitPoints gt 0 ? ' 🎯' : '' )#</h2>
+						<p class="stat-subtitle">#foe.creatureType##( foe.hitPoints <= 0 ? " — Destroyed" : ( foeBloodied ? " — Bloodied" : "" ) )#</p>
+						<div class="hp-bar"><div class="hp-bar-fill#( foeBloodied ? ' hp-bar-fill-bloodied' : '' )#" style="width:#round( max( foe.hitPoints, 0 ) / foe.maxHitPoints * 100 )#%;"></div></div>
+						<div class="stat-inline">
+							<span><strong>AC</strong> #foe.armorClass#</span>
+							<span><strong>HP</strong> #max( foe.hitPoints, 0 )#/#foe.maxHitPoints#</span>
+							<span><strong>Spd</strong> #foe.speed# ft.</span>
+						</div>
+						<bx:if structKeyExists( foe, "conditions" ) && structCount( foe.conditions ) gt 0>
+							<p class="stat-note"><strong>Conditions</strong> #arrayToList( structKeyArray( foe.conditions ), ", " )#</p>
+						</bx:if>
+						<bx:if foe.inventory.len() gt 0>
+							<ul class="attack-list">
+								<bx:loop array="#foe.inventory#" index="item">
+									<li>#item.name# <span class="attack-stat">+#item.attackBonus# · #item.damageDice#+#item.damageBonus#</span></li>
+								</bx:loop>
+							</ul>
+						</bx:if>
+						<bx:if foe.vulnerabilities.len() gt 0>
+							<p class="stat-note stat-note-vuln"><strong>Vuln</strong> #arrayToList( foe.vulnerabilities, ", " )#</p>
+						</bx:if>
+						<bx:if foe.immunities.len() gt 0>
+							<p class="stat-note stat-note-immune"><strong>Immune</strong> #arrayToList( foe.immunities, ", " )#</p>
+						</bx:if>
 					</div>
-					<bx:if structKeyExists( foe, "conditions" ) && structCount( foe.conditions ) gt 0>
-						<p class="stat-note"><strong>Conditions</strong> #arrayToList( structKeyArray( foe.conditions ), ", " )#</p>
-					</bx:if>
-					<bx:if foe.inventory.len() gt 0>
-						<ul class="attack-list">
-							<bx:loop array="#foe.inventory#" index="item">
-								<li>#item.name# <span class="attack-stat">+#item.attackBonus# · #item.damageDice#+#item.damageBonus#</span></li>
-							</bx:loop>
-						</ul>
-					</bx:if>
-					<bx:if foe.vulnerabilities.len() gt 0>
-						<p class="stat-note stat-note-vuln"><strong>Vuln</strong> #arrayToList( foe.vulnerabilities, ", " )#</p>
-					</bx:if>
-					<bx:if foe.immunities.len() gt 0>
-						<p class="stat-note stat-note-immune"><strong>Immune</strong> #arrayToList( foe.immunities, ", " )#</p>
-					</bx:if>
-				</div>
+				</bx:if>
 			</bx:loop>
 		</div>
 	</div>

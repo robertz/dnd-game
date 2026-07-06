@@ -1,0 +1,17 @@
+class extends="coldbox.system.EventHandler" {
+
+	/**
+	 * Adventure module/map picker, shown before entering combat. Requires a
+	 * character already selected (session.charid, set by the
+	 * character-select screen) — without one, send the player back to pick
+	 * someone first.
+	 */
+	function index( event, rc, prc ){
+		if ( !structKeyExists( session, "charid" ) || !len( session.charid ) ) {
+			relocate( "main.index" );
+			return;
+		}
+		event.setView( "adventure/index" );
+	}
+
+}

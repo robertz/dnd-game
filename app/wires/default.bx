@@ -18,11 +18,14 @@ class extends="cbwire.models.Component" {
 	VIEWPORT_RADIUS = 7;
 
 	// How many mobs spawn in one encounter — randomized within this range so
-	// fights vary without needing per-level authored spawn points; additional
-	// mobs beyond the first are placed via combatService.findOpenTileNear()
-	// starting from the level's one designed opponentSpawn.
+	// fights vary without needing per-level authored spawn points; positions
+	// are scattered via combatService.randomOpenTilesNear() around the
+	// level's one designed opponentSpawn instead of stacked on it.
 	MIN_MOB_COUNT = 2;
 	MAX_MOB_COUNT = 3;
+
+	// How far (in squares) from opponentSpawn mobs can scatter.
+	MOB_SCATTER_RADIUS = 5;
 
 	/**
 	 * The player character is loaded from the gameserver `characters` schema
@@ -79,8 +82,6 @@ class extends="cbwire.models.Component" {
 		"asiAbility2": "dex",
 		// True once we've persisted HP/slots to the DB after this encounter ended.
 		"stateSaved": false,
-		// True after the player picks a rest option — collapses the rest panel.
-		"restDone": false,
 		// False until at least one opponent has line of sight to the player.
 		// Combat actions and enemy turns are blocked until initiative rolls.
 		"initiativeRolled": false
@@ -92,15 +93,35 @@ class extends="cbwire.models.Component" {
 	 * view ever renders) from the gameserver schema, loads the level's grid
 	 * (tiles + spawn points) from MapService, places the player at their
 	 * designed spawn, and spawns 2-3 mobs (from _monsterTemplates(), each an
-	 * independent copy) starting from the level's one designed opponentSpawn
-	 * and fanning out to nearby open tiles for any additional mobs.
+	 * independent copy) scattered across open tiles around the level's one
+	 * designed opponentSpawn.
+	 *
+	 * The grid defaults to the hand-authored "grandDungeon" level. A
+	 * `?module=<slug>&map=<slug>` query pair overrides that directly, but
+	 * normal play reaches this via the adventure module/map picker
+	 * (moduleSelect.bx), which stores the choice in session.adventureModule
+	 * / session.adventureMap — see MapService.bx's getModuleMap().
+	 *
+	 * A character loaded at 0 HP (persisted from a defeat — canRest() blocks
+	 * resting immediately after a defeat, so a freshly-defeated character has
+	 * no other way to recover) is fully healed before the new encounter
+	 * starts, rather than being permanently stuck at 0 HP.
 	 */
 	function onMount( event, rc, prc, params ) {
 		variables.data.player = combatService.loadCharacter( session.charid );
 		if ( structKeyExists( rc, "rest" ) ) {
 			combatService.longRest( variables.data.player );
 		}
-		variables.data.grid = mapService.getLevel( "grandDungeon" );
+		if ( variables.data.player.hitPoints <= 0 ) {
+			combatService.longRest( variables.data.player );
+		}
+		if ( structKeyExists( rc, "module" ) && structKeyExists( rc, "map" ) ) {
+			variables.data.grid = mapService.getModuleMap( rc.module, rc.map );
+		} else if ( structKeyExists( session, "adventureModule" ) && len( session.adventureModule ) ) {
+			variables.data.grid = mapService.getModuleMap( session.adventureModule, session.adventureMap );
+		} else {
+			variables.data.grid = mapService.getLevel( "grandDungeon" );
+		}
 		variables.data.player.position = { "x": variables.data.grid.playerSpawn.x, "y": variables.data.grid.playerSpawn.y };
 
 		var templates = _monsterTemplates();
@@ -108,12 +129,12 @@ class extends="cbwire.models.Component" {
 		var opponents = [];
 		var takenPositions = [ variables.data.player.position ];
 
+		var spawnPoint = variables.data.grid.opponentSpawn;
+		var mobPositions = combatService.randomOpenTilesNear( variables.data.grid, spawnPoint, MOB_SCATTER_RADIUS, mobCount, takenPositions );
+
 		for ( var i = 1; i <= mobCount; i++ ) {
 			var mob = duplicate( templates[ randRange( 1, templates.len() ) ] );
-			var spawnPoint = variables.data.grid.opponentSpawn;
-			mob.position = ( i == 1 )
-				? { "x": spawnPoint.x, "y": spawnPoint.y }
-				: combatService.findOpenTileNear( variables.data.grid, spawnPoint, takenPositions );
+			mob.position = ( i <= mobPositions.len() ) ? mobPositions[ i ] : { "x": spawnPoint.x, "y": spawnPoint.y };
 			mob.mobIndex = i;
 			arrayAppend( takenPositions, mob.position );
 			arrayAppend( opponents, mob );
@@ -136,6 +157,14 @@ class extends="cbwire.models.Component" {
 	 * - First time inCombat becomes true: rolls initiative.
 	 * - inCombat false and movement exhausted: auto-ends the turn (or resets
 	 *   exploration movement when initiative hasn't rolled yet).
+	 *
+	 * Also stamps each living opponent with `visible` (line of sight is
+	 * symmetric on this grid, so opponent-to-player doubles as
+	 * player-to-opponent) — default.bxm only renders a combatant card while
+	 * `visible` is true, so mobs stay hidden until the player actually spots
+	 * them instead of always showing the full roster. Defeated opponents are
+	 * left visible regardless (no longer a hidden threat, and the "Destroyed"
+	 * status is worth keeping on screen).
 	 */
 	private function _updateCombatState() {
 		if ( variables.data.gameOver ) {
@@ -144,9 +173,10 @@ class extends="cbwire.models.Component" {
 		var player = variables.data.player;
 		var nowInCombat = false;
 		for ( var opp in variables.data.opponents ) {
-			if ( opp.hitPoints > 0 && combatService.hasLineOfSight( variables.data.grid, opp.position, player.position ) ) {
+			opp.visible = ( opp.hitPoints <= 0 )
+				|| combatService.hasLineOfSight( variables.data.grid, opp.position, player.position );
+			if ( opp.hitPoints > 0 && opp.visible ) {
 				nowInCombat = true;
-				break;
 			}
 		}
 		player.inCombat = nowInCombat;
@@ -648,7 +678,6 @@ class extends="cbwire.models.Component" {
 		variables.data.outcome          = "";
 		variables.data.initiativeRolled = false;
 		variables.data.player.inCombat  = false;
-		variables.data.restDone         = false;
 		variables.data.stateSaved       = false;
 		variables.data.round            = 1;
 		variables.data.currentTurn      = "player";
@@ -671,33 +700,47 @@ class extends="cbwire.models.Component" {
 	}
 
 	/**
+	 * True whenever it's safe to rest: not currently threatened by an aware,
+	 * in-sight opponent, and not mid-combat-round. A fresh defeat (outcome ==
+	 * "defeat") stays blocked even though inCombat is false by then — an
+	 * unconscious/dead character can't rest themselves; see onMount()'s
+	 * auto-heal-on-reload for how they recover instead.
+	 */
+	function canRest() {
+		var player = variables.data.player;
+		if ( structKeyExists( player, "inCombat" ) && player.inCombat ) {
+			return false;
+		}
+		return !( variables.data.gameOver && variables.data.outcome == "defeat" );
+	}
+
+	/**
 	 * Short Rest action: spends one Hit Die (1d[hitDieSize] + CON modifier) to
-	 * recover HP. Only available after combat ends while the character has
-	 * remaining Hit Dice and is not at full HP.
+	 * recover HP. Available any time the player isn't in combat, while the
+	 * character has remaining Hit Dice and isn't at full HP.
 	 */
 	function spendHitDie() {
 		var player = variables.data.player;
-		if ( !variables.data.gameOver || variables.data.outcome != "victory" || ( structKeyExists( player, "inCombat" ) && player.inCombat ) || player.hitDiceSpent >= player.hitDiceMax || player.hitPoints >= player.maxHitPoints ) {
+		if ( !canRest() || player.hitDiceSpent >= player.hitDiceMax || player.hitPoints >= player.maxHitPoints ) {
 			return;
 		}
 		var result = combatService.shortRest( player );
 		var sign   = result.conMod >= 0 ? "+" : "";
 		variables.data.log.prepend( "#player.name# spends a Hit Die (1d#player.hitDieSize#): rolled #result.roll##sign##result.conMod# = +#result.healing# HP (#player.hitPoints#/#player.maxHitPoints# HP)." );
-		variables.data.restDone = true;
 	}
 
 	/**
 	 * Long Rest action: restores all HP, recovers half of spent hit dice
-	 * (minimum 1), and resets all spell slots. Available after combat ends.
+	 * (minimum 1), and resets all spell slots. Available any time the player
+	 * isn't in combat.
 	 */
 	function takeLongRest() {
-		if ( !variables.data.gameOver || variables.data.outcome != "victory" || ( structKeyExists( variables.data.player, "inCombat" ) && variables.data.player.inCombat ) ) {
+		if ( !canRest() ) {
 			return;
 		}
 		combatService.longRest( variables.data.player );
 		var player = variables.data.player;
 		variables.data.log.prepend( "#player.name# takes a Long Rest — fully restored (#player.maxHitPoints#/#player.maxHitPoints# HP). All spell slots recovered." );
-		variables.data.restDone = true;
 	}
 
 	/**

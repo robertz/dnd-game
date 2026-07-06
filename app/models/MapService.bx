@@ -30,7 +30,15 @@ class singleton {
 		"O": { "tile": "wall", "decoration": "pillar" },
 		"D": { "tile": "floor", "decoration": "door" },
 		"x": { "tile": "floor", "decoration": "spikes" },
-		"c": { "tile": "floor", "decoration": "chest" }
+		"c": { "tile": "floor", "decoration": "chest" },
+		// Outdoor terrain, used by database-backed adventure module maps
+		// (see getModuleMap/getModuleMapViewport below) alongside the
+		// dungeon symbols above.
+		"g": { "tile": "floor", "decoration": "grass" },
+		"r": { "tile": "floor", "decoration": "road" },
+		"t": { "tile": "wall", "decoration": "forest" },
+		"m": { "tile": "wall", "decoration": "mountain" },
+		"w": { "tile": "wall", "decoration": "water" }
 	};
 
 	/**
@@ -44,6 +52,272 @@ class singleton {
 		var levels = _levels();
 		var definition = levels.keyExists( arguments.name ) ? levels[ arguments.name ] : levels[ "openField" ];
 		return _parseAsciiLevel( definition.rows, definition.playerSpawn, definition.opponentSpawn );
+	}
+
+	/**
+	 * Lists every installed adventure module, for the module-select screen.
+	 */
+	function listModules() {
+		return queryExecute(
+			"SELECT slug, name, description FROM adventure_modules ORDER BY name",
+			{},
+			{ datasource: "gameserver" }
+		);
+	}
+
+	/**
+	 * Lists the maps belonging to one adventure module, for the map picker
+	 * step of the module-select screen.
+	 *
+	 * @moduleSlug Adventure module slug.
+	 */
+	function listMapsForModule( moduleSlug ) {
+		return queryExecute(
+			"SELECT m.slug, m.name, m.width, m.height
+			 FROM adventure_maps m
+			 INNER JOIN adventure_modules am ON am.id = m.module_id
+			 WHERE am.slug = :moduleSlug
+			 ORDER BY m.name",
+			{ "moduleSlug": arguments.moduleSlug },
+			{ datasource: "gameserver" }
+		);
+	}
+
+	/**
+	 * Loads a map from an adventure module by slug, decoding its RLE-
+	 * compressed chunks into the same {width, height, tiles, decorations,
+	 * playerSpawn, opponentSpawn} struct getLevel() returns, so callers
+	 * (the CBWIRE component, CombatService) don't care whether a map came
+	 * from a hardcoded ASCII level or the database.
+	 *
+	 * @moduleSlug Adventure module slug, e.g. "lost-mines".
+	 * @mapSlug Map slug within that module, e.g. "trade-road".
+	 */
+	function getModuleMap( moduleSlug, mapSlug ) {
+		var mapRow = _getMapRow( arguments.moduleSlug, arguments.mapSlug );
+		var legend = JSONDeserialize( mapRow.tile_legend[ 1 ] );
+		var width = mapRow.width[ 1 ];
+		var height = mapRow.height[ 1 ];
+		var chunkSize = mapRow.chunk_size[ 1 ];
+
+		var tiles = _emptyGrid( width, height );
+		var decorations = _emptyGrid( width, height );
+
+		var chunkRows = queryExecute(
+			"SELECT chunk_x, chunk_y, row_data FROM adventure_map_chunks WHERE map_id = :mapId",
+			{ "mapId": mapRow.id[ 1 ] },
+			{ datasource: "gameserver" }
+		);
+		for ( var i = 1; i <= chunkRows.recordCount; i++ ) {
+			var decoded = _decodeChunk( chunkRows.row_data[ i ], legend );
+			_blitChunk( tiles, decorations, decoded, chunkRows.chunk_x[ i ], chunkRows.chunk_y[ i ], chunkSize );
+		}
+
+		return {
+			"width": width,
+			"height": height,
+			"tiles": tiles,
+			"decorations": decorations,
+			"playerSpawn": { "x": mapRow.player_spawn_x[ 1 ], "y": mapRow.player_spawn_y[ 1 ] },
+			"opponentSpawn": { "x": mapRow.opponent_spawn_x[ 1 ], "y": mapRow.opponent_spawn_y[ 1 ] }
+		};
+	}
+
+	/**
+	 * Same idea as getModuleMap(), but decodes only the chunks overlapping
+	 * a square viewport centered on (centerX, centerY) — for maps too
+	 * large to decode and hold in full (outdoor maps spanning hundreds of
+	 * tiles per side). The returned tiles/decorations are viewport-local
+	 * (1-based), with originX/originY giving the map-space coordinate of
+	 * tiles[1][1], so callers can translate between the two coordinate
+	 * spaces.
+	 *
+	 * @moduleSlug Adventure module slug.
+	 * @mapSlug Map slug within that module.
+	 * @centerX Map-space x coordinate the viewport is centered on.
+	 * @centerY Map-space y coordinate the viewport is centered on.
+	 * @radius Tiles visible in each direction from the center.
+	 */
+	function getModuleMapViewport( moduleSlug, mapSlug, centerX, centerY, radius ) {
+		var mapRow = _getMapRow( arguments.moduleSlug, arguments.mapSlug );
+		var legend = JSONDeserialize( mapRow.tile_legend[ 1 ] );
+		var width = mapRow.width[ 1 ];
+		var height = mapRow.height[ 1 ];
+		var chunkSize = mapRow.chunk_size[ 1 ];
+
+		var minX = max( 1, arguments.centerX - arguments.radius );
+		var minY = max( 1, arguments.centerY - arguments.radius );
+		var maxX = min( width, arguments.centerX + arguments.radius );
+		var maxY = min( height, arguments.centerY + arguments.radius );
+		var minChunkX = int( ( minX - 1 ) / chunkSize );
+		var maxChunkX = int( ( maxX - 1 ) / chunkSize );
+		var minChunkY = int( ( minY - 1 ) / chunkSize );
+		var maxChunkY = int( ( maxY - 1 ) / chunkSize );
+
+		var chunkRows = queryExecute(
+			"SELECT chunk_x, chunk_y, row_data FROM adventure_map_chunks
+			 WHERE map_id = :mapId
+			   AND chunk_x BETWEEN :minChunkX AND :maxChunkX
+			   AND chunk_y BETWEEN :minChunkY AND :maxChunkY",
+			{
+				"mapId": mapRow.id[ 1 ],
+				"minChunkX": minChunkX, "maxChunkX": maxChunkX,
+				"minChunkY": minChunkY, "maxChunkY": maxChunkY
+			},
+			{ datasource: "gameserver" }
+		);
+
+		// Decode each fetched chunk once, then read tiles out of these
+		// chunk-local buffers by (chunkX, chunkY) — never materializing a
+		// full-map-sized grid.
+		var decodedChunks = {};
+		for ( var i = 1; i <= chunkRows.recordCount; i++ ) {
+			var key = "#chunkRows.chunk_x[ i ]#,#chunkRows.chunk_y[ i ]#";
+			decodedChunks[ key ] = { "chunkX": chunkRows.chunk_x[ i ], "chunkY": chunkRows.chunk_y[ i ], "decoded": _decodeChunk( chunkRows.row_data[ i ], legend ) };
+		}
+
+		var viewTiles = [];
+		var viewDecorations = [];
+		for ( var y = minY; y <= maxY; y++ ) {
+			var tileRow = [];
+			var decorationRow = [];
+			for ( var x = minX; x <= maxX; x++ ) {
+				var chunkX = int( ( x - 1 ) / chunkSize );
+				var chunkY = int( ( y - 1 ) / chunkSize );
+				var key = "#chunkX#,#chunkY#";
+				var localX = ( x - 1 ) % chunkSize + 1;
+				var localY = ( y - 1 ) % chunkSize + 1;
+				if ( decodedChunks.keyExists( key ) ) {
+					arrayAppend( tileRow, decodedChunks[ key ].decoded.tiles[ localY ][ localX ] );
+					arrayAppend( decorationRow, decodedChunks[ key ].decoded.decorations[ localY ][ localX ] );
+				} else {
+					arrayAppend( tileRow, "floor" );
+					arrayAppend( decorationRow, "" );
+				}
+			}
+			arrayAppend( viewTiles, tileRow );
+			arrayAppend( viewDecorations, decorationRow );
+		}
+
+		return {
+			"originX": minX,
+			"originY": minY,
+			"width": maxX - minX + 1,
+			"height": maxY - minY + 1,
+			"tiles": viewTiles,
+			"decorations": viewDecorations
+		};
+	}
+
+	/**
+	 * Looks up a single adventure map row by module/map slug. Column
+	 * values come back as arrays (queryExecute's column-major struct
+	 * shape), so callers index [1] for the single row.
+	 */
+	private function _getMapRow( moduleSlug, mapSlug ) {
+		var rows = queryExecute(
+			"SELECT m.id, m.width, m.height, m.chunk_size, m.tile_legend,
+			        m.player_spawn_x, m.player_spawn_y, m.opponent_spawn_x, m.opponent_spawn_y
+			 FROM adventure_maps m
+			 INNER JOIN adventure_modules am ON am.id = m.module_id
+			 WHERE am.slug = :moduleSlug AND m.slug = :mapSlug",
+			{ "moduleSlug": arguments.moduleSlug, "mapSlug": arguments.mapSlug },
+			{ datasource: "gameserver" }
+		);
+		if ( rows.recordCount == 0 ) {
+			throw( type = "MapNotFound", message = "No map '#arguments.mapSlug#' in module '#arguments.moduleSlug#'." );
+		}
+		return rows;
+	}
+
+	/**
+	 * Decodes one chunk's row_data (LF-separated RLE rows) into
+	 * {tiles, decorations} arrays sized to that chunk alone.
+	 */
+	private function _decodeChunk( rowData, legend ) {
+		var lines = listToArray( arguments.rowData, char( 10 ) );
+		var tiles = [];
+		var decorations = [];
+		for ( var line in lines ) {
+			var expanded = _decodeRLE( line );
+			var tileRow = [];
+			var decorationRow = [];
+			for ( var x = 1; x <= len( expanded ); x++ ) {
+				var symbol = mid( expanded, x, 1 );
+				var meaning = arguments.legend.keyExists( symbol ) ? arguments.legend[ symbol ] : { "tile": "floor", "decoration": "" };
+				arrayAppend( tileRow, meaning.tile );
+				arrayAppend( decorationRow, meaning.decoration );
+			}
+			arrayAppend( tiles, tileRow );
+			arrayAppend( decorations, decorationRow );
+		}
+		return { "tiles": tiles, "decorations": decorations };
+	}
+
+	/**
+	 * Copies a decoded chunk's tiles/decorations into a full-map-sized
+	 * grid at its chunk offset (chunkX/chunkY are 0-based chunk indices).
+	 */
+	private function _blitChunk( tiles, decorations, decoded, chunkX, chunkY, chunkSize ) {
+		var offsetY = arguments.chunkY * arguments.chunkSize;
+		var offsetX = arguments.chunkX * arguments.chunkSize;
+		for ( var y = 1; y <= arrayLen( decoded.tiles ); y++ ) {
+			for ( var x = 1; x <= arrayLen( decoded.tiles[ y ] ); x++ ) {
+				arguments.tiles[ offsetY + y ][ offsetX + x ] = decoded.tiles[ y ][ x ];
+				arguments.decorations[ offsetY + y ][ offsetX + x ] = decoded.decorations[ y ][ x ];
+			}
+		}
+	}
+
+	/**
+	 * Builds a width x height grid of empty strings as a blitting target.
+	 */
+	private function _emptyGrid( width, height ) {
+		var grid = [];
+		for ( var y = 1; y <= arguments.height; y++ ) {
+			var row = [];
+			for ( var x = 1; x <= arguments.width; x++ ) {
+				arrayAppend( row, "" );
+			}
+			arrayAppend( grid, row );
+		}
+		return grid;
+	}
+
+	/**
+	 * Expands a "count:symbol,count:symbol,..." RLE-encoded row back into
+	 * its literal character string.
+	 */
+	private function _decodeRLE( rle ) {
+		var out = "";
+		var tokens = listToArray( arguments.rle, "," );
+		for ( var token in tokens ) {
+			var runLength = val( listFirst( token, ":" ) );
+			var symbol = listLast( token, ":" );
+			out &= repeatString( symbol, runLength );
+		}
+		return out;
+	}
+
+	/**
+	 * Compresses a literal row string into "count:symbol" RLE tokens —
+	 * the inverse of _decodeRLE(), used by import tooling when authoring
+	 * adventure module content, not at request time.
+	 */
+	private function _encodeRLE( rowText ) {
+		var tokens = [];
+		var rowLength = len( arguments.rowText );
+		var i = 1;
+		while ( i <= rowLength ) {
+			var symbol = mid( arguments.rowText, i, 1 );
+			var runLength = 1;
+			while ( i + runLength <= rowLength && mid( arguments.rowText, i + runLength, 1 ) == symbol ) {
+				runLength++;
+			}
+			arrayAppend( tokens, "#runLength#:#symbol#" );
+			i += runLength;
+		}
+		return arrayToList( tokens, "," );
 	}
 
 	/**

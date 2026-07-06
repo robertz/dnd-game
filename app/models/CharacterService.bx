@@ -39,6 +39,19 @@ class singleton {
 	}
 
 	/**
+	 * Returns a summary of every saved character, for the character-select
+	 * screen to list (id, name, class, species, level).
+	 */
+	function listSavedCharacters() {
+		return queryExecute(
+			"SELECT c.id, c.name, cl.name AS className, c.species, c.level
+			 FROM characters c JOIN classes cl ON cl.id = c.class_id
+			 ORDER BY c.name",
+			{}, { datasource: "gameserver" }
+		);
+	}
+
+	/**
 	 * Creates a new character row with standard derived stats — Level 1 Hit
 	 * Points (class hit die max + Con modifier, per the "Level 1 Hit Points
 	 * by Class" table), base Armor Class (10 + Dex modifier; class features

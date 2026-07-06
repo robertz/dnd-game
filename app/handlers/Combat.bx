@@ -1,0 +1,17 @@
+class extends="coldbox.system.EventHandler" {
+
+	/**
+	 * The combat encounter page. Requires a character to already be picked
+	 * (session.charid, set by the character-select screen) — without one,
+	 * there's nothing to load a combatant from, so send the player back to
+	 * pick someone first.
+	 */
+	function index( event, rc, prc ){
+		if ( !structKeyExists( session, "charid" ) || !len( session.charid ) ) {
+			relocate( "main.index" );
+			return;
+		}
+		event.setView( "combat/index" );
+	}
+
+}

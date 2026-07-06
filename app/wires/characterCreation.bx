@@ -165,6 +165,16 @@ class extends="cbwire.models.Component" {
 			alignment = variables.data.selectedAlignment
 		);
 		variables.data.formError = "";
+		// Playing this character next is the natural next step, so make it
+		// the selected one — same session value the character-select screen sets.
+		session.charid = variables.data.createdCharacterId;
+	}
+
+	/**
+	 * Heads into the encounter as the character just created.
+	 */
+	function beginAdventure() {
+		redirect( "/combat/index" );
 	}
 
 	/**

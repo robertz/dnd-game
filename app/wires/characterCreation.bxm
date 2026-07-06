@@ -14,6 +14,10 @@
 				<li><strong>INT</strong> #assignedScores.int# &nbsp; <strong>WIS</strong> #assignedScores.wis# &nbsp; <strong>CHA</strong> #assignedScores.cha#</li>
 			</ul>
 		</div>
+		<div class="turn-actions">
+			<button type="button" class="btn btn-attack" wire:click="beginAdventure()">Begin Adventure</button>
+			<a class="btn btn-end-turn" href="/">Back to Character Select</a>
+		</div>
 	<bx:else>
 		<p class="encounter-intro">Step #step# of #totalSteps#</p>
 

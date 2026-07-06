@@ -1,0 +1,44 @@
+class extends="cbwire.models.Component" {
+
+	/**
+	 * Character-select screen: lists every saved character (from the
+	 * gameserver schema) for the player to resume, or links off to the
+	 * character creation wizard. Picking one stores its id as
+	 * `session.charid` and sends the player to the combat encounter, which
+	 * reads that same session value to decide who's fighting.
+	 */
+	property name="characterService" inject="CharacterService";
+
+	data = {
+		"characters": []
+	}
+
+	/**
+	 * Loads the roster for display.
+	 */
+	function onMount( event, rc, prc, params ) {
+		var rows = characterService.listSavedCharacters();
+		var characters = [];
+		for ( var row in rows ) {
+			arrayAppend( characters, {
+				"id": row.id,
+				"name": row.name,
+				"className": row.className,
+				"species": row.species,
+				"level": row.level
+			} );
+		}
+		variables.data.characters = characters;
+	}
+
+	/**
+	 * Selects a saved character and heads into the encounter.
+	 *
+	 * @characterId characters.id to play as.
+	 */
+	function selectCharacter( characterId ) {
+		session.charid = arguments.characterId;
+		redirect( "/combat/index" );
+	}
+
+}

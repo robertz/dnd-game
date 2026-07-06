@@ -552,7 +552,14 @@ def emit_monsters_sql(monsters, out):
 # Spells
 # --------------------------------------------------------------------------
 
-SPELL_SUBTITLE_RE = re.compile(r"^_(?:Level (\d+)|(\w+) Cantrip)\s+(\w+)\s+\(([^)]+)\)_", re.MULTILINE)
+
+# Leveled spells and cantrips use different subtitle shapes in the source
+# markdown: "_Level 3 Evocation (Sorcerer, Wizard)_" vs. "_Evocation Cantrip
+# (Sorcerer, Wizard)_" (school and "Cantrip" swap places, and there's no
+# level number at all). The two alternatives below capture the school in a
+# different group each (2 for leveled, 3 for cantrips) since it sits in a
+# different position in the two shapes; see is_cantrip/school below.
+SPELL_SUBTITLE_RE = re.compile(r"^_(?:Level (\d+) (\w+)|(\w+) Cantrip)\s+\(([^)]+)\)_", re.MULTILINE)
 # Handles both "**Label:** Value" (colon inside bold) and "**Label**: Value" (outside).
 SPELL_FIELD_RE = re.compile(r"^\*\*([^*:]+):?\*\*:?\s+(.+)$", re.MULTILINE)
 HIGHER_LEVEL_RE = re.compile(r"_Using a Higher-Level Spell Slot\._\s*(.+?)(?=\n\n|\Z)", re.DOTALL)
@@ -577,8 +584,8 @@ def parse_spells(srd_path):
             continue
 
         level_str = subtitle_m.group(1)
-        is_cantrip = subtitle_m.group(2) is not None
-        school = subtitle_m.group(3) if not is_cantrip else subtitle_m.group(2)
+        is_cantrip = subtitle_m.group(3) is not None
+        school = subtitle_m.group(3) if is_cantrip else subtitle_m.group(2)
         classes = subtitle_m.group(4)
         level = 0 if is_cantrip else int(level_str)
 

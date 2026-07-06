@@ -42,31 +42,28 @@ class singleton {
 		"Paladin": "cha", "Ranger": "wis"
 	};
 
-	// Each spellcasting class's default cantrip and 1st-level spell. This app
-	// has no UI for the player to choose a spell list, so each class gets one
-	// fixed, clean-to-simulate spell of each kind — an attack-roll or saving-
-	// throw damage cantrip, and either a damage or a healing 1st-level spell.
-	// Every other spell in the 312-entry `spells` reference table has only
-	// free-text rules (no structured damage/save fields), so it's flavor
-	// reference material, not something this engine can simulate generically.
-	CLASS_CANTRIPS = {
-		"Wizard": { "type": "attack", "name": "Fire Bolt", "damageType": "Fire" },
-		"Sorcerer": { "type": "attack", "name": "Fire Bolt", "damageType": "Fire" },
-		"Warlock": { "type": "attack", "name": "Eldritch Blast", "damageType": "Force" },
-		"Druid": { "type": "attack", "name": "Produce Flame", "damageType": "Fire" },
-		"Cleric": { "type": "save", "name": "Sacred Flame", "damageType": "Radiant", "saveAbility": "dex" },
-		"Bard": { "type": "save", "name": "Vicious Mockery", "damageType": "Psychic", "saveAbility": "wis" }
+	// Each spellcasting class's default cantrip is now looked up from the real
+	// spells table (via _lookupClassSpell(), level 0), same as the 1st-level
+	// spell — the SRD import originally had a regex bug that silently
+	// dropped every level-0 spell, since cantrips are subtitled differently
+	// ("Evocation Cantrip (...)") than leveled spells ("Level 3 Evocation
+	// (...)"); fixed in import_srd.py and backfilled via seeds/cantrips_seed.sql.
+	// Several classes have more than one usable attack/save cantrip in the
+	// data (Wizard alone has Chill Touch, Fire Bolt, Poison Spray, Ray of
+	// Frost, and Shocking Grasp) — this picks each class's most iconic one
+	// when it's available, purely so the game keeps its familiar flavor,
+	// not because the alternatives are wrong.
+	ICONIC_CANTRIP_BY_CLASS = {
+		"Wizard": "Fire Bolt", "Sorcerer": "Fire Bolt", "Warlock": "Eldritch Blast",
+		"Druid": "Produce Flame", "Cleric": "Sacred Flame", "Bard": "Vicious Mockery"
 	};
-	CLASS_LEVELED_SPELLS = {
-		"Wizard": { "type": "damage", "name": "Magic Missile" },
-		"Sorcerer": { "type": "damage", "name": "Magic Missile" },
-		"Warlock": { "type": "damage", "name": "Magic Missile" },
-		"Cleric": { "type": "heal", "name": "Cure Wounds" },
-		"Druid": { "type": "heal", "name": "Cure Wounds" },
-		"Bard": { "type": "heal", "name": "Healing Word" },
-		"Paladin": { "type": "heal", "name": "Cure Wounds" },
-		"Ranger": { "type": "heal", "name": "Cure Wounds" }
-	};
+
+	// Classes whose 1st-level spell should favor a heal over a damage spell,
+	// when _lookupClassSpell() finds both available — mirrors real-world
+	// party-role expectations (a Cleric would rather have Cure Wounds ready
+	// than Guiding Bolt as their one prepared leveled spell), not a rule from
+	// the SRD itself.
+	HEAL_PREFERRING_CLASSES = [ "Bard", "Cleric", "Druid", "Paladin", "Ranger" ];
 
 	/**
 	 * Decides and performs the player's action for one turn: move toward the
@@ -79,25 +76,42 @@ class singleton {
 	 */
 	function playerDecideAndAct( state ) {
 		var player = arguments.state.player;
-		var opponent = arguments.state.opponent;
-		var distance = chebyshev( player, opponent );
-
-		if ( distance > 1 ) {
-			var steps = moveToward( player, opponent, arguments.state.movementRemaining, _stateGrid( arguments.state ) );
-			if ( steps > 0 ) {
-				arguments.state.movementRemaining -= steps;
-				arguments.state.log.prepend( "#player.name# advances toward #opponent.name#." );
-			}
-			distance = chebyshev( player, opponent );
+		if ( !structKeyExists( arguments.state, "attacksUsedThisTurn" ) ) {
+			arguments.state.attacksUsedThisTurn = 0;
 		}
+		var totalAttacks = attacksPerTurn( player );
 
-		var choice = pickWeaponForDistance( player, distance, _stateGrid( arguments.state ), opponent.position );
+		while ( arguments.state.attacksUsedThisTurn < totalAttacks && !arguments.state.gameOver ) {
+			arguments.state.opponent = _nearestLivingOpponent( arguments.state );
+			if ( isNull( arguments.state.opponent ) ) {
+				return;
+			}
+			var opponent = arguments.state.opponent;
+			var distance = chebyshev( player, opponent );
 
-		if ( !isNull( choice ) && !arguments.state.actionUsed ) {
+			if ( distance > 1 ) {
+				var startPosition = { "x": player.position.x, "y": player.position.y };
+				var steps = moveToward( player, opponent, arguments.state.movementRemaining, _stateGrid( arguments.state ) );
+				if ( steps > 0 ) {
+					arguments.state.movementRemaining -= steps;
+					arguments.state.log.prepend( "#player.name# advances toward #opponent.name#." );
+					checkOpportunityAttacks( arguments.state, player, true, startPosition );
+					if ( arguments.state.gameOver ) {
+						return;
+					}
+				}
+				distance = chebyshev( player, opponent );
+			}
+
+			var choice = pickWeaponForDistance( player, distance, _stateGrid( arguments.state ), opponent.position );
+			if ( isNull( choice ) ) {
+				arguments.state.log.prepend( "#player.name# can't reach #opponent.name# this turn." );
+				return;
+			}
+
+			arguments.state.attacksUsedThisTurn += 1;
 			arguments.state.actionUsed = true;
 			playerAttack( arguments.state, choice.weapon, choice.disadvantage );
-		} else if ( isNull( choice ) ) {
-			arguments.state.log.prepend( "#player.name# can't reach #opponent.name# this turn." );
 		}
 	}
 
@@ -114,14 +128,8 @@ class singleton {
 	function playerAttack( state, weapon, disadvantage = false ) {
 		var player = arguments.state.player;
 		var opponent = arguments.state.opponent;
-		resolveAttack( arguments.state.log, player, opponent, arguments.weapon, arguments.disadvantage );
-
-		if ( opponent.hitPoints <= 0 ) {
-			arguments.state.gameOver = true;
-			arguments.state.outcome = "victory";
-			arguments.state.log.prepend( "#opponent.name# collapses into a pile of bones. Victory!" );
-			awardExperience( arguments.state, opponent.xp );
-		}
+		resolveAttack( arguments.state.log, player, opponent, arguments.weapon, arguments.disadvantage, false, false, coverBonus( arguments.state, player, opponent ) );
+		_checkDefenderDefeated( arguments.state, player, opponent, false );
 	}
 
 	/**
@@ -136,48 +144,206 @@ class singleton {
 		if ( !arguments.state.gameOver ) {
 			arguments.state.round += 1;
 			arguments.state.currentTurn = "player";
-			arguments.state.movementRemaining = int( arguments.state.player.speed / 5 );
-			arguments.state.actionUsed = false;
-			arguments.state.bonusActionUsed = false;
+			startNewRound( arguments.state );
 		}
 	}
 
 	/**
-	 * Simple enemy AI: close the distance greedily (1 square per step, up to
-	 * its Speed), preferring to end up in melee range; if it still can't
-	 * reach melee this turn, it falls back to a ranged weapon if in range.
+	 * Resets everything that recharges at the top of a new round: the
+	 * player's movement and Action/Bonus Action/Reaction economy, and every
+	 * living combatant's Reaction (used for opportunity attacks — see
+	 * checkOpportunityAttacks()). Shared by endPlayerTurn() and the wire
+	 * component's auto-battle loop so the reset logic only lives in one place.
+	 *
+	 * @state The encounter's full mutable game state struct.
+	 */
+	function startNewRound( state ) {
+		arguments.state.movementRemaining = int( arguments.state.player.speed / 5 );
+		arguments.state.actionUsed = false;
+		arguments.state.bonusActionUsed = false;
+		arguments.state.attacksUsedThisTurn = 0;
+		arguments.state.player.reactionUsed = false;
+		for ( var opponent in _stateOpponents( arguments.state ) ) {
+			opponent.reactionUsed = false;
+		}
+	}
+
+	/**
+	 * How many weapon attacks the Attack action grants this combatant in one
+	 * turn — 1 normally, or more with the Extra Attack class feature line
+	 * (Fighter's own progression goes further than other classes': Extra
+	 * Attack at 5th grants a 2nd attack, "Two Extra Attacks" at 11th a 3rd,
+	 * "Three Extra Attacks" at 20th a 4th — each tier is additive with the
+	 * ones before it, matching how class_features accumulates them in
+	 * `player.features` as the character levels up).
+	 */
+	function attacksPerTurn( combatant ) {
+		if ( !structKeyExists( arguments.combatant, "features" ) ) {
+			return 1;
+		}
+		var total = 1;
+		if ( arrayFindNoCase( arguments.combatant.features, "Extra Attack" ) > 0 ) {
+			total += 1;
+		}
+		if ( arrayFindNoCase( arguments.combatant.features, "Two Extra Attacks" ) > 0 ) {
+			total += 1;
+		}
+		if ( arrayFindNoCase( arguments.combatant.features, "Three Extra Attacks" ) > 0 ) {
+			total += 1;
+		}
+		return total;
+	}
+
+	/**
+	 * Resolves opportunity attacks triggered by `mover` leaving a hostile
+	 * combatant's reach: any living hostile that was adjacent to
+	 * `startPosition` and is no longer adjacent to `mover`'s new position gets
+	 * one free melee attack against them, using their Reaction (tracked via
+	 * `reactionUsed`, reset each round by startNewRound()) — provided they
+	 * have an equipped melee weapon. Simplified to only look at the start and
+	 * end position (not every square crossed mid-move) and to ignore the
+	 * Disengage action and reach weapons, neither of which this app models.
+	 *
+	 * @state The encounter's full mutable game state struct.
+	 * @mover The combatant who just moved.
+	 * @moverIsPlayer Whether `mover` is `state.player` — decides which side's living combatants are checked as potential attackers.
+	 * @startPosition Where `mover` was standing before this move ({x, y}).
+	 */
+	function checkOpportunityAttacks( state, mover, moverIsPlayer, startPosition ) {
+		var hostiles = arguments.moverIsPlayer ? _stateOpponents( arguments.state ) : [ arguments.state.player ];
+		var moverAtStart = { "position": arguments.startPosition };
+
+		for ( var hostile in hostiles ) {
+			if (
+				hostile.hitPoints <= 0 ||
+				( structKeyExists( hostile, "reactionUsed" ) && hostile.reactionUsed ) ||
+				chebyshev( moverAtStart, hostile ) > 1 ||
+				chebyshev( arguments.mover, hostile ) <= 1
+			) {
+				continue;
+			}
+			var melee = equippedWeapon( hostile, "melee" );
+			if ( isNull( melee ) ) {
+				continue;
+			}
+			hostile.reactionUsed = true;
+			arguments.state.log.prepend( "#hostile.name# makes an opportunity attack as #arguments.mover.name# moves away!" );
+			resolveAttack( arguments.state.log, hostile, arguments.mover, melee, false, false, false, coverBonus( arguments.state, hostile, arguments.mover ) );
+			_checkDefenderDefeated( arguments.state, hostile, arguments.mover, arguments.moverIsPlayer );
+			if ( arguments.state.gameOver ) {
+				return;
+			}
+		}
+	}
+
+	/**
+	 * Runs every living opponent's turn in sequence (via _runOneOpponentTurn()),
+	 * stopping early if the player goes down mid-sequence. For a single-mob
+	 * state (no `state.opponents` array), this runs exactly the one opponent's
+	 * turn, same as before multi-mob support existed.
 	 *
 	 * @state The encounter's full mutable game state struct.
 	 */
 	function runEnemyTurn( state ) {
-		var player = arguments.state.player;
-		var opponent = arguments.state.opponent;
-		var steps = moveToward( opponent, player, int( opponent.speed / 5 ), _stateGrid( arguments.state ) );
+		for ( var opponent in _stateOpponents( arguments.state ) ) {
+			if ( opponent.hitPoints <= 0 ) {
+				continue;
+			}
+			_runOneOpponentTurn( arguments.state, opponent );
+			if ( arguments.state.gameOver ) {
+				return;
+			}
+		}
+	}
 
-		if ( steps > 0 ) {
-			arguments.state.log.prepend( "#opponent.name# closes in." );
+	/**
+	 * Simple enemy AI for one opponent's turn: closes the distance greedily
+	 * (1 square per step, up to its Speed). If the opponent knows any spells
+	 * (the same knownCantrip/knownLeveledSpell fields loadCharacter() assigns
+	 * the player — nothing grants these to monsters yet except the Priest
+	 * Acolyte, so this is otherwise latent capability), it prefers
+	 * self-healing when bloodied, then a damage spell with a clear line to
+	 * the player, before falling back to melee/ranged weapons; if it still
+	 * can't reach melee this turn, it falls back to a ranged weapon if in range.
+	 *
+	 * Does nothing at all — no movement, no attack — until the opponent has
+	 * actually perceived the player (a clear line of sight to them, via
+	 * hasLineOfSight()), tracked on `opponent.aware`. A mob stays dormant
+	 * behind a wall or around a corner until the player wanders into view,
+	 * rather than always beelining for them the instant combat starts.
+	 * Without a grid (state has no walls to hide behind — e.g. the unit
+	 * tests), every opponent is aware from the start.
+	 *
+	 * @state The encounter's full mutable game state struct.
+	 * @opponent The specific opponent whose turn this is.
+	 */
+	private function _runOneOpponentTurn( state, opponent ) {
+		var player = arguments.state.player;
+		var grid = _stateGrid( arguments.state );
+
+		if ( !structKeyExists( arguments.opponent, "aware" ) ) {
+			arguments.opponent.aware = false;
+		}
+		if ( !arguments.opponent.aware ) {
+			if ( !isNull( grid ) && !hasLineOfSight( grid, arguments.opponent.position, player.position ) ) {
+				return;
+			}
+			arguments.opponent.aware = true;
+			arguments.state.log.prepend( "#arguments.opponent.name# notices you!" );
 		}
 
-		var choice = pickWeaponForDistance( opponent, chebyshev( opponent, player ), _stateGrid( arguments.state ), player.position );
-		if ( isNull( choice ) ) {
-			arguments.state.log.prepend( "#opponent.name# can't reach you this turn." );
+		// A player at 0 HP — dying, or merely stabilized — is Unconscious and
+		// helpless: an aware opponent just finishes them off rather than
+		// rolling a normal attack. This always lands, and counts as 2 failed
+		// death saves if delivered within 5 feet (RAW: melee attacks — and any
+		// attack at all, per the simplified 2024 Incapacitated rule — auto-crit
+		// an unconscious target at that range). Landing a further hit on a
+		// stabilized player un-stabilizes them, per the "Stabilizing a
+		// Creature" rules (only a fresh source of damage restarts the dying).
+		if ( player.hitPoints <= 0 ) {
+			_applyDeathSaveFailure( arguments.state, arguments.opponent, player );
 			return;
 		}
 
-		resolveAttack( arguments.state.log, opponent, player, choice.weapon, choice.disadvantage );
+		var steps = moveToward( arguments.opponent, player, int( arguments.opponent.speed / 5 ), grid );
 
-		if ( player.hitPoints <= 0 ) {
-			// Orc Relentless Endurance: drop to 1 HP instead of 0, once per encounter.
-			if ( structKeyExists( player, "hasRelentlessEndurance" ) && player.hasRelentlessEndurance && !player.usedRelentlessEndurance ) {
-				player.hitPoints = 1;
-				player.usedRelentlessEndurance = true;
-				arguments.state.log.prepend( "#player.name#'s Relentless Endurance kicks in — clinging to 1 Hit Point instead of falling!" );
-				return;
-			}
-			arguments.state.gameOver = true;
-			arguments.state.outcome = "defeat";
-			arguments.state.log.prepend( "#player.name# falls unconscious. Defeat!" );
+		if ( steps > 0 ) {
+			arguments.state.log.prepend( "#arguments.opponent.name# closes in." );
 		}
+
+		if (
+			structKeyExists( arguments.opponent, "knownLeveledSpell" ) && !isNull( arguments.opponent.knownLeveledSpell ) &&
+			arguments.opponent.knownLeveledSpell.type == "heal" && arguments.opponent.hitPoints <= arguments.opponent.maxHitPoints / 2 &&
+			_hasSpellResource( arguments.opponent, 1 )
+		) {
+			_castLeveledSpellFor( arguments.state, arguments.opponent, player, true );
+			return;
+		}
+
+		if (
+			structKeyExists( arguments.opponent, "knownLeveledSpell" ) && !isNull( arguments.opponent.knownLeveledSpell ) &&
+			arguments.opponent.knownLeveledSpell.type == "damage" && _hasSpellResource( arguments.opponent, 1 ) &&
+			_isSpellTargetValid( arguments.state, arguments.opponent, player, arguments.opponent.knownLeveledSpell )
+		) {
+			_castLeveledSpellFor( arguments.state, arguments.opponent, player, true );
+			return;
+		}
+		if (
+			structKeyExists( arguments.opponent, "knownCantrip" ) && !isNull( arguments.opponent.knownCantrip ) &&
+			_isSpellTargetValid( arguments.state, arguments.opponent, player, arguments.opponent.knownCantrip )
+		) {
+			_castCantripFor( arguments.state, arguments.opponent, player, true );
+			return;
+		}
+
+		var choice = pickWeaponForDistance( arguments.opponent, chebyshev( arguments.opponent, player ), grid, player.position );
+		if ( isNull( choice ) ) {
+			arguments.state.log.prepend( "#arguments.opponent.name# can't reach you this turn." );
+			return;
+		}
+
+		resolveAttack( arguments.state.log, arguments.opponent, player, choice.weapon, choice.disadvantage, false, false, coverBonus( arguments.state, arguments.opponent, player ) );
+		_checkDefenderDefeated( arguments.state, arguments.opponent, player, true );
 	}
 
 	/**
@@ -191,6 +357,10 @@ class singleton {
 	 * @grid Optional level grid (`{width, height, tiles}`, from MapService) to route around walls.
 	 */
 	function moveToward( mover, target, maxSteps, grid = javaCast( "null", 0 ) ) {
+		// Restrained: speed is 0, per the condition's own rules.
+		if ( hasCondition( arguments.mover, "Restrained" ) ) {
+			return 0;
+		}
 		if ( isNull( arguments.grid ) ) {
 			return _moveTowardUnobstructed( arguments.mover, arguments.target, arguments.maxSteps );
 		}
@@ -235,6 +405,71 @@ class singleton {
 	}
 
 	/**
+	 * Returns `state.opponents` (the full mob roster) if present, or a
+	 * single-element array wrapping `state.opponent` otherwise — lets every
+	 * multi-mob-aware function keep working unchanged for callers (like the
+	 * unit tests, and any old state shape) that only ever had one opponent.
+	 */
+	private function _stateOpponents( state ) {
+		return structKeyExists( arguments.state, "opponents" ) ? arguments.state.opponents : [ arguments.state.opponent ];
+	}
+
+	/**
+	 * True if every opponent in `state.opponents` (or the lone `state.opponent`,
+	 * for single-mob state) has been reduced to 0 HP.
+	 */
+	private function _allOpponentsDefeated( state ) {
+		for ( var o in _stateOpponents( arguments.state ) ) {
+			if ( o.hitPoints > 0 ) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Picks the closest living opponent to the player (Chebyshev distance) —
+	 * used by the auto-battle player AI to decide who to chase/attack. Falls
+	 * back to whatever's already in `state.opponent` if every opponent is
+	 * somehow already down (shouldn't happen — the encounter should already
+	 * be over by then).
+	 */
+	private function _nearestLivingOpponent( state ) {
+		var player = arguments.state.player;
+		var nearest = javaCast( "null", 0 );
+		var nearestDistance = 0;
+		for ( var o in _stateOpponents( arguments.state ) ) {
+			if ( o.hitPoints <= 0 ) {
+				continue;
+			}
+			var d = chebyshev( player, o );
+			if ( isNull( nearest ) || d < nearestDistance ) {
+				nearest = o;
+				nearestDistance = d;
+			}
+		}
+		return isNull( nearest ) ? arguments.state.opponent : nearest;
+	}
+
+	/**
+	 * If `state.opponent` (the player's currently selected target) has been
+	 * defeated but others remain, retargets to the next living opponent in
+	 * `state.opponents` — so the player isn't stuck "attacking" a corpse.
+	 * A no-op for single-mob state or when the current target is still up.
+	 */
+	private function _retargetIfCurrentOpponentDefeated( state ) {
+		if ( !structKeyExists( arguments.state, "opponents" ) || arguments.state.opponent.hitPoints > 0 ) {
+			return;
+		}
+		for ( var o in arguments.state.opponents ) {
+			if ( o.hitPoints > 0 ) {
+				arguments.state.opponent = o;
+				return;
+			}
+		}
+	}
+
+	/**
 	 * True if (x, y) is inside `grid` and its tile is "floor" (not "wall").
 	 *
 	 * @grid A level grid (`{width, height, tiles}`, from MapService).
@@ -261,6 +496,29 @@ class singleton {
 		var toY = arguments.to.y;
 		var path = _bfs( arguments.grid, arguments.from, ( x, y ) => ( x == toX && y == toY ) );
 		return ( path.len() == 0 ) ? -1 : ( path.len() - 1 );
+	}
+
+	/**
+	 * Finds the closest walkable tile to `origin` that isn't itself in
+	 * `excludePositions` — used to place a second, third, etc. mob near the
+	 * level's one designed opponent spawn point without stacking them on the
+	 * same square or on the player. Returns null if every reachable tile is excluded.
+	 *
+	 * @grid A level grid (`{width, height, tiles}`, from MapService).
+	 * @origin The point to search outward from (typically the level's opponentSpawn).
+	 * @excludePositions Array of `{x, y}` points that don't count as open.
+	 */
+	function findOpenTileNear( grid, origin, excludePositions ) {
+		var excluded = arguments.excludePositions;
+		var path = _bfs( arguments.grid, arguments.origin, ( x, y ) => {
+			for ( var p in excluded ) {
+				if ( p.x == x && p.y == y ) {
+					return false;
+				}
+			}
+			return true;
+		} );
+		return ( path.len() == 0 ) ? javaCast( "null", 0 ) : path[ path.len() ];
 	}
 
 	/**
@@ -328,6 +586,33 @@ class singleton {
 	 */
 	function chebyshev( a, b ) {
 		return max( abs( arguments.a.position.x - arguments.b.position.x ), abs( arguments.a.position.y - arguments.b.position.y ) );
+	}
+
+	/**
+	 * General condition tracking (Prone, Restrained, Poisoned, Frightened,
+	 * etc.) — a combatant's `conditions` struct maps condition name to true
+	 * (or a small data struct, e.g. `{"source": "..."}` for Frightened),
+	 * created lazily so nothing needs it initialized up front. Only these
+	 * four conditions have mechanical effects wired up elsewhere in this file
+	 * (resolveAttack, rollSavingThrow, moveToward); others can be tracked here
+	 * too but won't do anything yet — same "latent capability" pattern this
+	 * file already uses for monster spellcasting.
+	 */
+	function hasCondition( combatant, name ) {
+		return structKeyExists( arguments.combatant, "conditions" ) && structKeyExists( arguments.combatant.conditions, arguments.name );
+	}
+
+	function addCondition( combatant, name, data = true ) {
+		if ( !structKeyExists( arguments.combatant, "conditions" ) ) {
+			arguments.combatant.conditions = {};
+		}
+		arguments.combatant.conditions[ arguments.name ] = arguments.data;
+	}
+
+	function removeCondition( combatant, name ) {
+		if ( structKeyExists( arguments.combatant, "conditions" ) ) {
+			arguments.combatant.conditions.delete( arguments.name );
+		}
 	}
 
 	/**
@@ -420,6 +705,72 @@ class singleton {
 	}
 
 	/**
+	 * Half Cover bonus (+2 AC and Dexterity saves) for an attack from
+	 * `attacker` against `defender`: granted when another living combatant
+	 * (not the attacker or defender themselves) occupies a grid square on the
+	 * straight line between them, per the "Cover" rules — one creature
+	 * providing cover for another. Simplified to this one case: this app
+	 * doesn't model terrain/objects as separate obstacles from walls (which
+	 * already fully block a shot via hasLineOfSight() instead of granting
+	 * partial cover), so Three-Quarters Cover and wall-corner Half Cover
+	 * aren't modeled. Returns 0 without a grid (e.g. the unit tests' bare
+	 * combatant fixtures) or if attacker/defender aren't at least 2 squares
+	 * apart (nothing can stand between adjacent combatants).
+	 *
+	 * @state The encounter's full mutable game state struct.
+	 * @attacker The attacking combatant.
+	 * @defender The targeted combatant.
+	 */
+	function coverBonus( state, attacker, defender ) {
+		var grid = _stateGrid( arguments.state );
+		if ( isNull( grid ) || chebyshev( arguments.attacker, arguments.defender ) < 2 ) {
+			return 0;
+		}
+
+		var others = [];
+		if ( structKeyExists( arguments.state, "player" ) ) {
+			others.append( arguments.state.player );
+		}
+		for ( var o in _stateOpponents( arguments.state ) ) {
+			others.append( o );
+		}
+
+		var x = arguments.attacker.position.x;
+		var y = arguments.attacker.position.y;
+		var targetX = arguments.defender.position.x;
+		var targetY = arguments.defender.position.y;
+		var dx = abs( targetX - x );
+		var dy = abs( targetY - y );
+		var stepX = ( x < targetX ) ? 1 : -1;
+		var stepY = ( y < targetY ) ? 1 : -1;
+		var err = dx - dy;
+
+		while ( !( x == targetX && y == targetY ) ) {
+			var doubledErr = 2 * err;
+			if ( doubledErr > -dy ) {
+				err -= dy;
+				x += stepX;
+			}
+			if ( doubledErr < dx ) {
+				err += dx;
+				y += stepY;
+			}
+			if ( x == targetX && y == targetY ) {
+				break;
+			}
+			for ( var other in others ) {
+				if (
+					other.hitPoints > 0 && other.position.x == x && other.position.y == y &&
+					other.name != arguments.attacker.name && other.name != arguments.defender.name
+				) {
+					return 2;
+				}
+			}
+		}
+		return 0;
+	}
+
+	/**
 	 * Resolves one attack roll and, on a hit, one damage roll, per the core
 	 * rules: d20 + attack bonus vs AC; natural 20 always hits and is a
 	 * Critical Hit (roll damage dice twice); natural 1 always misses.
@@ -432,7 +783,7 @@ class singleton {
 	 * @weapon The weapon item being used for this attack (from inventory).
 	 * @disadvantage Whether this attack roll has Disadvantage.
 	 */
-	function resolveAttack( log, attacker, defender, weapon, disadvantage = false, advantage = false, omitDamageBonus = false ) {
+	function resolveAttack( log, attacker, defender, weapon, disadvantage = false, advantage = false, omitDamageBonus = false, coverBonus = 0 ) {
 		// Grappler: attacks against a creature you've grappled have Advantage,
 		// even if the caller didn't ask for it explicitly.
 		var autoAdvantage = (
@@ -441,9 +792,30 @@ class singleton {
 			structKeyExists( arguments.attacker, "hasGrapplerFeat" ) &&
 			arguments.attacker.hasGrapplerFeat
 		);
+		// Prone: melee attacks against a Prone target have Advantage, ranged
+		// ones have Disadvantage. Restrained: attacks against a Restrained
+		// target always have Advantage; being Restrained yourself always gives
+		// Disadvantage on your own attacks, same as being Poisoned or
+		// Frightened (simplified here to apply regardless of whether the
+		// source of the fear is in sight, since this app doesn't track that).
+		var autoDisadvantage = (
+			hasCondition( arguments.attacker, "Restrained" ) ||
+			hasCondition( arguments.attacker, "Poisoned" ) ||
+			hasCondition( arguments.attacker, "Frightened" )
+		);
+		if ( hasCondition( arguments.defender, "Prone" ) ) {
+			if ( arguments.weapon.category == "melee" ) {
+				autoAdvantage = true;
+			} else {
+				autoDisadvantage = true;
+			}
+		}
+		if ( hasCondition( arguments.defender, "Restrained" ) ) {
+			autoAdvantage = true;
+		}
 		// Advantage and Disadvantage on the same roll cancel out, per the rules.
-		var useAdvantage = ( arguments.advantage || autoAdvantage ) && !arguments.disadvantage;
-		var useDisadvantage = arguments.disadvantage && !( arguments.advantage || autoAdvantage );
+		var useAdvantage = ( arguments.advantage || autoAdvantage ) && !( arguments.disadvantage || autoDisadvantage );
+		var useDisadvantage = ( arguments.disadvantage || autoDisadvantage ) && !( arguments.advantage || autoAdvantage );
 
 		var roll = randRange( 1, 20 );
 		if ( useAdvantage ) {
@@ -460,10 +832,11 @@ class singleton {
 		// Archery fighting style: +2 to attack rolls with Ranged weapons.
 		var hasArchery = structKeyExists( arguments.attacker, "feats" ) && arrayFindNoCase( arguments.attacker.feats, "Archery" ) > 0;
 		var styleBonus = ( hasArchery && arguments.weapon.category == "ranged" ) ? 2 : 0;
+		var effectiveAC = arguments.defender.armorClass + arguments.coverBonus;
 		var total = roll + arguments.weapon.attackBonus + styleBonus;
 		var isCrit = ( roll == 20 );
 		var isFumble = ( roll == 1 );
-		var hits = !isFumble && ( isCrit || total >= arguments.defender.armorClass );
+		var hits = !isFumble && ( isCrit || total >= effectiveAC );
 
 		// Human Heroic Inspiration: once per encounter, reroll a missed attack.
 		var usedInspiration = false;
@@ -477,17 +850,18 @@ class singleton {
 			total = roll + arguments.weapon.attackBonus + styleBonus;
 			isCrit = ( roll == 20 );
 			isFumble = ( roll == 1 );
-			hits = !isFumble && ( isCrit || total >= arguments.defender.armorClass );
+			hits = !isFumble && ( isCrit || total >= effectiveAC );
 		}
 
 		var disadvantageNote = useDisadvantage ? " (Disadvantage)" : ( useAdvantage ? " (Advantage)" : "" );
 		var luckNote = usedLuck ? " (Lucky reroll)" : "";
 		var styleNote = ( styleBonus > 0 ) ? " (Archery)" : "";
 		var inspirationNote = usedInspiration ? " (Heroic Inspiration reroll)" : "";
+		var coverNote = ( arguments.coverBonus > 0 ) ? " (+#arguments.coverBonus# Cover)" : "";
 
 		if ( !hits ) {
 			arguments.log.prepend(
-				"#arguments.attacker.name# attacks #arguments.defender.name# with #arguments.weapon.name#: #roll# + #arguments.weapon.attackBonus + styleBonus# = #total# vs AC #arguments.defender.armorClass##disadvantageNote##luckNote##styleNote##inspirationNote#. Miss!"
+				"#arguments.attacker.name# attacks #arguments.defender.name# with #arguments.weapon.name#: #roll# + #arguments.weapon.attackBonus + styleBonus# = #total# vs AC #effectiveAC##coverNote##disadvantageNote##luckNote##styleNote##inspirationNote#. Miss!"
 			);
 			return;
 		}
@@ -531,7 +905,7 @@ class singleton {
 		arguments.defender.hitPoints = max( 0, arguments.defender.hitPoints - damage );
 
 		arguments.log.prepend(
-			"#arguments.attacker.name# attacks #arguments.defender.name# with #arguments.weapon.name#: #roll# + #arguments.weapon.attackBonus + styleBonus# = #total# vs AC #arguments.defender.armorClass##disadvantageNote##luckNote##styleNote##inspirationNote#. " &
+			"#arguments.attacker.name# attacks #arguments.defender.name# with #arguments.weapon.name#: #roll# + #arguments.weapon.attackBonus + styleBonus# = #total# vs AC #effectiveAC##coverNote##disadvantageNote##luckNote##styleNote##inspirationNote#. " &
 			( isCrit ? "Critical hit! " : "Hit! " ) &
 			"#damage# #arguments.weapon.damageType# damage#savageNote##gwfNote# (#arguments.defender.hitPoints#/#arguments.defender.maxHitPoints# HP)."
 		);
@@ -621,7 +995,7 @@ class singleton {
 	 * @condition Optional: the condition being saved against (e.g. "Charmed"), for Fey Ancestry.
 	 * @isMagical Optional: whether this save is against a magical effect, for Gnomish Cunning.
 	 */
-	function rollSavingThrow( combatant, ability, dc, condition = "", isMagical = false ) {
+	function rollSavingThrow( combatant, ability, dc, condition = "", isMagical = false, coverBonus = 0 ) {
 		var abilityMod = structKeyExists( arguments.combatant, "modifiers" )
 			? arguments.combatant.modifiers[ arguments.ability ]
 			: abilityModifier( arguments.combatant.abilityScores[ arguments.ability ] );
@@ -642,13 +1016,23 @@ class singleton {
 		) {
 			hasAdvantage = true;
 		}
+		// Restrained: Disadvantage specifically on Dexterity saves.
+		var hasDisadvantage = ( arguments.ability == "dex" ) && hasCondition( arguments.combatant, "Restrained" );
+
+		var useAdvantage = hasAdvantage && !hasDisadvantage;
+		var useDisadvantage = hasDisadvantage && !hasAdvantage;
 
 		var roll = randRange( 1, 20 );
-		if ( hasAdvantage ) {
+		if ( useAdvantage ) {
 			roll = max( roll, randRange( 1, 20 ) );
+		} else if ( useDisadvantage ) {
+			roll = min( roll, randRange( 1, 20 ) );
 		}
-		var total = roll + abilityMod + proficiencyBonus;
-		return { "roll": roll, "total": total, "success": ( total >= arguments.dc ), "hadAdvantage": hasAdvantage };
+		// Cover (Half/Three-Quarters) also applies to Dexterity saves against
+		// area effects, per the "Cover" rules — this app only models Half Cover.
+		var coverAdjustment = ( arguments.ability == "dex" ) ? arguments.coverBonus : 0;
+		var total = roll + abilityMod + proficiencyBonus + coverAdjustment;
+		return { "roll": roll, "total": total, "success": ( total >= arguments.dc ), "hadAdvantage": useAdvantage, "hadDisadvantage": useDisadvantage };
 	}
 
 	/**
@@ -665,8 +1049,12 @@ class singleton {
 	 * simplified to a flat ability-modifier-plus-proficiency roll vs. the
 	 * defender's better of Strength/Dexterity), spending the attacker's
 	 * action. Requires the attacker to already be adjacent. On success, marks
-	 * `defender.grappledBy` — subsequent attacks by the same attacker against
-	 * a grappled target get Advantage if the attacker has the Grappler feat.
+	 * `defender.grappledBy` (subsequent attacks by the same attacker get
+	 * Advantage if the attacker has the Grappler feat) and applies the
+	 * Restrained condition — a grappled creature is Restrained per the core
+	 * rules, which also grants Advantage to anyone attacking it, not just the
+	 * Grappler-feat attacker, and Disadvantage on the grappled creature's own
+	 * attacks and Dexterity saves.
 	 *
 	 * @state The encounter's full mutable game state struct.
 	 * @attacker The grappling combatant.
@@ -690,11 +1078,53 @@ class singleton {
 		arguments.state.actionUsed = true;
 		if ( success ) {
 			arguments.defender.grappledBy = arguments.attacker.name;
+			addCondition( arguments.defender, "Restrained" );
 		}
 
 		arguments.state.log.prepend(
 			"#arguments.attacker.name# attempts to grapple #arguments.defender.name#: #attackerRoll# vs #defenderRoll# — " &
 			( success ? "Grappled!" : "#arguments.defender.name# resists." )
+		);
+	}
+
+	/**
+	 * Attempts to shove `defender` prone (a contested Strength (Athletics)
+	 * check vs. the defender's better of Strength (Athletics) or Dexterity
+	 * (Acrobatics), simplified the same way as attemptGrapple), spending the
+	 * attacker's action. Requires the attacker to already be adjacent. On
+	 * success, applies the Prone condition — melee attacks against a Prone
+	 * target get Advantage, ranged ones get Disadvantage, and the Prone
+	 * creature's own attacks have Disadvantage until it stands back up (this
+	 * app has no stand-up action yet, so Prone otherwise persists for the
+	 * fight once applied).
+	 *
+	 * @state The encounter's full mutable game state struct.
+	 * @attacker The shoving combatant.
+	 * @defender The combatant being shoved.
+	 */
+	function attemptShove( state, attacker, defender ) {
+		if ( chebyshev( arguments.attacker, arguments.defender ) > 1 ) {
+			arguments.state.log.prepend( "#arguments.attacker.name# is too far away to shove #arguments.defender.name#." );
+			return;
+		}
+
+		var attackerStrMod = structKeyExists( arguments.attacker, "modifiers" ) ? arguments.attacker.modifiers.str : abilityModifier( arguments.attacker.abilityScores.str );
+		var defenderStrMod = structKeyExists( arguments.defender, "modifiers" ) ? arguments.defender.modifiers.str : abilityModifier( arguments.defender.abilityScores.str );
+		var defenderDexMod = structKeyExists( arguments.defender, "modifiers" ) ? arguments.defender.modifiers.dex : abilityModifier( arguments.defender.abilityScores.dex );
+		var attackerProficiency = structKeyExists( arguments.attacker, "proficiencyBonus" ) ? arguments.attacker.proficiencyBonus : 0;
+
+		var attackerRoll = randRange( 1, 20 ) + attackerStrMod + attackerProficiency;
+		var defenderRoll = randRange( 1, 20 ) + max( defenderStrMod, defenderDexMod );
+		var success = attackerRoll >= defenderRoll;
+
+		arguments.state.actionUsed = true;
+		if ( success ) {
+			addCondition( arguments.defender, "Prone" );
+		}
+
+		arguments.state.log.prepend(
+			"#arguments.attacker.name# attempts to shove #arguments.defender.name#: #attackerRoll# vs #defenderRoll# — " &
+			( success ? "Knocked Prone!" : "#arguments.defender.name# resists." )
 		);
 	}
 
@@ -743,20 +1173,14 @@ class singleton {
 			( saved ? "succeeds, takes half damage. " : "fails! " ) &
 			"#damage# Fire damage (#defender.hitPoints#/#defender.maxHitPoints# HP)."
 		);
-
-		if ( defender.hitPoints <= 0 ) {
-			arguments.state.gameOver = true;
-			arguments.state.outcome = "victory";
-			arguments.state.log.prepend( "#defender.name# is incinerated. Victory!" );
-			awardExperience( arguments.state, defender.xp );
-		}
+		_checkDefenderDefeated( arguments.state, attacker, defender, false );
 	}
 
 	/**
 	 * Assigns `player`'s spellcasting fields — spellcasting ability, cantrip,
 	 * 1st-level spell, and starting spell slots by level — from its class (via
-	 * CLASS_CANTRIPS/CLASS_LEVELED_SPELLS/the slot tables) plus the Magic
-	 * Initiate feat, if any. Spell slots are computed fresh each time a
+	 * ICONIC_CANTRIP_BY_CLASS, _lookupClassSpell(), and the slot tables) plus
+	 * the Magic Initiate feat, if any. Spell slots are computed fresh each time a
 	 * character is loaded — this app has no long-rest tracking between
 	 * encounters, so every encounter starts with a full set, same as HP/other
 	 * once-per-encounter resources elsewhere in this file.
@@ -777,12 +1201,19 @@ class singleton {
 			arguments.player.spellcastingAbility = ( mods.int >= mods.wis && mods.int >= mods.cha ) ? "int" : ( mods.wis >= mods.cha ? "wis" : "cha" );
 		}
 
-		arguments.player.knownCantrip = CLASS_CANTRIPS.keyExists( className )
-			? CLASS_CANTRIPS[ className ]
-			: ( arguments.player.hasMagicInitiate ? { "type": "attack", "name": "Fire Bolt", "damageType": "Fire" } : javaCast( "null", 0 ) );
-		arguments.player.knownLeveledSpell = CLASS_LEVELED_SPELLS.keyExists( className )
-			? CLASS_LEVELED_SPELLS[ className ]
-			: ( arguments.player.hasMagicInitiate ? { "type": "damage", "name": "Magic Missile" } : javaCast( "null", 0 ) );
+		var preferredCantrip = ICONIC_CANTRIP_BY_CLASS.keyExists( className ) ? ICONIC_CANTRIP_BY_CLASS[ className ] : "";
+		var dbCantrip = _lookupClassSpell( className, 0, false, preferredCantrip );
+		arguments.player.knownCantrip = !isNull( dbCantrip )
+			? dbCantrip
+			// Fire Bolt: 120 ft.
+			: ( arguments.player.hasMagicInitiate ? { "type": "attack", "name": "Fire Bolt", "damageType": "Fire", "rangeSquares": 24 } : javaCast( "null", 0 ) );
+
+		var preferHeal = arrayFindNoCase( HEAL_PREFERRING_CLASSES, className ) > 0;
+		var dbSpell = _lookupClassSpell( className, 1, preferHeal );
+		arguments.player.knownLeveledSpell = !isNull( dbSpell )
+			? dbSpell
+			// Magic Missile: 120 ft.
+			: ( arguments.player.hasMagicInitiate ? { "type": "damage", "name": "Magic Missile", "rangeSquares": 24 } : javaCast( "null", 0 ) );
 
 		var slotTable = isFullCaster ? SPELL_SLOTS_FULL_CASTER : ( isHalfCaster ? SPELL_SLOTS_HALF_CASTER : [] );
 		var levelIndex = min( arguments.player.level, slotTable.len() );
@@ -796,6 +1227,117 @@ class singleton {
 		// Magic Initiate's bonus 1st-level spell is a separate once-per-encounter
 		// resource, not a slot — usable even by a class with no slots at all.
 		arguments.player.usedMagicInitiateSpell = false;
+	}
+
+	/**
+	 * Looks up one castable spell of `level` for `className` from the
+	 * gameserver.spells table's structured mechanics columns (added by
+	 * migrations/002_spell_mechanics.sql and populated by
+	 * resources/database/extract_spell_mechanics.py) — a real attack-roll,
+	 * saving-throw, or healing spell instead of this app's old fixed-per-class
+	 * Magic Missile/Cure Wounds stand-ins. Prefers a `heal` spell when
+	 * `preferHeal` is true and one's available for the class, otherwise an
+	 * `attack`/`save` damage spell; falls back to whichever effect type IS
+	 * available if the preferred one isn't. Skips any spell whose dice don't
+	 * parse as plain "NdM" (e.g. Disintegrate's "10d6 + 40") — not a concern
+	 * at level 1 today, but a safety net if this is ever asked for higher
+	 * levels. Returns null if the class has no non-utility spell at that level.
+	 *
+	 * @className The class to find a spell for (must match a name in the spells table's `classes` column).
+	 * @level The spell's level (0 for cantrips, 1-9 otherwise).
+	 * @preferHeal Whether to prefer a heal-type spell over an attack/save one, when both are available.
+	 * @preferredName If a spell by this exact name matches, it wins over any other candidate — lets a class keep its iconic pick (Fire Bolt, Eldritch Blast, Sacred Flame) when the class has more than one option, without hardcoding the spell's own mechanics.
+	 */
+	private function _lookupClassSpell( className, level, preferHeal, preferredName = "" ) {
+		var preferredTypes = arguments.preferHeal ? "'heal'" : "'attack','save'";
+		var rows = queryExecute(
+			"SELECT name, effect_type, attack_type, save_ability, save_effect, damage_dice, damage_type, heal_dice, `range`
+			 FROM spells
+			 WHERE FIND_IN_SET( :className, REPLACE( classes, ', ', ',' ) ) > 0
+			   AND level = :level
+			   AND effect_type IN ( #preferredTypes# )
+			   AND ( damage_dice IS NULL OR damage_dice REGEXP '^[0-9]+d[0-9]+$' )
+			   AND ( heal_dice IS NULL OR heal_dice REGEXP '^[0-9]+d[0-9]+$' )
+			 ORDER BY ( name = :preferredName ) DESC, name
+			 LIMIT 1",
+			{ "className": arguments.className, "level": arguments.level, "preferredName": arguments.preferredName },
+			{ datasource: "gameserver" }
+		);
+
+		if ( rows.recordCount == 0 ) {
+			// Try the other effect type before giving up — e.g. Warlock only
+			// has a damage spell at level 1, no heal, even though Warlock
+			// isn't in HEAL_PREFERRING_CLASSES anyway; this also covers a
+			// heal-preferring class whose only level-1 option is a damage spell.
+			var fallbackTypes = arguments.preferHeal ? "'attack','save'" : "'heal'";
+			rows = queryExecute(
+				"SELECT name, effect_type, attack_type, save_ability, save_effect, damage_dice, damage_type, heal_dice, `range`
+				 FROM spells
+				 WHERE FIND_IN_SET( :className, REPLACE( classes, ', ', ',' ) ) > 0
+				   AND level = :level
+				   AND effect_type IN ( #fallbackTypes# )
+				   AND ( damage_dice IS NULL OR damage_dice REGEXP '^[0-9]+d[0-9]+$' )
+				   AND ( heal_dice IS NULL OR heal_dice REGEXP '^[0-9]+d[0-9]+$' )
+				 ORDER BY ( name = :preferredName ) DESC, name
+				 LIMIT 1",
+				{ "className": arguments.className, "level": arguments.level, "preferredName": arguments.preferredName },
+				{ datasource: "gameserver" }
+			);
+		}
+
+		if ( rows.recordCount == 0 ) {
+			return javaCast( "null", 0 );
+		}
+
+		if ( rows.effect_type[ 1 ] == "heal" ) {
+			var healDice = parseDice( rows.heal_dice[ 1 ] );
+			return { "type": "heal", "name": rows.name[ 1 ], "diceCount": healDice.count, "diceSides": healDice.sides };
+		}
+
+		var damageDice = parseDice( rows.damage_dice[ 1 ] );
+		var rangeSquares = _parseSpellRangeSquares( rows.range[ 1 ] );
+		if ( rows.effect_type[ 1 ] == "attack" ) {
+			return {
+				"type": "attack", "name": rows.name[ 1 ], "damageType": rows.damage_type[ 1 ],
+				"diceCount": damageDice.count, "diceSides": damageDice.sides, "rangeSquares": rangeSquares
+			};
+		}
+		return {
+			"type": "save", "name": rows.name[ 1 ], "damageType": rows.damage_type[ 1 ],
+			"saveAbility": rows.save_ability[ 1 ], "saveEffect": rows.save_effect[ 1 ],
+			"diceCount": damageDice.count, "diceSides": damageDice.sides, "rangeSquares": rangeSquares
+		};
+	}
+
+	// A cone/cube/line AoE centered on the caster (Burning Hands, Thunderwave,
+	// etc.) shows up in the spells table as Range "Self" — that's the origin
+	// point for the shape, not "must be adjacent". This app doesn't model
+	// spell shapes/areas at all, so as a stand-in, "Self"-range damage/save
+	// spells get treated as reaching this many squares (15 ft, the smallest
+	// common cone/cube size in the SRD) instead of 0.
+	SELF_RANGE_SPELL_SQUARES = 3;
+
+	/**
+	 * Converts a spells-table Range string ("120 feet", "Touch", "Self", ...)
+	 * into a distance in 5-foot squares, for range-checking a cast against
+	 * chebyshev(attacker, defender). "Touch" is 1 square (melee range);
+	 * "Self" is SELF_RANGE_SPELL_SQUARES (see above); anything unparseable
+	 * falls back to 24 squares (120 ft, the most common attack-cantrip range)
+	 * rather than blocking a spell this app already decided was castable.
+	 */
+	private function _parseSpellRangeSquares( rangeText ) {
+		if ( arguments.rangeText == "Touch" ) {
+			return 1;
+		}
+		if ( arguments.rangeText == "Self" ) {
+			return SELF_RANGE_SPELL_SQUARES;
+		}
+		var feetMatch = reFind( "(\d+)\s*feet", arguments.rangeText, 1, true );
+		if ( structKeyExists( feetMatch, "len" ) && feetMatch.len.len() >= 2 && feetMatch.len[ 2 ] > 0 ) {
+			var feet = int( mid( arguments.rangeText, feetMatch.pos[ 2 ], feetMatch.len[ 2 ] ) );
+			return int( feet / 5 );
+		}
+		return 24;
 	}
 
 	/**
@@ -813,64 +1355,159 @@ class singleton {
 	}
 
 	/**
-	 * Casts the attacker's known cantrip at the opponent — an attack-roll
-	 * damage cantrip (e.g. Fire Bolt) or a saving-throw damage cantrip (e.g.
-	 * Sacred Flame) per `player.knownCantrip.type`. Spends the attacker's
-	 * action. A no-op if the attacker has no known cantrip.
+	 * True if `combatant` could actually cast a spell right now — a slot at
+	 * or above `minimumLevel`, or an unused Magic Initiate bonus spell.
+	 * Doesn't spend anything; lets the enemy AI decide whether casting is
+	 * worth attempting before committing to it via _castLeveledSpellFor().
+	 */
+	private function _hasSpellResource( combatant, minimumLevel ) {
+		if ( structKeyExists( arguments.combatant, "spellSlots" ) ) {
+			for ( var level = arguments.minimumLevel; level <= 9; level++ ) {
+				if ( structKeyExists( arguments.combatant.spellSlots, level ) && arguments.combatant.spellSlots[ level ] > 0 ) {
+					return true;
+				}
+			}
+		}
+		return (
+			structKeyExists( arguments.combatant, "hasMagicInitiate" ) && arguments.combatant.hasMagicInitiate &&
+			!arguments.combatant.usedMagicInitiateSpell
+		);
+	}
+
+	/**
+	 * True if `attacker` could actually reach `defender` with `spell` right
+	 * now — within `spell.rangeSquares` (defaulting to 24/120 ft. if the
+	 * struct doesn't carry one — the hardcoded Magic Initiate/monster
+	 * fallbacks always do, so this only matters for stray callers), and with
+	 * a clear line of sight if a grid is in play. Healing spells always
+	 * target the caster, so they're always valid regardless of `defender`.
+	 */
+	private function _isSpellTargetValid( state, attacker, defender, spell ) {
+		if ( arguments.spell.type == "heal" ) {
+			return true;
+		}
+		var rangeSquares = structKeyExists( arguments.spell, "rangeSquares" ) ? arguments.spell.rangeSquares : 24;
+		if ( chebyshev( arguments.attacker, arguments.defender ) > rangeSquares ) {
+			return false;
+		}
+		var grid = _stateGrid( arguments.state );
+		return isNull( grid ) || hasLineOfSight( grid, arguments.attacker.position, arguments.defender.position );
+	}
+
+	/**
+	 * Casts the player's known cantrip at the opponent. Thin wrapper around
+	 * `_castCantripFor()` — see that function for the actual mechanics. Kept
+	 * as its own public entry point since it's what the player's UI actions
+	 * call directly (player is always the attacker, opponent always the target).
 	 *
 	 * @state The encounter's full mutable game state struct.
 	 */
 	function castCantrip( state ) {
-		var attacker = arguments.state.player;
-		if ( !structKeyExists( attacker, "knownCantrip" ) || isNull( attacker.knownCantrip ) ) {
-			return;
-		}
-
-		arguments.state.actionUsed = true;
-		var cantrip = attacker.knownCantrip;
-		if ( cantrip.type == "save" ) {
-			_castSaveDamageSpell( arguments.state, cantrip.name, cantrip.saveAbility, 1, 8, cantrip.damageType );
-		} else {
-			_castAttackSpell( arguments.state, cantrip.name, 1, 10, cantrip.damageType );
-		}
+		_castCantripFor( arguments.state, arguments.state.player, arguments.state.opponent, false );
 	}
 
 	/**
-	 * Casts the attacker's known 1st-level spell at the opponent (a damage
-	 * spell like Magic Missile) or on themself (a healing spell like Cure
-	 * Wounds/Healing Word), per `player.knownLeveledSpell.type`. Spends a 1st-
-	 * level spell slot if the caster has one; otherwise falls back to Magic
-	 * Initiate's separate once-per-encounter bonus spell, if available and
-	 * unused. A no-op if neither resource is available.
+	 * Casts the player's known 1st-level spell. Thin wrapper around
+	 * `_castLeveledSpellFor()` — see that function for the actual mechanics.
 	 *
 	 * @state The encounter's full mutable game state struct.
 	 */
 	function castLeveledSpell( state ) {
-		var attacker = arguments.state.player;
-		if ( !structKeyExists( attacker, "knownLeveledSpell" ) || isNull( attacker.knownLeveledSpell ) ) {
+		_castLeveledSpellFor( arguments.state, arguments.state.player, arguments.state.opponent, false );
+	}
+
+	/**
+	 * Casts `attacker`'s known cantrip at `defender` — an attack-roll damage
+	 * cantrip (e.g. Fire Bolt) or a saving-throw damage cantrip (e.g. Sacred
+	 * Flame) per `attacker.knownCantrip.type`. Spends the attacker's action.
+	 * A no-op if the attacker has no known cantrip. Used for both the player
+	 * (via castCantrip()) and any spellcasting monster (via runEnemyTurn()).
+	 *
+	 * @state The encounter's full mutable game state struct.
+	 * @attacker The casting combatant.
+	 * @defender The combatant being targeted.
+	 * @defenderIsPlayer Whether `defender` is `state.player` — decides whether reaching 0 HP means defeat (with Relentless Endurance) or victory/XP.
+	 */
+	private function _castCantripFor( state, attacker, defender, defenderIsPlayer ) {
+		if ( !structKeyExists( arguments.attacker, "knownCantrip" ) || isNull( arguments.attacker.knownCantrip ) ) {
 			return;
 		}
-
-		var slotSpent = _spendSpellSlot( attacker, 1 );
-		var usedMagicInitiate = false;
-		if (
-			slotSpent == 0 && structKeyExists( attacker, "hasMagicInitiate" ) && attacker.hasMagicInitiate &&
-			!attacker.usedMagicInitiateSpell
-		) {
-			attacker.usedMagicInitiateSpell = true;
-			usedMagicInitiate = true;
-		} else if ( slotSpent == 0 ) {
-			arguments.state.log.prepend( "#attacker.name# has no spell slots left to cast #attacker.knownLeveledSpell.name#." );
+		var cantrip = arguments.attacker.knownCantrip;
+		if ( !_isSpellTargetValid( arguments.state, arguments.attacker, arguments.defender, cantrip ) ) {
+			arguments.state.log.prepend( "#arguments.attacker.name# doesn't have a clear shot at #arguments.defender.name# for #cantrip.name#." );
 			return;
 		}
 
 		arguments.state.actionUsed = true;
-		var spell = attacker.knownLeveledSpell;
+		// Dice default to 1d8 (save) / 1d10 (attack), matching the classes'
+		// cantrips — but a monster's own signature cantrip (e.g. a Priest's
+		// Radiant Flame, 2d6) can override with its own diceCount/diceSides.
+		var diceCount = cantrip.keyExists( "diceCount" ) ? cantrip.diceCount : 1;
+		if ( cantrip.type == "save" ) {
+			var diceSides = cantrip.keyExists( "diceSides" ) ? cantrip.diceSides : 8;
+			// Some save cantrips (Sacred Flame, Vicious Mockery) deal no damage
+			// at all on a success, not half — real per-spell data from the
+			// spells table carries its own saveEffect; the hardcoded fallback
+			// cantrips (if _lookupClassSpell() found nothing for the class)
+			// don't, so default to "half" same as before.
+			var saveEffect = cantrip.keyExists( "saveEffect" ) ? cantrip.saveEffect : "half";
+			_castSaveDamageSpell( arguments.state, arguments.attacker, arguments.defender, arguments.defenderIsPlayer, cantrip.name, cantrip.saveAbility, diceCount, diceSides, cantrip.damageType, saveEffect );
+		} else {
+			var diceSides = cantrip.keyExists( "diceSides" ) ? cantrip.diceSides : 10;
+			_castAttackSpell( arguments.state, arguments.attacker, arguments.defender, arguments.defenderIsPlayer, cantrip.name, diceCount, diceSides, cantrip.damageType );
+		}
+	}
+
+	/**
+	 * Casts `attacker`'s known 1st-level spell — either at `defender` (a
+	 * damage spell like Magic Missile) or on `attacker` themself (a healing
+	 * spell like Cure Wounds/Healing Word), per `attacker.knownLeveledSpell.type`.
+	 * Spends a 1st-level spell slot if the caster has one; otherwise falls
+	 * back to Magic Initiate's separate once-per-encounter bonus spell, if
+	 * available and unused. A no-op if neither resource is available. Used
+	 * for both the player (via castLeveledSpell()) and any spellcasting
+	 * monster (via runEnemyTurn()).
+	 *
+	 * @state The encounter's full mutable game state struct.
+	 * @attacker The casting combatant.
+	 * @defender The combatant targeted if this turns out to be a damage spell.
+	 * @defenderIsPlayer Whether `defender` is `state.player` — decides whether reaching 0 HP means defeat (with Relentless Endurance) or victory/XP.
+	 */
+	private function _castLeveledSpellFor( state, attacker, defender, defenderIsPlayer ) {
+		if ( !structKeyExists( arguments.attacker, "knownLeveledSpell" ) || isNull( arguments.attacker.knownLeveledSpell ) ) {
+			return;
+		}
+		var spell = arguments.attacker.knownLeveledSpell;
+		if ( !_isSpellTargetValid( arguments.state, arguments.attacker, arguments.defender, spell ) ) {
+			arguments.state.log.prepend( "#arguments.attacker.name# doesn't have a clear shot at #arguments.defender.name# for #spell.name#." );
+			return;
+		}
+
+		var slotSpent = _spendSpellSlot( arguments.attacker, 1 );
+		var usedMagicInitiate = false;
+		if (
+			slotSpent == 0 && structKeyExists( arguments.attacker, "hasMagicInitiate" ) && arguments.attacker.hasMagicInitiate &&
+			!arguments.attacker.usedMagicInitiateSpell
+		) {
+			arguments.attacker.usedMagicInitiateSpell = true;
+			usedMagicInitiate = true;
+		} else if ( slotSpent == 0 ) {
+			arguments.state.log.prepend( "#arguments.attacker.name# has no spell slots left to cast #arguments.attacker.knownLeveledSpell.name#." );
+			return;
+		}
+
+		arguments.state.actionUsed = true;
 		var resourceNote = usedMagicInitiate ? " (Magic Initiate's bonus spell)" : " (spends a level-#slotSpent# slot)";
 		if ( spell.type == "heal" ) {
-			_castHealSpell( arguments.state, spell.name, resourceNote );
+			_castHealSpell( arguments.state, arguments.attacker, spell.name, resourceNote, spell.diceCount, spell.diceSides );
+		} else if ( spell.type == "attack" ) {
+			_castAttackSpell( arguments.state, arguments.attacker, arguments.defender, arguments.defenderIsPlayer, spell.name, spell.diceCount, spell.diceSides, spell.damageType, resourceNote );
+		} else if ( spell.type == "save" ) {
+			_castSaveDamageSpell( arguments.state, arguments.attacker, arguments.defender, arguments.defenderIsPlayer, spell.name, spell.saveAbility, spell.diceCount, spell.diceSides, spell.damageType, spell.saveEffect, resourceNote );
 		} else {
-			_castMagicMissile( arguments.state, resourceNote );
+			// Legacy fallback: Magic Initiate's default bonus spell when no
+			// real DB spell was found for the class ({"type":"damage","name":"Magic Missile"}).
+			_castMagicMissile( arguments.state, arguments.attacker, arguments.defender, arguments.defenderIsPlayer, resourceNote );
 		}
 	}
 
@@ -880,60 +1517,66 @@ class singleton {
 	 * vs. the defender's AC, dealing `diceCount`d`diceSides` damage on a hit
 	 * (doubled on a natural 20).
 	 */
-	private function _castAttackSpell( state, spellName, diceCount, diceSides, damageType ) {
-		var attacker = arguments.state.player;
-		var defender = arguments.state.opponent;
-		var spellMod = attacker.modifiers[ attacker.spellcastingAbility ];
+	private function _castAttackSpell( state, attacker, defender, defenderIsPlayer, spellName, diceCount, diceSides, damageType, resourceNote = "" ) {
+		var spellMod = arguments.attacker.modifiers[ arguments.attacker.spellcastingAbility ];
+		var cover = coverBonus( arguments.state, arguments.attacker, arguments.defender );
+		var effectiveAC = arguments.defender.armorClass + cover;
+		var coverNote = ( cover > 0 ) ? " (+#cover# Cover)" : "";
 		var roll = randRange( 1, 20 );
-		var total = roll + attacker.proficiencyBonus + spellMod;
+		var total = roll + arguments.attacker.proficiencyBonus + spellMod;
 		var isCrit = ( roll == 20 );
-		var hits = isCrit || total >= defender.armorClass;
+		var hits = isCrit || total >= effectiveAC;
 
 		if ( !hits ) {
 			arguments.state.log.prepend(
-				"#attacker.name# casts #arguments.spellName# at #defender.name#: #roll# + #attacker.proficiencyBonus + spellMod# = #total# vs AC #defender.armorClass#. Miss!"
+				"#arguments.attacker.name# casts #arguments.spellName##arguments.resourceNote# at #arguments.defender.name#: #roll# + #arguments.attacker.proficiencyBonus + spellMod# = #total# vs AC #effectiveAC##coverNote#. Miss!"
 			);
 			return;
 		}
 
 		var damage = rollSum( arguments.diceCount * ( isCrit ? 2 : 1 ), arguments.diceSides );
-		damage = _applyDamageModifiers( defender, damage, arguments.damageType );
+		damage = _applyDamageModifiers( arguments.defender, damage, arguments.damageType );
 
-		defender.hitPoints = max( 0, defender.hitPoints - damage );
+		arguments.defender.hitPoints = max( 0, arguments.defender.hitPoints - damage );
 		arguments.state.log.prepend(
-			"#attacker.name# casts #arguments.spellName# at #defender.name#: #roll# + #attacker.proficiencyBonus + spellMod# = #total# vs AC #defender.armorClass#. " &
+			"#arguments.attacker.name# casts #arguments.spellName##arguments.resourceNote# at #arguments.defender.name#: #roll# + #arguments.attacker.proficiencyBonus + spellMod# = #total# vs AC #effectiveAC##coverNote#. " &
 			( isCrit ? "Critical hit! " : "Hit! " ) &
-			"#damage# #arguments.damageType# damage (#defender.hitPoints#/#defender.maxHitPoints# HP)."
+			"#damage# #arguments.damageType# damage (#arguments.defender.hitPoints#/#arguments.defender.maxHitPoints# HP)."
 		);
-		_checkOpponentDefeated( arguments.state );
+		_checkDefenderDefeated( arguments.state, arguments.attacker, arguments.defender, arguments.defenderIsPlayer );
 	}
 
 	/**
-	 * Sacred Flame/Vicious Mockery-style save cantrip: the defender makes a
-	 * saving throw (via rollSavingThrow()) against DC 8 + Proficiency Bonus +
-	 * spellcasting ability modifier, taking full damage on a failure or half
-	 * on a success.
+	 * Sacred Flame/Vicious Mockery-style save spell/cantrip: the defender
+	 * makes a saving throw (via rollSavingThrow()) against DC 8 + Proficiency
+	 * Bonus + spellcasting ability modifier, taking full damage on a failure
+	 * and — per `saveEffect`, from the spells table's own `save_effect` column
+	 * for a real leveled spell, or "half" for the hardcoded cantrips — either
+	 * half damage or none at all on a success.
 	 */
-	private function _castSaveDamageSpell( state, spellName, saveAbility, diceCount, diceSides, damageType ) {
-		var attacker = arguments.state.player;
-		var defender = arguments.state.opponent;
-		var dc = 8 + attacker.proficiencyBonus + attacker.modifiers[ attacker.spellcastingAbility ];
-		var saveResult = rollSavingThrow( defender, arguments.saveAbility, dc, "", true );
+	private function _castSaveDamageSpell( state, attacker, defender, defenderIsPlayer, spellName, saveAbility, diceCount, diceSides, damageType, saveEffect = "half", resourceNote = "" ) {
+		var dc = 8 + arguments.attacker.proficiencyBonus + arguments.attacker.modifiers[ arguments.attacker.spellcastingAbility ];
+		var cover = coverBonus( arguments.state, arguments.attacker, arguments.defender );
+		var saveResult = rollSavingThrow( arguments.defender, arguments.saveAbility, dc, "", true, cover );
 
 		var damage = rollSum( arguments.diceCount, arguments.diceSides );
-		if ( saveResult.success ) {
+		var successText = "succeeds. No effect. ";
+		if ( saveResult.success && arguments.saveEffect == "half" ) {
 			damage = int( damage / 2 );
+			successText = "succeeds, takes half damage. ";
+		} else if ( saveResult.success ) {
+			damage = 0;
 		}
-		damage = _applyDamageModifiers( defender, damage, arguments.damageType );
+		damage = _applyDamageModifiers( arguments.defender, damage, arguments.damageType );
 
-		defender.hitPoints = max( 0, defender.hitPoints - damage );
+		arguments.defender.hitPoints = max( 0, arguments.defender.hitPoints - damage );
 		arguments.state.log.prepend(
-			"#attacker.name# casts #arguments.spellName# at #defender.name#: DC #dc# #uCase( arguments.saveAbility )# save — #defender.name# rolls #saveResult.total#" &
+			"#arguments.attacker.name# casts #arguments.spellName##arguments.resourceNote# at #arguments.defender.name#: DC #dc# #uCase( arguments.saveAbility )# save — #arguments.defender.name# rolls #saveResult.total#" &
 			( saveResult.hadAdvantage ? " (Advantage)" : "" ) & " — " &
-			( saveResult.success ? "succeeds, takes half damage. " : "fails! " ) &
-			"#damage# #arguments.damageType# damage (#defender.hitPoints#/#defender.maxHitPoints# HP)."
+			( saveResult.success ? successText : "fails! " ) &
+			"#damage# #arguments.damageType# damage (#arguments.defender.hitPoints#/#arguments.defender.maxHitPoints# HP)."
 		);
-		_checkOpponentDefeated( arguments.state );
+		_checkDefenderDefeated( arguments.state, arguments.attacker, arguments.defender, arguments.defenderIsPlayer );
 	}
 
 	/**
@@ -941,30 +1584,27 @@ class singleton {
 	 * each (no attack roll, no save) — always a total of 3d4+3 here, since
 	 * upcasting for more darts isn't modeled.
 	 */
-	private function _castMagicMissile( state, resourceNote ) {
-		var attacker = arguments.state.player;
-		var defender = arguments.state.opponent;
+	private function _castMagicMissile( state, attacker, defender, defenderIsPlayer, resourceNote ) {
 		var damage = rollSum( 3, 4 ) + 3;
-		damage = _applyDamageModifiers( defender, damage, "Force" );
+		damage = _applyDamageModifiers( arguments.defender, damage, "Force" );
 
-		defender.hitPoints = max( 0, defender.hitPoints - damage );
+		arguments.defender.hitPoints = max( 0, arguments.defender.hitPoints - damage );
 		arguments.state.log.prepend(
-			"#attacker.name# casts Magic Missile#arguments.resourceNote# — three darts automatically strike #defender.name# for #damage# Force damage (#defender.hitPoints#/#defender.maxHitPoints# HP)."
+			"#arguments.attacker.name# casts Magic Missile#arguments.resourceNote# — three darts automatically strike #arguments.defender.name# for #damage# Force damage (#arguments.defender.hitPoints#/#arguments.defender.maxHitPoints# HP)."
 		);
-		_checkOpponentDefeated( arguments.state );
+		_checkDefenderDefeated( arguments.state, arguments.attacker, arguments.defender, arguments.defenderIsPlayer );
 	}
 
 	/**
-	 * Cure Wounds/Healing Word: heals the caster (this app is a 1-on-1
-	 * encounter, so there's no ally to target) for 1d8 + spellcasting ability
-	 * modifier Hit Points, capped at their maximum.
+	 * Cure Wounds/Healing Word-style heal: heals the caster (this app is a
+	 * 1-on-1 encounter, so there's no ally to target) for `diceCount`d`diceSides`
+	 * plus their spellcasting ability modifier Hit Points, capped at their maximum.
 	 */
-	private function _castHealSpell( state, spellName, resourceNote ) {
-		var attacker = arguments.state.player;
-		var healing = rollSum( 1, 8 ) + attacker.modifiers[ attacker.spellcastingAbility ];
-		attacker.hitPoints = min( attacker.maxHitPoints, attacker.hitPoints + healing );
+	private function _castHealSpell( state, attacker, spellName, resourceNote, diceCount, diceSides ) {
+		var healing = rollSum( arguments.diceCount, arguments.diceSides ) + arguments.attacker.modifiers[ arguments.attacker.spellcastingAbility ];
+		arguments.attacker.hitPoints = min( arguments.attacker.maxHitPoints, arguments.attacker.hitPoints + healing );
 		arguments.state.log.prepend(
-			"#attacker.name# casts #arguments.spellName##arguments.resourceNote#, healing #healing# Hit Points (#attacker.hitPoints#/#attacker.maxHitPoints# HP)."
+			"#arguments.attacker.name# casts #arguments.spellName##arguments.resourceNote#, healing #healing# Hit Points (#arguments.attacker.hitPoints#/#arguments.attacker.maxHitPoints# HP)."
 		);
 	}
 
@@ -987,15 +1627,136 @@ class singleton {
 	}
 
 	/**
-	 * Shared victory/XP-award check after a spell deals damage to the opponent.
+	 * Shared victory/defeat check after a spell or weapon attack deals
+	 * damage. When the defeated combatant is the player, this includes the
+	 * Orc Relentless Endurance check (drop to 1 HP instead of 0, once per
+	 * encounter). When it's an opponent, this awards its XP once and only
+	 * ends the encounter (victory) once every opponent in state.opponents
+	 * (or the lone state.opponent, for single-mob state) is down — otherwise
+	 * the fight continues, and the player's current target auto-advances to
+	 * the next living opponent if the one they just downed was it.
 	 */
-	private function _checkOpponentDefeated( state ) {
-		var defender = arguments.state.opponent;
-		if ( defender.hitPoints <= 0 ) {
+	private function _checkDefenderDefeated( state, attacker, defender, defenderIsPlayer ) {
+		if ( arguments.defender.hitPoints > 0 ) {
+			return;
+		}
+
+		if ( arguments.defenderIsPlayer ) {
+			if (
+				structKeyExists( arguments.defender, "hasRelentlessEndurance" ) && arguments.defender.hasRelentlessEndurance &&
+				!arguments.defender.usedRelentlessEndurance
+			) {
+				arguments.defender.hitPoints = 1;
+				arguments.defender.usedRelentlessEndurance = true;
+				arguments.state.log.prepend( "#arguments.defender.name#'s Relentless Endurance kicks in — clinging to 1 Hit Point instead of falling!" );
+				return;
+			}
+			// Dropping to 0 HP starts Death Saving Throws instead of ending the
+			// encounter outright — see rollDeathSave() and _applyDeathSaveFailure().
+			if ( !structKeyExists( arguments.defender, "isDying" ) || !arguments.defender.isDying ) {
+				arguments.defender.isDying = true;
+				arguments.defender.deathSaveSuccesses = 0;
+				arguments.defender.deathSaveFailures = 0;
+				arguments.state.log.prepend( "#arguments.defender.name# drops to 0 Hit Points and is dying!" );
+			}
+			return;
+		}
+
+		if ( !structKeyExists( arguments.defender, "xpAwarded" ) || !arguments.defender.xpAwarded ) {
+			arguments.defender.xpAwarded = true;
+			awardExperience( arguments.state, arguments.defender.xp );
+		}
+
+		if ( _allOpponentsDefeated( arguments.state ) ) {
 			arguments.state.gameOver = true;
 			arguments.state.outcome = "victory";
-			arguments.state.log.prepend( "#defender.name# collapses. Victory!" );
-			awardExperience( arguments.state, defender.xp );
+			arguments.state.log.prepend( "#arguments.defender.name# collapses. Victory!" );
+		} else {
+			arguments.state.log.prepend( "#arguments.defender.name# collapses!" );
+			_retargetIfCurrentOpponentDefeated( arguments.state );
+		}
+	}
+
+	/**
+	 * Applies an automatic death-save failure to a dying player who's just
+	 * been struck again — an Unconscious creature auto-fails Dex saves and
+	 * takes no roll-to-hit, so this skips normal attack resolution entirely.
+	 * Counts as 2 failures (an automatic critical) if `attacker` is within 5
+	 * feet, 1 otherwise, per the "Unconscious"/critical-hit-range rules. Ends
+	 * the encounter in defeat once failures reach 3.
+	 *
+	 * @state The encounter's full mutable game state struct.
+	 * @attacker The opponent striking the downed player.
+	 * @defender The dying player.
+	 */
+	private function _applyDeathSaveFailure( state, attacker, defender ) {
+		if ( structKeyExists( arguments.defender, "isStable" ) && arguments.defender.isStable ) {
+			arguments.defender.isStable = false;
+			arguments.defender.isDying = true;
+			arguments.defender.deathSaveSuccesses = 0;
+			arguments.defender.deathSaveFailures = 0;
+		}
+		var failures = ( chebyshev( arguments.attacker, arguments.defender ) <= 1 ) ? 2 : 1;
+		arguments.defender.deathSaveFailures += failures;
+		arguments.state.log.prepend(
+			"#arguments.attacker.name# strikes the unconscious #arguments.defender.name#: #failures# failed death save#( failures > 1 ? 's' : '' )#!"
+		);
+		if ( arguments.defender.deathSaveFailures >= 3 ) {
+			arguments.defender.isDying = false;
+			arguments.state.gameOver = true;
+			arguments.state.outcome = "defeat";
+			arguments.state.log.prepend( "#arguments.defender.name# dies." );
+		}
+	}
+
+	/**
+	 * Rolls one of the player's Death Saving Throws while they're dying (0 HP,
+	 * per `player.isDying`) — d20 with no modifiers: 20 regains 1 Hit Point and
+	 * ends the dying state outright, 10+ is a success, 2-9 is a failure, and a
+	 * natural 1 counts as 2 failures. 3 successes stabilizes the player
+	 * (unconscious but no longer in danger of dying on their own); 3 failures
+	 * ends the encounter in defeat. A no-op if the player isn't dying.
+	 *
+	 * @state The encounter's full mutable game state struct.
+	 */
+	function rollDeathSave( state ) {
+		var player = arguments.state.player;
+		if ( !structKeyExists( player, "isDying" ) || !player.isDying ) {
+			return;
+		}
+
+		var roll = randRange( 1, 20 );
+		if ( roll == 20 ) {
+			player.hitPoints = 1;
+			player.isDying = false;
+			player.deathSaveSuccesses = 0;
+			player.deathSaveFailures = 0;
+			arguments.state.log.prepend( "#player.name# rolls a natural 20 on their death save — surges back to 1 Hit Point!" );
+			return;
+		}
+
+		if ( roll == 1 ) {
+			player.deathSaveFailures += 2;
+		} else if ( roll >= 10 ) {
+			player.deathSaveSuccesses += 1;
+		} else {
+			player.deathSaveFailures += 1;
+		}
+
+		arguments.state.log.prepend(
+			"#player.name# makes a death saving throw: #roll# — " &
+			( roll == 1 ? "critical failure (2 failures)!" : ( roll >= 10 ? "success." : "failure." ) ) &
+			" (#min( player.deathSaveSuccesses, 3 )# successes, #min( player.deathSaveFailures, 3 )# failures)"
+		);
+
+		if ( player.deathSaveSuccesses >= 3 ) {
+			player.isDying = false;
+			player.isStable = true;
+			arguments.state.log.prepend( "#player.name# stabilizes, unconscious but stable." );
+		} else if ( player.deathSaveFailures >= 3 ) {
+			arguments.state.gameOver = true;
+			arguments.state.outcome = "defeat";
+			arguments.state.log.prepend( "#player.name# dies." );
 		}
 	}
 
@@ -1009,14 +1770,24 @@ class singleton {
 	 */
 	function rollForInitiative( state ) {
 		var player = arguments.state.player;
-		var opponent = arguments.state.opponent;
+		var opponents = _stateOpponents( arguments.state );
 		var playerRoll = rollInitiative( player );
-		var opponentRoll = rollInitiative( opponent );
-		var playerFirst = ( playerRoll >= opponentRoll );
+
+		var bestOpponentRoll = "";
+		var fastestOpponentName = "";
+		for ( var o in opponents ) {
+			var r = rollInitiative( o );
+			if ( !isNumeric( bestOpponentRoll ) || r > bestOpponentRoll ) {
+				bestOpponentRoll = r;
+				fastestOpponentName = o.name;
+			}
+		}
+		var playerFirst = ( playerRoll >= bestOpponentRoll );
+		var opponentLabel = ( opponents.len() > 1 ) ? "the enemies (#fastestOpponentName# leads at #bestOpponentRoll#)" : "#fastestOpponentName# rolls #bestOpponentRoll#";
+		var winnerLabel = playerFirst ? player.name : ( opponents.len() > 1 ? "The enemies" : fastestOpponentName );
 
 		arguments.state.log.prepend(
-			"Initiative: #player.name# rolls #playerRoll#, #opponent.name# rolls #opponentRoll#. " &
-			"#( playerFirst ? player.name : opponent.name )# acts first!"
+			"Initiative: #player.name# rolls #playerRoll#, #opponentLabel#. #winnerLabel# goes first!"
 		);
 
 		if ( playerFirst ) {

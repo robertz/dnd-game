@@ -5,7 +5,7 @@
 
 		<bx:if gameOver>
 			<p class="encounter-banner encounter-banner-#outcome#">
-				#( outcome == "victory" ? "Victory! The skeleton is destroyed." : "Defeat! " & player.name & " has fallen." )#
+				#( outcome == "victory" ? "Victory! Every enemy is defeated." : "Defeat! " & player.name & " has fallen." )#
 			</p>
 		<bx:else>
 			<p class="encounter-intro">Round #round# — #( currentTurn == "player" ? "Your turn." : "Enemy turn…" )#
@@ -22,13 +22,20 @@
 						<bx:set decoration = grid.decorations[ row ][ col ]>
 						<bx:set baseTileClass = len( decoration ) ? ( ' tile-' & decoration ) : ( isWall ? ' tile-wall' : '' )>
 						<bx:set isPlayerTile = ( player.position.x == col && player.position.y == row )>
-						<bx:set isOpponentTile = ( opponent.position.x == col && opponent.position.y == row )>
+						<bx:set tileOpponent = "">
+						<bx:loop array="#opponents#" index="opponentAtTile">
+							<bx:if opponentAtTile.hitPoints gt 0 && opponentAtTile.position.x == col && opponentAtTile.position.y == row>
+								<bx:set tileOpponent = opponentAtTile>
+							</bx:if>
+						</bx:loop>
+						<bx:set isOpponentTile = !isSimpleValue( tileOpponent )>
+						<bx:set isTargetedTile = ( isOpponentTile && tileOpponent.mobIndex == selectedOpponentIndex )>
 						<bx:set chebyshev = max( abs( col - player.position.x ), abs( row - player.position.y ) )>
 						<bx:set isReachable = ( !isWall && tileReachable( col, row ) )>
 						<bx:set isAttackable = ( !gameOver && !autoBattling && currentTurn == "player" && isOpponentTile && !actionUsed && chebyshev <= 1 )>
 						<div
-							class="tile#baseTileClass##( isPlayerTile ? ' tile-player' : ( isOpponentTile ? ' tile-opponent' : '' ) )##( isReachable ? ' tile-reachable' : '' )##( isAttackable ? ' tile-attackable' : '' )#"
-							title="#( isPlayerTile ? player.name : ( isOpponentTile ? opponent.name : ( len( decoration ) ? decoration : ( isWall ? 'Wall' : 'x' & col & ', y' & row ) ) ) )#"
+							class="tile#baseTileClass##( isPlayerTile ? ' tile-player' : ( isOpponentTile ? ' tile-opponent' : '' ) )##( isTargetedTile ? ' tile-targeted' : '' )##( isReachable ? ' tile-reachable' : '' )##( isAttackable ? ' tile-attackable' : '' )#"
+							title="#( isPlayerTile ? player.name : ( isOpponentTile ? tileOpponent.name : ( len( decoration ) ? decoration : ( isWall ? 'Wall' : 'x' & col & ', y' & row ) ) ) )#"
 							wire:click="tileClick(#col#, #row#)"
 						>#( isPlayerTile ? '⚔' : ( isOpponentTile ? '☠' : '' ) )#</div>
 					</bx:loop>
@@ -44,25 +51,36 @@
 				<bx:else>
 					<button type="button" class="btn btn-auto-battle" wire:click="startAutoBattle()">Auto-Battle</button>
 					<bx:if currentTurn == "player">
-						<bx:if !actionUsed>
-							<button type="button" class="btn btn-attack" wire:click="attack()">Attack</button>
-							<bx:if structKeyExists( player, "hasGrapplerFeat" ) && player.hasGrapplerFeat>
-								<button type="button" class="btn btn-attack" wire:click="attemptGrapple()">Grapple</button>
+						<bx:if structKeyExists( player, "isDying" ) && player.isDying>
+							<button type="button" class="btn btn-attack" wire:click="makeDeathSave()">Make Death Saving Throw</button>
+						<bx:elseif player.hitPoints <= 0>
+							<p class="encounter-intro">#player.name# is stabilized but unconscious — nothing to do but wait.</p>
+							<button type="button" class="btn btn-end-turn" wire:click="endTurn()">End Turn</button>
+						<bx:else>
+							<bx:set remainingAttacks = attacksRemaining()>
+							<bx:if remainingAttacks gt 0 && ( !actionUsed || attacksUsedThisTurn gt 0 )>
+								<button type="button" class="btn btn-attack" wire:click="attack()">Attack#( remainingAttacks gt 1 ? " (#remainingAttacks# left)" : "" )#</button>
 							</bx:if>
-							<bx:if structKeyExists( player, "hasBreathWeapon" ) && player.hasBreathWeapon && !player.usedBreathWeapon>
-								<button type="button" class="btn btn-attack" wire:click="useBreathWeapon()">Breath Weapon</button>
+							<bx:if !actionUsed>
+								<bx:if structKeyExists( player, "hasGrapplerFeat" ) && player.hasGrapplerFeat>
+									<button type="button" class="btn btn-attack" wire:click="attemptGrapple()">Grapple</button>
+								</bx:if>
+								<button type="button" class="btn btn-attack" wire:click="attemptShove()">Shove</button>
+								<bx:if structKeyExists( player, "hasBreathWeapon" ) && player.hasBreathWeapon && !player.usedBreathWeapon>
+									<button type="button" class="btn btn-attack" wire:click="useBreathWeapon()">Breath Weapon</button>
+								</bx:if>
+								<bx:if structKeyExists( player, "knownCantrip" ) && !isNull( player.knownCantrip )>
+									<button type="button" class="btn btn-attack" wire:click="castCantrip()">Cast #player.knownCantrip.name#</button>
+								</bx:if>
+								<bx:if structKeyExists( player, "knownLeveledSpell" ) && !isNull( player.knownLeveledSpell )>
+									<button type="button" class="btn btn-attack" wire:click="castLeveledSpell()">Cast #player.knownLeveledSpell.name#</button>
+								</bx:if>
 							</bx:if>
-							<bx:if structKeyExists( player, "knownCantrip" ) && !isNull( player.knownCantrip )>
-								<button type="button" class="btn btn-attack" wire:click="castCantrip()">Cast #player.knownCantrip.name#</button>
+							<bx:if !bonusActionUsed>
+								<button type="button" class="btn btn-attack" wire:click="offHandAttack()">Off-Hand Attack</button>
 							</bx:if>
-							<bx:if structKeyExists( player, "knownLeveledSpell" ) && !isNull( player.knownLeveledSpell )>
-								<button type="button" class="btn btn-attack" wire:click="castLeveledSpell()">Cast #player.knownLeveledSpell.name#</button>
-							</bx:if>
+							<button type="button" class="btn btn-end-turn" wire:click="endTurn()">End Turn</button>
 						</bx:if>
-						<bx:if !bonusActionUsed>
-							<button type="button" class="btn btn-attack" wire:click="offHandAttack()">Off-Hand Attack</button>
-						</bx:if>
-						<button type="button" class="btn btn-end-turn" wire:click="endTurn()">End Turn</button>
 					</bx:if>
 				</bx:if>
 			</div>
@@ -79,6 +97,12 @@
 				<ul class="stat-list">
 					<li><strong>AC</strong> #player.armorClass#</li>
 					<li><strong>HP</strong> #max( player.hitPoints, 0 )# / #player.maxHitPoints#</li>
+					<bx:if structKeyExists( player, "isDying" ) && player.isDying>
+						<li><strong>Death Saves</strong> #min( player.deathSaveSuccesses, 3 )# success(es), #min( player.deathSaveFailures, 3 )# failure(s)</li>
+					</bx:if>
+					<bx:if structKeyExists( player, "conditions" ) && structCount( player.conditions ) gt 0>
+						<li><strong>Conditions</strong> #arrayToList( structKeyArray( player.conditions ), ", " )#</li>
+					</bx:if>
 					<li><strong>Speed</strong> #player.speed# ft.</li>
 					<li><strong>Inventory</strong>
 						<ul class="inventory-list">
@@ -103,26 +127,35 @@
 				</ul>
 			</div>
 
-			<bx:set opponentBloodied = ( opponent.hitPoints > 0 && opponent.hitPoints <= opponent.maxHitPoints / 2 )>
-			<div class="stat-card stat-card-opponent#( opponent.hitPoints <= 0 ? ' stat-card-down' : '' )#">
-				<h2 class="fantasy-heading">#opponent.name#</h2>
-				<p class="stat-subtitle">Medium #opponent.creatureType##( opponent.hitPoints <= 0 ? " — Destroyed" : ( opponentBloodied ? " — Bloodied" : "" ) )#</p>
-				<div class="hp-bar"><div class="hp-bar-fill#( opponentBloodied ? ' hp-bar-fill-bloodied' : '' )#" style="width:#round( max( opponent.hitPoints, 0 ) / opponent.maxHitPoints * 100 )#%;"></div></div>
-				<ul class="stat-list">
-					<li><strong>AC</strong> #opponent.armorClass#</li>
-					<li><strong>HP</strong> #max( opponent.hitPoints, 0 )# / #opponent.maxHitPoints#</li>
-					<li><strong>Speed</strong> #opponent.speed# ft.</li>
-					<li><strong>Inventory</strong>
-						<ul class="inventory-list">
-							<bx:loop array="#opponent.inventory#" index="item">
-								<li>#item.name# (+#item.attackBonus# to hit, #item.damageDice#+#item.damageBonus# #item.damageType##( item.category == "ranged" ? ", range " & ( item.normalRange * 5 ) & "/" & ( item.longRange * 5 ) & " ft." : "" )#)</li>
-							</bx:loop>
-						</ul>
-					</li>
-					<li><strong>Vulnerable</strong> #arrayToList( opponent.vulnerabilities, ", " )#</li>
-					<li><strong>Immune</strong> #arrayToList( opponent.immunities, ", " )#</li>
-				</ul>
-			</div>
+			<bx:loop array="#opponents#" index="foe">
+				<bx:set foeBloodied = ( foe.hitPoints > 0 && foe.hitPoints <= foe.maxHitPoints / 2 )>
+				<bx:set foeTargeted = ( foe.mobIndex == selectedOpponentIndex )>
+				<div
+					class="stat-card stat-card-opponent#( foe.hitPoints <= 0 ? ' stat-card-down' : '' )##( foeTargeted && foe.hitPoints gt 0 ? ' stat-card-targeted' : '' )#"
+					wire:click="selectTarget(#foe.mobIndex#)"
+				>
+					<h2 class="fantasy-heading">#foe.name##( foeTargeted && foe.hitPoints gt 0 ? ' 🎯' : '' )#</h2>
+					<p class="stat-subtitle">Medium #foe.creatureType##( foe.hitPoints <= 0 ? " — Destroyed" : ( foeBloodied ? " — Bloodied" : "" ) )#</p>
+					<div class="hp-bar"><div class="hp-bar-fill#( foeBloodied ? ' hp-bar-fill-bloodied' : '' )#" style="width:#round( max( foe.hitPoints, 0 ) / foe.maxHitPoints * 100 )#%;"></div></div>
+					<ul class="stat-list">
+						<li><strong>AC</strong> #foe.armorClass#</li>
+						<li><strong>HP</strong> #max( foe.hitPoints, 0 )# / #foe.maxHitPoints#</li>
+						<bx:if structKeyExists( foe, "conditions" ) && structCount( foe.conditions ) gt 0>
+							<li><strong>Conditions</strong> #arrayToList( structKeyArray( foe.conditions ), ", " )#</li>
+						</bx:if>
+						<li><strong>Speed</strong> #foe.speed# ft.</li>
+						<li><strong>Inventory</strong>
+							<ul class="inventory-list">
+								<bx:loop array="#foe.inventory#" index="item">
+									<li>#item.name# (+#item.attackBonus# to hit, #item.damageDice#+#item.damageBonus# #item.damageType##( item.category == "ranged" ? ", range " & ( item.normalRange * 5 ) & "/" & ( item.longRange * 5 ) & " ft." : "" )#)</li>
+								</bx:loop>
+							</ul>
+						</li>
+						<li><strong>Vulnerable</strong> #arrayToList( foe.vulnerabilities, ", " )#</li>
+						<li><strong>Immune</strong> #arrayToList( foe.immunities, ", " )#</li>
+					</ul>
+				</div>
+			</bx:loop>
 		</div>
 
 		<div class="combat-log">

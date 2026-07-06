@@ -3,6 +3,8 @@
 settings.xml
 WEB-INF
 build/**
+.claude/
+__pycache__/
 
 # Engines + Database + CBFS + Secrets
 .tmp/**

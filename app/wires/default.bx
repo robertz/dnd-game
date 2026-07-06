@@ -17,11 +17,18 @@ class extends="cbwire.models.Component" {
 	// than a single screenful (e.g. the 40x30 grandDungeon).
 	VIEWPORT_RADIUS = 7;
 
+	// How many mobs spawn in one encounter — randomized within this range so
+	// fights vary without needing per-level authored spawn points; additional
+	// mobs beyond the first are placed via combatService.findOpenTileNear()
+	// starting from the level's one designed opponentSpawn.
+	MIN_MOB_COUNT = 2;
+	MAX_MOB_COUNT = 3;
+
 	/**
 	 * The player character is loaded from the gameserver `characters` schema
 	 * (see onMount()) rather than hardcoded here — this is just a placeholder
-	 * so "player" exists as a data property before the component mounts.
-	 * Skeleton stats are taken directly from the SRD monster stat block.
+	 * so "player"/"opponent"/"opponents" exist as data properties before the
+	 * component mounts. The actual roster is built from _monsterTemplates() in onMount().
 	 */
 	data = {
 		// Placeholder — replaced with a real level (tiles, spawn points) from
@@ -32,44 +39,24 @@ class extends="cbwire.models.Component" {
 			"height": 20
 		},
 		"player": {},
-		"opponent": {
-			"name": "Skeleton",
-			"creatureType": "Undead",
-			// CR 1/4 (XP 50), per its SRD stat block.
-			"xp": 50,
-			"armorClass": 14,
-			"hitPoints": 13,
-			"maxHitPoints": 13,
-			"speed": 30,
-			"abilityScores": { "str": 10, "dex": 16, "con": 15, "int": 6, "wis": 8, "cha": 5 },
-			// Per its SRD stat block: Gear is Shortbow, Shortsword, and it has
-			// both a Shortsword and a Shortbow action (range 80/320 ft -> 16/64 squares).
-			"inventory": [
-				{
-					"name": "Shortsword",
-					"category": "melee",
-					"damageDice": "1d6",
-					"damageType": "Piercing",
-					"attackBonus": 5,
-					"damageBonus": 3,
-					"equipped": true
-				},
-				{
-					"name": "Shortbow",
-					"category": "ranged",
-					"damageDice": "1d6",
-					"damageType": "Piercing",
-					"attackBonus": 5,
-					"damageBonus": 3,
-					"normalRange": 16,
-					"longRange": 64,
-					"equipped": true
-				}
-			],
-			"vulnerabilities": [ "Bludgeoning" ],
-			"immunities": [ "Poison", "Exhaustion", "Poisoned" ],
-			"position": { "x": 1, "y": 1 }
-		},
+		// The full mob roster for this encounter. Each mob carries its own
+		// stable "mobIndex" (its 1-based position in this array, assigned at
+		// spawn time). "opponent" is a convenience alias for whichever mob is
+		// currently targeted — every single-target CombatService action
+		// (attack, cast a spell, grapple) reads/writes it directly, same as
+		// when this app only ever had one mob. Since CBWIRE re-hydrates this
+		// component's data from a serialized snapshot on every request, two
+		// struct values that were the same in-memory object last request are
+		// NOT guaranteed to still be after rehydration — so "opponent" is
+		// re-derived from `opponents[selectedOpponentIndex]` (via
+		// _syncSelectedOpponent()) at the start of every action that needs
+		// it, and `selectedOpponentIndex` is re-saved (via
+		// _saveSelectedOpponentIndex(), reading the mob's own mobIndex field)
+		// at the end, in case CombatService auto-retargeted mid-action (e.g.
+		// the current target died and play moved on to the next one).
+		"opponents": [],
+		"opponent": {},
+		"selectedOpponentIndex": 1,
 		// Turn/combat state. Movement is tracked in 5-foot squares (Speed / 5),
 		// per the "Playing on a Grid" rules: entering an adjacent square (orthogonal
 		// or diagonal) costs 1 square, so range is Chebyshev distance.
@@ -78,6 +65,7 @@ class extends="cbwire.models.Component" {
 		"movementRemaining": 6,
 		"actionUsed": false,
 		"bonusActionUsed": false,
+		"attacksUsedThisTurn": 0,
 		"gameOver": false,
 		"outcome": "",
 		"log": [],
@@ -87,19 +75,128 @@ class extends="cbwire.models.Component" {
 	}
 
 	/**
-	 * Loads the saved character of record (Dev the Mighty, characters.id 2)
-	 * from the gameserver schema, loads the level's grid (tiles + spawn
-	 * points) from MapService, and places both combatants at their designed
-	 * spawn points.
+	 * Loads the saved character picked on the character-select screen
+	 * (session.charid — the Combat handler guarantees it's set before this
+	 * view ever renders) from the gameserver schema, loads the level's grid
+	 * (tiles + spawn points) from MapService, places the player at their
+	 * designed spawn, and spawns 2-3 mobs (from _monsterTemplates(), each an
+	 * independent copy) starting from the level's one designed opponentSpawn
+	 * and fanning out to nearby open tiles for any additional mobs.
 	 */
 	function onMount( event, rc, prc, params ) {
-		variables.data.player = combatService.loadCharacter( 2 );
+		variables.data.player = combatService.loadCharacter( session.charid );
 		variables.data.grid = mapService.getLevel( "grandDungeon" );
 		variables.data.player.position = { "x": variables.data.grid.playerSpawn.x, "y": variables.data.grid.playerSpawn.y };
-		variables.data.opponent.position = { "x": variables.data.grid.opponentSpawn.x, "y": variables.data.grid.opponentSpawn.y };
 
-		variables.data.log.prepend( "A skeletal warrior blocks your path. Roll for initiative!" );
+		var templates = _monsterTemplates();
+		var mobCount = randRange( MIN_MOB_COUNT, MAX_MOB_COUNT );
+		var opponents = [];
+		var takenPositions = [ variables.data.player.position ];
+
+		for ( var i = 1; i <= mobCount; i++ ) {
+			var mob = duplicate( templates[ randRange( 1, templates.len() ) ] );
+			var spawnPoint = variables.data.grid.opponentSpawn;
+			mob.position = ( i == 1 )
+				? { "x": spawnPoint.x, "y": spawnPoint.y }
+				: combatService.findOpenTileNear( variables.data.grid, spawnPoint, takenPositions );
+			mob.mobIndex = i;
+			arrayAppend( takenPositions, mob.position );
+			arrayAppend( opponents, mob );
+		}
+
+		variables.data.opponents = opponents;
+		variables.data.selectedOpponentIndex = 1;
+		variables.data.opponent = opponents[ 1 ];
+
+		var introText = ( opponents.len() > 1 ) ? "#opponents.len()# enemies block your path. Roll for initiative!" : opponents[ 1 ].encounterIntro;
+		variables.data.log.prepend( introText );
 		combatService.rollForInitiative( variables.data );
+	}
+
+	/**
+	 * The pool of opponents an encounter can spawn, all CR 1/4 (XP 50) — a
+	 * level-appropriate match for this app's level 1-4 characters. Picked at
+	 * random in onMount() so a spellcasting monster (the Priest Acolyte)
+	 * actually shows up in real play sometimes, not just in tests.
+	 */
+	private function _monsterTemplates() {
+		return [
+			{
+				"name": "Skeleton",
+				"creatureType": "Undead",
+				// CR 1/4 (XP 50), per its SRD stat block.
+				"xp": 50,
+				"armorClass": 14,
+				"hitPoints": 13,
+				"maxHitPoints": 13,
+				"speed": 30,
+				"abilityScores": { "str": 10, "dex": 16, "con": 15, "int": 6, "wis": 8, "cha": 5 },
+				// Per its SRD stat block: Gear is Shortbow, Shortsword, and it has
+				// both a Shortsword and a Shortbow action (range 80/320 ft -> 16/64 squares).
+				"inventory": [
+					{
+						"name": "Shortsword",
+						"category": "melee",
+						"damageDice": "1d6",
+						"damageType": "Piercing",
+						"attackBonus": 5,
+						"damageBonus": 3,
+						"equipped": true
+					},
+					{
+						"name": "Shortbow",
+						"category": "ranged",
+						"damageDice": "1d6",
+						"damageType": "Piercing",
+						"attackBonus": 5,
+						"damageBonus": 3,
+						"normalRange": 16,
+						"longRange": 64,
+						"equipped": true
+					}
+				],
+				"vulnerabilities": [ "Bludgeoning" ],
+				"immunities": [ "Poison", "Exhaustion", "Poisoned" ],
+				"encounterIntro": "A skeletal warrior blocks your path. Roll for initiative!"
+			},
+			{
+				// Per the SRD's "Priest" stat block (CR 1/4, XP 50) — the one
+				// stock monster in this app with real Spellcasting, so it's
+				// the one that actually exercises CombatService's monster-
+				// spellcasting AI (self-heal when bloodied, Radiant Flame at
+				// range otherwise) in a live encounter, not just in tests.
+				// The Mace's stat block also adds 2 (1d4) Radiant damage on
+				// top of its Bludgeoning; simplified here to Bludgeoning only,
+				// since a weapon can only carry one damage type in this engine.
+				"name": "Priest Acolyte",
+				"creatureType": "Humanoid",
+				"xp": 50,
+				"armorClass": 13,
+				"hitPoints": 11,
+				"maxHitPoints": 11,
+				"speed": 30,
+				"abilityScores": { "str": 14, "dex": 10, "con": 12, "int": 10, "wis": 14, "cha": 11 },
+				"modifiers": { "str": 2, "dex": 0, "con": 1, "int": 0, "wis": 2, "cha": 0 },
+				"proficiencyBonus": 2,
+				"spellcastingAbility": "wis",
+				// Radiant Flame: Ranged Attack Roll +4, range 60 ft. (12 squares), 2d6 Radiant.
+				"knownCantrip": { "type": "attack", "name": "Radiant Flame", "damageType": "Radiant", "diceCount": 2, "diceSides": 6, "rangeSquares": 12 },
+				"inventory": [
+					{
+						"name": "Mace",
+						"category": "melee",
+						"damageDice": "1d6",
+						"damageType": "Bludgeoning",
+						"attackBonus": 4,
+						"damageBonus": 2,
+						"equipped": true
+					}
+				],
+				"vulnerabilities": [],
+				"immunities": [],
+				"encounterIntro": "A robed acolyte chants a prayer and raises a mace. Roll for initiative!"
+			}
+		];
 	}
 
 	/**
@@ -123,17 +220,66 @@ class extends="cbwire.models.Component" {
 	}
 
 	/**
+	 * Re-derives `data.opponent` from `data.opponents[data.selectedOpponentIndex]`
+	 * — call at the start of any action that reads/mutates `data.opponent`,
+	 * since CBWIRE rehydrates `data` fresh from JSON each request (see the
+	 * class-level `opponents` doc comment for why this matters).
+	 */
+	private function _syncSelectedOpponent() {
+		variables.data.opponent = variables.data.opponents[ variables.data.selectedOpponentIndex ];
+	}
+
+	/**
+	 * Re-saves `data.selectedOpponentIndex` from `data.opponent.mobIndex` —
+	 * call at the end of any action that might have let CombatService
+	 * auto-retarget `data.opponent` to a different mob (e.g. the current
+	 * target died mid-action), so the new target sticks for the next request.
+	 */
+	private function _saveSelectedOpponentIndex() {
+		variables.data.selectedOpponentIndex = variables.data.opponent.mobIndex;
+	}
+
+	/**
+	 * Returns the living opponent standing at (x, y), or null if none —
+	 * used both to block movement onto an occupied tile and to let the
+	 * player pick their target by clicking any mob on the board.
+	 */
+	private function _opponentAt( x, y ) {
+		for ( var o in variables.data.opponents ) {
+			if ( o.hitPoints > 0 && o.position.x == arguments.x && o.position.y == arguments.y ) {
+				return o;
+			}
+		}
+		return javaCast( "null", 0 );
+	}
+
+	/**
+	 * How many more Attack-action swings the player has left this turn — 1
+	 * normally, or more with Extra Attack (see combatService.attacksPerTurn()).
+	 * Used by the template to keep the Attack button available across all of
+	 * a multi-attack turn instead of hiding it after the first swing.
+	 */
+	function attacksRemaining() {
+		return combatService.attacksPerTurn( variables.data.player ) - variables.data.attacksUsedThisTurn;
+	}
+
+	/**
 	 * True if (x, y) is a floor tile the player could path to and stand on
 	 * this turn — used by the template to highlight reachable tiles, since
 	 * walls make raw Chebyshev distance an unreliable proxy for reachability.
 	 */
 	function tileReachable( x, y ) {
-		if ( variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" ) {
+		if (
+			variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" ||
+			variables.data.player.hitPoints <= 0 || combatService.hasCondition( variables.data.player, "Restrained" )
+		) {
 			return false;
 		}
 		var player = variables.data.player;
-		var opponent = variables.data.opponent;
-		if ( ( arguments.x == player.position.x && arguments.y == player.position.y ) || ( arguments.x == opponent.position.x && arguments.y == opponent.position.y ) ) {
+		if ( arguments.x == player.position.x && arguments.y == player.position.y ) {
+			return false;
+		}
+		if ( !isNull( _opponentAt( arguments.x, arguments.y ) ) ) {
 			return false;
 		}
 		var distance = combatService.pathDistance( variables.data.grid, player.position, { "x": arguments.x, "y": arguments.y } );
@@ -141,15 +287,38 @@ class extends="cbwire.models.Component" {
 	}
 
 	/**
-	 * Single click entrypoint for the grid: attacks the opponent's tile if
-	 * adjacent, otherwise attempts to move there.
+	 * Selects which mob the player's single-target actions (Attack, Grapple,
+	 * spells, Breath Weapon) apply to, without attacking — lets the player
+	 * line up a spell/ranged shot against a specific mob before acting,
+	 * rather than only being able to target by walking up and clicking it.
 	 */
-	function tileClick( x, y ) {
+	function selectTarget( mobIndex ) {
 		if ( variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" ) {
 			return;
 		}
-		var opponent = variables.data.opponent;
-		if ( arguments.x == opponent.position.x && arguments.y == opponent.position.y ) {
+		for ( var o in variables.data.opponents ) {
+			if ( o.mobIndex == arguments.mobIndex && o.hitPoints > 0 ) {
+				variables.data.selectedOpponentIndex = arguments.mobIndex;
+				return;
+			}
+		}
+	}
+
+	/**
+	 * Single click entrypoint for the grid: selects and attacks whichever
+	 * living mob's tile was clicked (switching the current target if it
+	 * wasn't already selected), or moves there if it's empty.
+	 */
+	function tileClick( x, y ) {
+		if (
+			variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" ||
+			variables.data.player.hitPoints <= 0
+		) {
+			return;
+		}
+		var clickedOpponent = _opponentAt( arguments.x, arguments.y );
+		if ( !isNull( clickedOpponent ) ) {
+			variables.data.selectedOpponentIndex = clickedOpponent.mobIndex;
 			attack();
 		} else {
 			movePlayer( arguments.x, arguments.y );
@@ -160,17 +329,19 @@ class extends="cbwire.models.Component" {
 	 * Moves the player to (x, y) if it's unoccupied and within remaining movement.
 	 */
 	function movePlayer( x, y ) {
-		if ( variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" ) {
+		if (
+			variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" ||
+			variables.data.player.hitPoints <= 0 || combatService.hasCondition( variables.data.player, "Restrained" )
+		) {
 			return;
 		}
 
 		var player = variables.data.player;
-		var opponent = variables.data.opponent;
 
 		if ( arguments.x == player.position.x && arguments.y == player.position.y ) {
 			return;
 		}
-		if ( arguments.x == opponent.position.x && arguments.y == opponent.position.y ) {
+		if ( !isNull( _opponentAt( arguments.x, arguments.y ) ) ) {
 			return;
 		}
 		if ( !combatService.isWalkable( variables.data.grid, arguments.x, arguments.y ) ) {
@@ -183,9 +354,11 @@ class extends="cbwire.models.Component" {
 			return;
 		}
 
+		var startPosition = { "x": player.position.x, "y": player.position.y };
 		player.position = { "x": arguments.x, "y": arguments.y };
 		variables.data.movementRemaining -= distance;
 		variables.data.log.prepend( "#player.name# moves to (#arguments.x#, #arguments.y#)." );
+		combatService.checkOpportunityAttacks( variables.data, player, true, startPosition );
 	}
 
 	/**
@@ -194,9 +367,14 @@ class extends="cbwire.models.Component" {
 	 * Ends the player's turn once resolved.
 	 */
 	function attack() {
-		if ( variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" || variables.data.actionUsed ) {
+		if (
+			variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" ||
+			variables.data.player.hitPoints <= 0 ||
+			variables.data.attacksUsedThisTurn >= combatService.attacksPerTurn( variables.data.player )
+		) {
 			return;
 		}
+		_syncSelectedOpponent();
 
 		var player = variables.data.player;
 		var opponent = variables.data.opponent;
@@ -206,10 +384,18 @@ class extends="cbwire.models.Component" {
 			return;
 		}
 
+		// Extra Attack lets the Attack action land more than one hit per turn
+		// (see combatService.attacksPerTurn()) — actionUsed still flips on the
+		// first swing, since taking the Attack action at all locks out the
+		// other, single-use action types (spells, Grapple, Shove, Breath
+		// Weapon) for the rest of the turn, but doesn't end the turn itself
+		// until every attack this action grants has been used.
+		variables.data.attacksUsedThisTurn += 1;
 		variables.data.actionUsed = true;
 		combatService.playerAttack( variables.data, choice.weapon, choice.disadvantage );
+		_saveSelectedOpponentIndex();
 
-		if ( !variables.data.gameOver ) {
+		if ( !variables.data.gameOver && variables.data.attacksUsedThisTurn >= combatService.attacksPerTurn( player ) ) {
 			combatService.endPlayerTurn( variables.data );
 		}
 	}
@@ -220,10 +406,29 @@ class extends="cbwire.models.Component" {
 	 * Grappler feat) subsequent attacks against them get Advantage.
 	 */
 	function attemptGrapple() {
-		if ( variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" || variables.data.actionUsed ) {
+		if ( variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" || variables.data.actionUsed || variables.data.player.hitPoints <= 0 ) {
 			return;
 		}
+		_syncSelectedOpponent();
 		combatService.attemptGrapple( variables.data, variables.data.player, variables.data.opponent );
+		_saveSelectedOpponentIndex();
+		if ( !variables.data.gameOver ) {
+			combatService.endPlayerTurn( variables.data );
+		}
+	}
+
+	/**
+	 * Shoves the opponent prone instead of attacking. Requires being adjacent;
+	 * on success, the opponent is Prone (Advantage on melee attacks against
+	 * them, Disadvantage on their own attacks) until the fight ends.
+	 */
+	function attemptShove() {
+		if ( variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" || variables.data.actionUsed || variables.data.player.hitPoints <= 0 ) {
+			return;
+		}
+		_syncSelectedOpponent();
+		combatService.attemptShove( variables.data, variables.data.player, variables.data.opponent );
+		_saveSelectedOpponentIndex();
 		if ( !variables.data.gameOver ) {
 			combatService.endPlayerTurn( variables.data );
 		}
@@ -233,10 +438,12 @@ class extends="cbwire.models.Component" {
 	 * Dragonborn Breath Weapon: once per encounter, in place of a weapon attack.
 	 */
 	function useBreathWeapon() {
-		if ( variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" || variables.data.actionUsed ) {
+		if ( variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" || variables.data.actionUsed || variables.data.player.hitPoints <= 0 ) {
 			return;
 		}
+		_syncSelectedOpponent();
 		combatService.useBreathWeapon( variables.data );
+		_saveSelectedOpponentIndex();
 		if ( !variables.data.gameOver ) {
 			combatService.endPlayerTurn( variables.data );
 		}
@@ -247,10 +454,12 @@ class extends="cbwire.models.Component" {
 	 * in place of a weapon attack.
 	 */
 	function castCantrip() {
-		if ( variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" || variables.data.actionUsed ) {
+		if ( variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" || variables.data.actionUsed || variables.data.player.hitPoints <= 0 ) {
 			return;
 		}
+		_syncSelectedOpponent();
 		combatService.castCantrip( variables.data );
+		_saveSelectedOpponentIndex();
 		if ( !variables.data.gameOver ) {
 			combatService.endPlayerTurn( variables.data );
 		}
@@ -262,10 +471,12 @@ class extends="cbwire.models.Component" {
 	 * a spell slot (or Magic Initiate's bonus spell if they have no slots).
 	 */
 	function castLeveledSpell() {
-		if ( variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" || variables.data.actionUsed ) {
+		if ( variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" || variables.data.actionUsed || variables.data.player.hitPoints <= 0 ) {
 			return;
 		}
+		_syncSelectedOpponent();
 		combatService.castLeveledSpell( variables.data );
+		_saveSelectedOpponentIndex();
 		if ( !variables.data.gameOver ) {
 			combatService.endPlayerTurn( variables.data );
 		}
@@ -276,14 +487,36 @@ class extends="cbwire.models.Component" {
 	 * using the bonus action instead of the action — doesn't end the turn.
 	 */
 	function offHandAttack() {
-		if ( variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" ) {
+		if (
+			variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" ||
+			variables.data.player.hitPoints <= 0
+		) {
 			return;
 		}
 		combatService.offHandAttack( variables.data );
 	}
 
 	/**
-	 * Manually ends the player's turn without attacking (e.g. repositioned only).
+	 * Rolls one of the player's Death Saving Throws while dying at 0 Hit
+	 * Points (per player.isDying) — the only action available on their turn
+	 * until they stabilize, die, or roll a natural 20.
+	 */
+	function makeDeathSave() {
+		if (
+			variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" ||
+			!structKeyExists( variables.data.player, "isDying" ) || !variables.data.player.isDying
+		) {
+			return;
+		}
+		combatService.rollDeathSave( variables.data );
+		if ( !variables.data.gameOver ) {
+			combatService.endPlayerTurn( variables.data );
+		}
+	}
+
+	/**
+	 * Manually ends the player's turn without attacking (e.g. repositioned
+	 * only, or stabilized-but-still-unconscious with nothing else to do).
 	 */
 	function endTurn() {
 		if ( variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" ) {
@@ -323,7 +556,15 @@ class extends="cbwire.models.Component" {
 		}
 
 		if ( variables.data.currentTurn == "player" ) {
-			combatService.playerDecideAndAct( variables.data );
+			if ( structKeyExists( variables.data.player, "isDying" ) && variables.data.player.isDying ) {
+				combatService.rollDeathSave( variables.data );
+			} else if ( variables.data.player.hitPoints <= 0 ) {
+				// Stabilized but still unconscious — nothing to decide, turn just passes.
+			} else {
+				_syncSelectedOpponent();
+				combatService.playerDecideAndAct( variables.data );
+				_saveSelectedOpponentIndex();
+			}
 			if ( !variables.data.gameOver ) {
 				variables.data.currentTurn = "enemy";
 			}
@@ -332,9 +573,7 @@ class extends="cbwire.models.Component" {
 			if ( !variables.data.gameOver ) {
 				variables.data.round += 1;
 				variables.data.currentTurn = "player";
-				variables.data.movementRemaining = int( variables.data.player.speed / 5 );
-				variables.data.actionUsed = false;
-				variables.data.bonusActionUsed = false;
+				combatService.startNewRound( variables.data );
 			}
 		}
 

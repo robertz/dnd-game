@@ -1,0 +1,24 @@
+<bx:output>
+<div class="encounter">
+	<div class="encounter-main">
+		<h1 class="fantasy-heading">Choose Your Hero</h1>
+
+		<bx:if characters.len() == 0>
+			<p class="encounter-intro">No adventurers yet — create one to begin.</p>
+		<bx:else>
+			<div class="creation-grid">
+				<bx:loop array="#characters#" index="character">
+					<div class="creation-card" wire:click="selectCharacter(#character.id#)">
+						<h3 class="fantasy-heading">#character.name#</h3>
+						<p class="stat-subtitle">Level #character.level# #character.species# #character.className#</p>
+					</div>
+				</bx:loop>
+			</div>
+		</bx:if>
+
+		<div class="turn-actions">
+			<a class="btn btn-auto-battle" href="/character/new">Create New Character</a>
+		</div>
+	</div>
+</div>
+</bx:output>

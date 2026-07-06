@@ -10,6 +10,10 @@
  */
 class singleton {
 
+	property name="qb" inject="QueryBuilder@qb";
+
+	DB = { "datasource": "gameserver" };
+
 	// Character Advancement table: XP required to reach each level (index = level).
 	XP_THRESHOLDS = [
 		0, 300, 900, 2700, 6500, 14000, 23000, 34000, 48000, 64000,
@@ -1318,46 +1322,42 @@ class singleton {
 	 * @preferredName If a spell by this exact name matches, it wins over any other candidate — lets a class keep its iconic pick (Fire Bolt, Eldritch Blast, Sacred Flame) when the class has more than one option, without hardcoding the spell's own mechanics.
 	 */
 	private function _lookupClassSpell( className, level, preferHeal, preferredName = "" ) {
-		var preferredTypes = arguments.preferHeal ? "'heal'" : "'attack','save'";
-		var rows = queryExecute(
-			"SELECT name, effect_type, attack_type, save_ability, save_effect, damage_dice, damage_type, heal_dice, `range`
-			 FROM spells
-			 WHERE FIND_IN_SET( :className, REPLACE( classes, ', ', ',' ) ) > 0
-			   AND level = :level
-			   AND effect_type IN ( #preferredTypes# )
-			   AND ( damage_dice IS NULL OR damage_dice REGEXP '^[0-9]+d[0-9]+$' )
-			   AND ( heal_dice IS NULL OR heal_dice REGEXP '^[0-9]+d[0-9]+$' )
-			 ORDER BY ( name = :preferredName ) DESC, name
-			 LIMIT 1",
-			{ "className": arguments.className, "level": arguments.level, "preferredName": arguments.preferredName },
-			{ datasource: "gameserver" }
-		);
+		var preferredTypes = arguments.preferHeal ? [ "heal" ] : [ "attack", "save" ];
+		var rows = qb.newQuery()
+			.from( "spells" )
+			.select( [ "name", "effect_type", "attack_type", "save_ability", "save_effect", "damage_dice", "damage_type", "heal_dice", "range" ] )
+			.whereRaw( "FIND_IN_SET( ?, REPLACE( classes, ', ', ',' ) ) > 0", [ arguments.className ] )
+			.where( "level", arguments.level )
+			.whereIn( "effect_type", preferredTypes )
+			.whereRaw( "( damage_dice IS NULL OR damage_dice REGEXP '^[0-9]+d[0-9]+$' )" )
+			.whereRaw( "( heal_dice IS NULL OR heal_dice REGEXP '^[0-9]+d[0-9]+$' )" )
+			.orderByRaw( "( name = ? ) DESC, name", [ arguments.preferredName ] )
+			.limit( 1 )
+			.get( DB );
 
-		if ( rows.recordCount == 0 ) {
+		if ( rows.isEmpty() ) {
 			// Try the other effect type before giving up — e.g. Warlock only
 			// has a damage spell at level 1, no heal, even though Warlock
 			// isn't in HEAL_PREFERRING_CLASSES anyway; this also covers a
 			// heal-preferring class whose only level-1 option is a damage spell.
-			var fallbackTypes = arguments.preferHeal ? "'attack','save'" : "'heal'";
-			rows = queryExecute(
-				"SELECT name, effect_type, attack_type, save_ability, save_effect, damage_dice, damage_type, heal_dice, `range`
-				 FROM spells
-				 WHERE FIND_IN_SET( :className, REPLACE( classes, ', ', ',' ) ) > 0
-				   AND level = :level
-				   AND effect_type IN ( #fallbackTypes# )
-				   AND ( damage_dice IS NULL OR damage_dice REGEXP '^[0-9]+d[0-9]+$' )
-				   AND ( heal_dice IS NULL OR heal_dice REGEXP '^[0-9]+d[0-9]+$' )
-				 ORDER BY ( name = :preferredName ) DESC, name
-				 LIMIT 1",
-				{ "className": arguments.className, "level": arguments.level, "preferredName": arguments.preferredName },
-				{ datasource: "gameserver" }
-			);
+			var fallbackTypes = arguments.preferHeal ? [ "attack", "save" ] : [ "heal" ];
+			rows = qb.newQuery()
+				.from( "spells" )
+				.select( [ "name", "effect_type", "attack_type", "save_ability", "save_effect", "damage_dice", "damage_type", "heal_dice", "range" ] )
+				.whereRaw( "FIND_IN_SET( ?, REPLACE( classes, ', ', ',' ) ) > 0", [ arguments.className ] )
+				.where( "level", arguments.level )
+				.whereIn( "effect_type", fallbackTypes )
+				.whereRaw( "( damage_dice IS NULL OR damage_dice REGEXP '^[0-9]+d[0-9]+$' )" )
+				.whereRaw( "( heal_dice IS NULL OR heal_dice REGEXP '^[0-9]+d[0-9]+$' )" )
+				.orderByRaw( "( name = ? ) DESC, name", [ arguments.preferredName ] )
+				.limit( 1 )
+				.get( DB );
 		}
 
-		if ( rows.recordCount == 0 ) {
+		if ( rows.isEmpty() ) {
 			return javaCast( "null", 0 );
 		}
-		return _spellStructFromRow( rows, 1 );
+		return _spellStructFromRow( rows[ 1 ] );
 	}
 
 	/**
@@ -1369,23 +1369,23 @@ class singleton {
 	 * _lookupClassSpell() (picks one row), listCastableSpells() (every
 	 * matching row), and lookupSpellByName() (one row by exact name).
 	 */
-	private function _spellStructFromRow( rows, i ) {
-		if ( arguments.rows.effect_type[ arguments.i ] == "heal" ) {
-			var healDice = parseDice( arguments.rows.heal_dice[ arguments.i ] );
-			return { "type": "heal", "name": arguments.rows.name[ arguments.i ], "diceCount": healDice.count, "diceSides": healDice.sides };
+	private function _spellStructFromRow( spellRow ) {
+		if ( arguments.spellRow.effect_type == "heal" ) {
+			var healDice = parseDice( arguments.spellRow.heal_dice );
+			return { "type": "heal", "name": arguments.spellRow.name, "diceCount": healDice.count, "diceSides": healDice.sides };
 		}
 
-		var damageDice = parseDice( arguments.rows.damage_dice[ arguments.i ] );
-		var rangeSquares = _parseSpellRangeSquares( arguments.rows.range[ arguments.i ] );
-		if ( arguments.rows.effect_type[ arguments.i ] == "attack" ) {
+		var damageDice = parseDice( arguments.spellRow.damage_dice );
+		var rangeSquares = _parseSpellRangeSquares( arguments.spellRow.range );
+		if ( arguments.spellRow.effect_type == "attack" ) {
 			return {
-				"type": "attack", "name": arguments.rows.name[ arguments.i ], "damageType": arguments.rows.damage_type[ arguments.i ],
+				"type": "attack", "name": arguments.spellRow.name, "damageType": arguments.spellRow.damage_type,
 				"diceCount": damageDice.count, "diceSides": damageDice.sides, "rangeSquares": rangeSquares
 			};
 		}
 		return {
-			"type": "save", "name": arguments.rows.name[ arguments.i ], "damageType": arguments.rows.damage_type[ arguments.i ],
-			"saveAbility": arguments.rows.save_ability[ arguments.i ], "saveEffect": arguments.rows.save_effect[ arguments.i ],
+			"type": "save", "name": arguments.spellRow.name, "damageType": arguments.spellRow.damage_type,
+			"saveAbility": arguments.spellRow.save_ability, "saveEffect": arguments.spellRow.save_effect,
 			"diceCount": damageDice.count, "diceSides": damageDice.sides, "rangeSquares": rangeSquares
 		};
 	}
@@ -1401,21 +1401,19 @@ class singleton {
 	 * @level The spell's level (0 for cantrips, 1-9 otherwise).
 	 */
 	function listCastableSpells( className, level ) {
-		var rows = queryExecute(
-			"SELECT name, effect_type, attack_type, save_ability, save_effect, damage_dice, damage_type, heal_dice, `range`
-			 FROM spells
-			 WHERE FIND_IN_SET( :className, REPLACE( classes, ', ', ',' ) ) > 0
-			   AND level = :level
-			   AND effect_type IN ( 'attack', 'save', 'heal' )
-			   AND ( damage_dice IS NULL OR damage_dice REGEXP '^[0-9]+d[0-9]+$' )
-			   AND ( heal_dice IS NULL OR heal_dice REGEXP '^[0-9]+d[0-9]+$' )
-			 ORDER BY name",
-			{ "className": arguments.className, "level": arguments.level },
-			{ datasource: "gameserver" }
-		);
+		var rows = qb.newQuery()
+			.from( "spells" )
+			.select( [ "name", "effect_type", "attack_type", "save_ability", "save_effect", "damage_dice", "damage_type", "heal_dice", "range" ] )
+			.whereRaw( "FIND_IN_SET( ?, REPLACE( classes, ', ', ',' ) ) > 0", [ arguments.className ] )
+			.where( "level", arguments.level )
+			.whereIn( "effect_type", [ "attack", "save", "heal" ] )
+			.whereRaw( "( damage_dice IS NULL OR damage_dice REGEXP '^[0-9]+d[0-9]+$' )" )
+			.whereRaw( "( heal_dice IS NULL OR heal_dice REGEXP '^[0-9]+d[0-9]+$' )" )
+			.orderByAsc( "name" )
+			.get( DB );
 		var results = [];
-		for ( var i = 1; i <= rows.recordCount; i++ ) {
-			results.append( _spellStructFromRow( rows, i ) );
+		for ( var spellRow in rows ) {
+			results.append( _spellStructFromRow( spellRow ) );
 		}
 		return results;
 	}
@@ -1430,21 +1428,18 @@ class singleton {
 	 * @name The spell's exact name, as stored in the `spells` table.
 	 */
 	function lookupSpellByName( name ) {
-		var rows = queryExecute(
-			"SELECT name, effect_type, attack_type, save_ability, save_effect, damage_dice, damage_type, heal_dice, `range`
-			 FROM spells
-			 WHERE name = :name
-			   AND effect_type IN ( 'attack', 'save', 'heal' )
-			   AND ( damage_dice IS NULL OR damage_dice REGEXP '^[0-9]+d[0-9]+$' )
-			   AND ( heal_dice IS NULL OR heal_dice REGEXP '^[0-9]+d[0-9]+$' )
-			 LIMIT 1",
-			{ "name": arguments.name },
-			{ datasource: "gameserver" }
-		);
-		if ( rows.recordCount == 0 ) {
+		var row = qb.newQuery()
+			.from( "spells" )
+			.select( [ "name", "effect_type", "attack_type", "save_ability", "save_effect", "damage_dice", "damage_type", "heal_dice", "range" ] )
+			.where( "name", arguments.name )
+			.whereIn( "effect_type", [ "attack", "save", "heal" ] )
+			.whereRaw( "( damage_dice IS NULL OR damage_dice REGEXP '^[0-9]+d[0-9]+$' )" )
+			.whereRaw( "( heal_dice IS NULL OR heal_dice REGEXP '^[0-9]+d[0-9]+$' )" )
+			.first( DB );
+		if ( row.isEmpty() ) {
 			return javaCast( "null", 0 );
 		}
-		return _spellStructFromRow( rows, 1 );
+		return _spellStructFromRow( row );
 	}
 
 	/**
@@ -2007,22 +2002,28 @@ class singleton {
 	function awardExperience( state, xp ) {
 		var player = arguments.state.player;
 
-		queryExecute(
-			"UPDATE characters SET experience_points = experience_points + :xp WHERE id = :characterId",
-			{ "xp": arguments.xp, "characterId": player.characterId },
-			{ datasource: "gameserver" }
-		);
+		// qb is null when CombatService is instantiated directly in unit tests
+		// without WireBox — skip DB persistence, same behavior as the original
+		// queryExecute returning 0 rows for a "test double" character.
+		if ( isNull( qb ) ) {
+			return;
+		}
 
-		var totals = queryExecute(
-			"SELECT experience_points FROM characters WHERE id = :characterId",
-			{ "characterId": player.characterId },
-			{ datasource: "gameserver" }
-		);
-		if ( totals.recordCount == 0 ) {
+		qb.newQuery()
+			.from( "characters" )
+			.where( "id", player.characterId )
+			.update( { "experience_points": qb.raw( "experience_points + ?", [ arguments.xp ] ) }, DB );
+
+		var totalsRow = qb.newQuery()
+			.from( "characters" )
+			.select( "experience_points" )
+			.where( "id", player.characterId )
+			.first( DB );
+		if ( totalsRow.isEmpty() ) {
 			return; // no saved character record to advance (e.g. a test double)
 		}
 
-		var newTotalXp = totals.experience_points[ 1 ];
+		var newTotalXp = totalsRow.experience_points;
 		arguments.state.log.prepend( "#player.name# gains #arguments.xp# XP (#newTotalXp# total)." );
 
 		var targetLevel = levelForXp( newTotalXp );
@@ -2038,16 +2039,18 @@ class singleton {
 			// starts a fresh encounter at full HP (see there), so keeping
 			// hit_points in sync with max_hit_points avoids leaving a stale,
 			// no-longer-meaningful lower number sitting in the row.
-			queryExecute(
-				"UPDATE characters SET level = :level, proficiency_bonus = :proficiencyBonus, hit_points = :maxHitPoints, max_hit_points = :maxHitPoints WHERE id = :characterId",
-				{
-					"level": player.level,
-					"proficiencyBonus": player.proficiencyBonus,
-					"maxHitPoints": player.maxHitPoints,
-					"characterId": player.characterId
-				},
-				{ datasource: "gameserver" }
-			);
+			qb.newQuery()
+				.from( "characters" )
+				.where( "id", player.characterId )
+				.update(
+					{
+						"level": player.level,
+						"proficiency_bonus": player.proficiencyBonus,
+						"hit_points": player.maxHitPoints,
+						"max_hit_points": player.maxHitPoints
+					},
+					DB
+				);
 		}
 	}
 
@@ -2120,23 +2123,22 @@ class singleton {
 	 * of any features gained.
 	 */
 	private function _grantNewFeatures( player ) {
-		var rows = queryExecute(
-			"SELECT cf.id, cf.name FROM class_features cf
-			 JOIN characters c ON c.class_id = cf.class_id
-			 WHERE c.id = :characterId AND cf.level = :level AND cf.subclass_id IS NULL",
-			{ "characterId": arguments.player.characterId, "level": arguments.player.level },
-			{ datasource: "gameserver" }
-		);
+		var rows = qb.newQuery()
+			.from( "class_features AS cf" )
+			.join( "characters AS c", "c.class_id", "=", "cf.class_id" )
+			.select( [ "cf.id", "cf.name" ] )
+			.where( "c.id", arguments.player.characterId )
+			.where( "cf.level", arguments.player.level )
+			.whereNull( "cf.subclass_id" )
+			.get( DB );
 
 		var names = [];
 		for ( var row in rows ) {
 			arrayAppend( names, row.name );
 			arrayAppend( arguments.player.features, row.name );
-			queryExecute(
-				"INSERT IGNORE INTO character_features (character_id, class_feature_id) VALUES (:characterId, :featureId)",
-				{ "characterId": arguments.player.characterId, "featureId": row.id },
-				{ datasource: "gameserver" }
-			);
+			qb.newQuery()
+				.from( "character_features" )
+				.insertIgnore( { "character_id": arguments.player.characterId, "class_feature_id": row.id }, [], DB );
 
 			// Fighting Style (Fighter 1/7, Paladin/Ranger 2): auto-pick and
 			// grant one, since this app has no UI for the player to choose.
@@ -2234,24 +2236,24 @@ class singleton {
 				if ( item.equipped && ( ( item.category == "melee" && arguments.abbrev == "str" ) || ( item.category == "ranged" && arguments.abbrev == "dex" ) ) ) {
 					item.attackBonus += modDelta;
 					item.damageBonus += modDelta;
-					if ( structKeyExists( item, "id" ) ) {
-						queryExecute(
-							"UPDATE character_inventory SET attack_bonus = :attackBonus, damage_bonus = :damageBonus WHERE id = :id",
-							{ "attackBonus": item.attackBonus, "damageBonus": item.damageBonus, "id": item.id },
-							{ datasource: "gameserver" }
-						);
+					if ( structKeyExists( item, "id" ) && !isNull( qb ) ) {
+						qb.newQuery()
+							.from( "character_inventory" )
+							.where( "id", item.id )
+							.update( { "attack_bonus": item.attackBonus, "damage_bonus": item.damageBonus }, DB );
 					}
 				}
 			}
 		}
 
-		if ( structKeyExists( arguments.player, "characterId" ) ) {
+		if ( structKeyExists( arguments.player, "characterId" ) && !isNull( qb ) ) {
 			var dbColumns = { "str": "str", "dex": "dex", "con": "con", "int": "int_score", "wis": "wis", "cha": "cha" };
-			queryExecute(
-				"UPDATE characters SET #dbColumns[ arguments.abbrev ]# = :score, armor_class = :armorClass WHERE id = :characterId",
-				{ "score": newScore, "armorClass": arguments.player.armorClass, "characterId": arguments.player.characterId },
-				{ datasource: "gameserver" }
-			);
+			var updateValues = { "armor_class": arguments.player.armorClass };
+			updateValues[ dbColumns[ arguments.abbrev ] ] = newScore;
+			qb.newQuery()
+				.from( "characters" )
+				.where( "id", arguments.player.characterId )
+				.update( updateValues, DB );
 		}
 
 		var abilityFullNames = { "str": "Strength", "dex": "Dexterity", "con": "Constitution", "int": "Intelligence", "wis": "Wisdom", "cha": "Charisma" };
@@ -2302,16 +2304,18 @@ class singleton {
 			}
 		}
 
-		var featRows = queryExecute( "SELECT id FROM feats WHERE name = :name", { "name": choice }, { datasource: "gameserver" } );
-		if ( featRows.recordCount == 0 ) {
+		var featRow = qb.newQuery()
+			.from( "feats" )
+			.select( "id" )
+			.where( "name", choice )
+			.first( DB );
+		if ( featRow.isEmpty() ) {
 			return "";
 		}
 
-		queryExecute(
-			"INSERT IGNORE INTO character_feats (character_id, feat_id) VALUES (:characterId, :featId)",
-			{ "characterId": arguments.characterId, "featId": featRows.id[ 1 ] },
-			{ datasource: "gameserver" }
-		);
+		qb.newQuery()
+			.from( "character_feats" )
+			.insertIgnore( { "character_id": arguments.characterId, "feat_id": featRow.id }, [], DB );
 		return choice;
 	}
 
@@ -2325,43 +2329,46 @@ class singleton {
 	 * @characterId The characters.id to load.
 	 */
 	function loadCharacter( characterId ) {
-		var rows = queryExecute(
-			"SELECT c.*, cl.name AS className, cl.hit_die, cl.saving_throw_proficiencies
-			 FROM characters c
-			 JOIN classes cl ON cl.id = c.class_id
-			 WHERE c.id = :characterId",
-			{ "characterId": arguments.characterId },
-			{ datasource: "gameserver" }
-		);
-		if ( rows.recordCount == 0 ) {
+		var row = qb.newQuery()
+			.from( "characters AS c" )
+			.join( "classes AS cl", "cl.id", "=", "c.class_id" )
+			.select( [
+				"c.id", "c.name", "c.species", "c.level",
+				"c.str", "c.dex", "c.con", "c.int_score", "c.wis", "c.cha",
+				"c.proficiency_bonus", "c.armor_class", "c.max_hit_points", "c.speed",
+				"c.experience_points", "c.known_cantrip", "c.known_spell",
+				"cl.name AS className", "cl.hit_die", "cl.saving_throw_proficiencies"
+			] )
+			.where( "c.id", arguments.characterId )
+			.first( DB );
+		if ( row.isEmpty() ) {
 			throw( type = "CharacterNotFound", message = "No saved character with id #arguments.characterId#." );
 		}
-		var row = rows;
 
 		var modifiers = {
-			"str": abilityModifier( row.str[ 1 ] ),
-			"dex": abilityModifier( row.dex[ 1 ] ),
-			"con": abilityModifier( row.con[ 1 ] ),
-			"int": abilityModifier( row.int_score[ 1 ] ),
-			"wis": abilityModifier( row.wis[ 1 ] ),
-			"cha": abilityModifier( row.cha[ 1 ] )
+			"str": abilityModifier( row.str ),
+			"dex": abilityModifier( row.dex ),
+			"con": abilityModifier( row.con ),
+			"int": abilityModifier( row.int_score ),
+			"wis": abilityModifier( row.wis ),
+			"cha": abilityModifier( row.cha )
 		};
 
-		var species = row.species[ 1 ];
+		var species = row.species;
 
 		var player = {
-			"characterId": row.id[ 1 ],
-			"name": row.name[ 1 ],
-			"class": row.className[ 1 ],
+			"characterId": row.id,
+			"name": row.name,
+			"class": row.className,
 			"species": species,
-			"level": row.level[ 1 ],
+			"level": row.level,
 			"abilityScores": {
-				"str": row.str[ 1 ], "dex": row.dex[ 1 ], "con": row.con[ 1 ],
-				"int": row.int_score[ 1 ], "wis": row.wis[ 1 ], "cha": row.cha[ 1 ]
+				"str": row.str, "dex": row.dex, "con": row.con,
+				"int": row.int_score, "wis": row.wis, "cha": row.cha
 			},
 			"modifiers": modifiers,
-			"proficiencyBonus": row.proficiency_bonus[ 1 ],
-			"armorClass": row.armor_class[ 1 ],
+			"proficiencyBonus": row.proficiency_bonus,
+			"armorClass": row.armor_class,
 			// Every encounter starts fully rested, same as spell slots/Breath
 			// Weapon/Heroic Inspiration/etc. below — a character never begins
 			// an adventure carrying over damage from a previous one, since
@@ -2369,15 +2376,15 @@ class singleton {
 			// otherwise. `characters.hit_points` still exists and is kept in
 			// sync with max on level-up (see awardExperience()), but is no
 			// longer read as a starting value.
-			"hitPoints": row.max_hit_points[ 1 ],
-			"maxHitPoints": row.max_hit_points[ 1 ],
-			"hitPointsPerLevel": _fixedHitPointsPerLevel( row.hit_die[ 1 ] ),
+			"hitPoints": row.max_hit_points,
+			"maxHitPoints": row.max_hit_points,
+			"hitPointsPerLevel": _fixedHitPointsPerLevel( row.hit_die ),
 			// Dwarven Toughness: +1 Hit Point maximum per level, on top of the
 			// class's normal per-level gain.
 			"hpBonusPerLevel": ( species == "Dwarf" ) ? 1 : 0,
-			"speed": row.speed[ 1 ],
-			"experiencePoints": row.experience_points[ 1 ],
-			"savingThrowProficiencies": listToArray( row.saving_throw_proficiencies[ 1 ], " and ", false, true ),
+			"speed": row.speed,
+			"experiencePoints": row.experience_points,
+			"savingThrowProficiencies": listToArray( row.saving_throw_proficiencies, " and ", false, true ),
 			// Dwarven Resilience / Tiefling: Resistance to Poison / Fire damage.
 			"resistances": ( species == "Dwarf" ) ? [ "Poison" ] : ( ( species == "Tiefling" ) ? [ "Fire" ] : [] ),
 			// Halfling Luck: reroll a natural 1 on the d20 and use the new roll.
@@ -2408,29 +2415,28 @@ class singleton {
 			// The player's character-creation spell choices, if any (see
 			// _assignSpellcasting()) — empty for a non-caster, or any
 			// character created before this feature existed.
-			"knownCantripName": len( row.known_cantrip[ 1 ] ) ? row.known_cantrip[ 1 ] : "",
-			"knownSpellName": len( row.known_spell[ 1 ] ) ? row.known_spell[ 1 ] : ""
+			"knownCantripName": len( row.known_cantrip ) ? row.known_cantrip : "",
+			"knownSpellName": len( row.known_spell ) ? row.known_spell : ""
 		};
 
-		var featureRows = queryExecute(
-			"SELECT cf.name FROM character_features chf
-			 JOIN class_features cf ON cf.id = chf.class_feature_id
-			 WHERE chf.character_id = :characterId
-			 ORDER BY cf.level, cf.sort_order",
-			{ "characterId": arguments.characterId },
-			{ datasource: "gameserver" }
-		);
+		var featureRows = qb.newQuery()
+			.from( "character_features AS chf" )
+			.join( "class_features AS cf", "cf.id", "=", "chf.class_feature_id" )
+			.select( "cf.name" )
+			.where( "chf.character_id", arguments.characterId )
+			.orderByAsc( "cf.level" )
+			.orderByAsc( "cf.sort_order" )
+			.get( DB );
 		for ( var featureRow in featureRows ) {
 			arrayAppend( player.features, featureRow.name );
 		}
 
-		var featRows = queryExecute(
-			"SELECT f.name FROM character_feats chf
-			 JOIN feats f ON f.id = chf.feat_id
-			 WHERE chf.character_id = :characterId",
-			{ "characterId": arguments.characterId },
-			{ datasource: "gameserver" }
-		);
+		var featRows = qb.newQuery()
+			.from( "character_feats AS chf" )
+			.join( "feats AS f", "f.id", "=", "chf.feat_id" )
+			.select( "f.name" )
+			.where( "chf.character_id", arguments.characterId )
+			.get( DB );
 		for ( var featRow in featRows ) {
 			arrayAppend( player.feats, featRow.name );
 		}
@@ -2449,15 +2455,16 @@ class singleton {
 
 		_assignSpellcasting( player );
 
-		var inventoryRows = queryExecute(
-			"SELECT ci.id, ci.weapon_id, ci.category, ci.equipped, ci.quantity, ci.attack_bonus, ci.damage_bonus,
-			        w.name, w.damage_dice, w.damage_type, w.properties
-			 FROM character_inventory ci
-			 JOIN weapons w ON w.id = ci.weapon_id
-			 WHERE ci.character_id = :characterId",
-			{ "characterId": arguments.characterId },
-			{ datasource: "gameserver" }
-		);
+		var inventoryRows = qb.newQuery()
+			.from( "character_inventory AS ci" )
+			.join( "weapons AS w", "w.id", "=", "ci.weapon_id" )
+			.select( [
+				"ci.id", "ci.weapon_id", "ci.category", "ci.equipped", "ci.quantity",
+				"ci.attack_bonus", "ci.damage_bonus",
+				"w.name", "w.damage_dice", "w.damage_type", "w.properties"
+			] )
+			.where( "ci.character_id", arguments.characterId )
+			.get( DB );
 		for ( var invRow in inventoryRows ) {
 			var item = {
 				// Maps this item back to its database rows.

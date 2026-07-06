@@ -1030,10 +1030,18 @@ class singleton {
 		resolveAttack( arguments.state.log, attacker, defender, offhand, false, false, !hasTwoWeaponFighting );
 
 		if ( defender.hitPoints <= 0 ) {
-			arguments.state.gameOver = true;
-			arguments.state.outcome = "victory";
-			arguments.state.log.prepend( "#defender.name# collapses into a pile of bones. Victory!" );
-			awardExperience( arguments.state, defender.xp );
+			if ( !structKeyExists( defender, "xpAwarded" ) || !defender.xpAwarded ) {
+				defender.xpAwarded = true;
+				awardExperience( arguments.state, defender.xp );
+			}
+			if ( _allOpponentsDefeated( arguments.state ) ) {
+				arguments.state.gameOver = true;
+				arguments.state.outcome = "victory";
+				arguments.state.log.prepend( "#defender.name# collapses into a pile of bones. Victory!" );
+			} else {
+				arguments.state.log.prepend( "#defender.name# collapses into a pile of bones!" );
+				_retargetIfCurrentOpponentDefeated( arguments.state );
+			}
 		}
 	}
 
@@ -1293,6 +1301,14 @@ class singleton {
 				arguments.player.spellSlots[ spellLevel ] = slotsAtLevel[ spellLevel ];
 			}
 		}
+		// Subtract any slots spent in previous encounters (persisted via saveCharacterState).
+		if ( structKeyExists( arguments.player, "spentSpellSlots" ) ) {
+			for ( var spentLvl in arguments.player.spentSpellSlots ) {
+				if ( structKeyExists( arguments.player.spellSlots, spentLvl ) ) {
+					arguments.player.spellSlots[ spentLvl ] = max( 0, arguments.player.spellSlots[ spentLvl ] - arguments.player.spentSpellSlots[ spentLvl ] );
+				}
+			}
+		}
 		// Magic Initiate's bonus 1st-level spell is a separate once-per-encounter
 		// resource, not a slot — usable even by a class with no slots at all.
 		arguments.player.usedMagicInitiateSpell = false;
@@ -1497,6 +1513,11 @@ class singleton {
 		for ( var level = arguments.minimumLevel; level <= 9; level++ ) {
 			if ( structKeyExists( arguments.player.spellSlots, level ) && arguments.player.spellSlots[ level ] > 0 ) {
 				arguments.player.spellSlots[ level ] -= 1;
+				if ( !structKeyExists( arguments.player, "spentSpellSlots" ) ) {
+					arguments.player.spentSpellSlots = {};
+				}
+				var lvlKey = toString( level );
+				arguments.player.spentSpellSlots[ lvlKey ] = ( arguments.player.spentSpellSlots.keyExists( lvlKey ) ? arguments.player.spentSpellSlots[ lvlKey ] : 0 ) + 1;
 				return level;
 			}
 		}
@@ -2324,6 +2345,51 @@ class singleton {
 	 *
 	 * @characterId The characters.id to load.
 	 */
+	/**
+	 * Persists current HP, spent hit dice, and spent spell slots to the DB so
+	 * they survive across encounter boundaries. Called after each combat ends
+	 * and after each hit die is spent during a short rest.
+	 */
+	function saveCharacterState( player ) {
+		var spentSlots = structKeyExists( arguments.player, "spentSpellSlots" ) ? arguments.player.spentSpellSlots : {};
+		queryExecute(
+			"UPDATE characters SET hit_points = :hp, hit_dice_spent = :hitDiceSpent, spent_spell_slots = :spentSlots WHERE id = :characterId",
+			{
+				"hp":           arguments.player.hitPoints,
+				"hitDiceSpent": arguments.player.hitDiceSpent,
+				"spentSlots":   JSONSerialize( spentSlots ),
+				"characterId":  arguments.player.characterId
+			},
+			{ datasource: "gameserver" }
+		);
+	}
+
+	/**
+	 * Short Rest: spends one Hit Die (d[hitDieSize] + CON mod) to recover HP.
+	 * The result struct is returned so the caller can log the roll.
+	 */
+	function shortRest( player ) {
+		var roll    = randRange( 1, arguments.player.hitDieSize );
+		var healing = max( 0, roll + arguments.player.modifiers.con );
+		arguments.player.hitDiceSpent = min( arguments.player.hitDiceMax, arguments.player.hitDiceSpent + 1 );
+		arguments.player.hitPoints    = min( arguments.player.maxHitPoints, arguments.player.hitPoints + healing );
+		saveCharacterState( arguments.player );
+		return { "roll": roll, "conMod": arguments.player.modifiers.con, "healing": healing };
+	}
+
+	/**
+	 * Long Rest: fully restores HP, recovers up to half the character's max hit
+	 * dice (minimum 1), and resets all spell slots. Saves to DB.
+	 */
+	function longRest( player ) {
+		arguments.player.hitPoints    = arguments.player.maxHitPoints;
+		var recoverDice               = max( 1, int( arguments.player.hitDiceMax / 2 ) );
+		arguments.player.hitDiceSpent = max( 0, arguments.player.hitDiceSpent - recoverDice );
+		arguments.player.spentSpellSlots = {};
+		_assignSpellcasting( arguments.player );
+		saveCharacterState( arguments.player );
+	}
+
 	function loadCharacter( characterId ) {
 		var rows = queryExecute(
 			"SELECT c.*, cl.name AS className, cl.hit_die, cl.saving_throw_proficiencies
@@ -2362,15 +2428,12 @@ class singleton {
 			"modifiers": modifiers,
 			"proficiencyBonus": row.proficiency_bonus[ 1 ],
 			"armorClass": row.armor_class[ 1 ],
-			// Every encounter starts fully rested, same as spell slots/Breath
-			// Weapon/Heroic Inspiration/etc. below — a character never begins
-			// an adventure carrying over damage from a previous one, since
-			// this app has no rest UI to explain how they'd have healed
-			// otherwise. `characters.hit_points` still exists and is kept in
-			// sync with max on level-up (see awardExperience()), but is no
-			// longer read as a starting value.
-			"hitPoints": row.max_hit_points[ 1 ],
+			"hitPoints": max( 1, row.hit_points[ 1 ] ),
 			"maxHitPoints": row.max_hit_points[ 1 ],
+			// Die size (e.g. 8 for a d8) used when spending Hit Dice on a short rest.
+			"hitDieSize": int( reReplace( row.hit_die[ 1 ], "[^0-9]*(\d+).*", "\1" ) ),
+			"hitDiceMax": row.level[ 1 ],
+			"hitDiceSpent": row.hit_dice_spent[ 1 ],
 			"hitPointsPerLevel": _fixedHitPointsPerLevel( row.hit_die[ 1 ] ),
 			// Dwarven Toughness: +1 Hit Point maximum per level, on top of the
 			// class's normal per-level gain.
@@ -2446,6 +2509,11 @@ class singleton {
 		if ( arrayFindNoCase( player.feats, "Defense" ) > 0 ) {
 			player.armorClass += 1;
 		}
+
+		var spentSlotsRaw = row.spent_spell_slots[ 1 ];
+		player.spentSpellSlots = ( len( trim( spentSlotsRaw ) ) && trim( spentSlotsRaw ) != "{}" )
+			? JSONDeserialize( spentSlotsRaw )
+			: {};
 
 		_assignSpellcasting( player );
 

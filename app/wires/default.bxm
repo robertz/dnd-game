@@ -39,10 +39,45 @@
 					<button type="button" class="btn btn-attack" wire:click="confirmAbilityScoreImprovement()">Confirm</button>
 				</div>
 			</bx:if>
+			<bx:if !restDone && !(structKeyExists( player, "inCombat" ) && player.inCombat)>
+			<bx:set hitDiceRemaining = player.hitDiceMax - player.hitDiceSpent>
+			<div class="parchment-panel rest-panel">
+				<h2 class="fantasy-heading">Rest</h2>
+				<div class="stat-inline">
+					<span><strong>HP</strong> #max( player.hitPoints, 0 )#/#player.maxHitPoints#</span>
+					<span><strong>Hit Dice</strong> #hitDiceRemaining#/#player.hitDiceMax# (1d#player.hitDieSize#)</span>
+					<bx:if structKeyExists( player, "isSpellcaster" ) && player.isSpellcaster && structCount( player.spellSlots ) gt 0>
+						<span><strong>Slots</strong> <bx:loop collection="#player.spellSlots#" item="sl">L#sl#:#player.spellSlots[ sl ]# </bx:loop></span>
+					</bx:if>
+				</div>
+				<div class="turn-actions">
+					<button
+						type="button"
+						class="btn btn-attack"
+						wire:click="spendHitDie()"
+						#( hitDiceRemaining lte 0 || player.hitPoints gte player.maxHitPoints ? "disabled" : "" )#
+					>Short Rest — Spend Hit Die</button>
+					<button type="button" class="btn" wire:click="takeLongRest()">Long Rest — Full Recovery</button>
+				</div>
+			</div>
+			<bx:if outcome == "victory">
+				<div class="turn-actions">
+					<button type="button" class="btn btn-attack" wire:click="continueExploring()">Continue Exploring</button>
+				</div>
+			</bx:if>
+			</bx:if>
 		<bx:else>
-			<p class="encounter-intro">Round #round# — #( currentTurn == "player" ? "Your turn." : "Enemy turn…" )#
-				<bx:if currentTurn == "player">(#movementRemaining# square(s) of movement left#( actionUsed ? ", action used" : "" )#)</bx:if>
-			</p>
+			<bx:if !initiativeRolled>
+				<p class="encounter-intro">
+					#( structKeyExists( player, "inCombat" ) && player.inCombat ? "In combat!" : "Exploring" )#
+					— move toward the enemies to trigger initiative.
+					(#movementRemaining# square(s) of movement remaining)
+				</p>
+			<bx:else>
+				<p class="encounter-intro">Round #round# — #( currentTurn == "player" ? "Your turn." : "Enemy turn…" )#
+					<bx:if currentTurn == "player">(#movementRemaining# square(s) of movement left#( actionUsed ? ", action used" : "" )#)</bx:if>
+				</p>
+			</bx:if>
 		</bx:if>
 
 		<bx:set viewport = viewportBounds()>
@@ -75,7 +110,7 @@
 			</div>
 		</div>
 
-		<bx:if !gameOver>
+		<bx:if !gameOver && initiativeRolled>
 			<div class="turn-actions">
 				<bx:if autoBattling>
 					<div wire:poll.900ms="autoStep()" class="auto-battle-indicator">⚔ Auto-battling…</div>

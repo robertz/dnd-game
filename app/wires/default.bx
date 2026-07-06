@@ -76,7 +76,14 @@ class extends="cbwire.models.Component" {
 		// "single" picks one ability for +2, "double" picks two for +1 each.
 		"asiMode": "single",
 		"asiAbility1": "str",
-		"asiAbility2": "dex"
+		"asiAbility2": "dex",
+		// True once we've persisted HP/slots to the DB after this encounter ended.
+		"stateSaved": false,
+		// True after the player picks a rest option — collapses the rest panel.
+		"restDone": false,
+		// False until at least one opponent has line of sight to the player.
+		// Combat actions and enemy turns are blocked until initiative rolls.
+		"initiativeRolled": false
 	}
 
 	/**
@@ -90,6 +97,9 @@ class extends="cbwire.models.Component" {
 	 */
 	function onMount( event, rc, prc, params ) {
 		variables.data.player = combatService.loadCharacter( session.charid );
+		if ( structKeyExists( rc, "rest" ) ) {
+			combatService.longRest( variables.data.player );
+		}
 		variables.data.grid = mapService.getLevel( "grandDungeon" );
 		variables.data.player.position = { "x": variables.data.grid.playerSpawn.x, "y": variables.data.grid.playerSpawn.y };
 
@@ -113,9 +123,47 @@ class extends="cbwire.models.Component" {
 		variables.data.selectedOpponentIndex = 1;
 		variables.data.opponent = opponents[ 1 ];
 
-		var introText = ( opponents.len() > 1 ) ? "#opponents.len()# enemies block your path. Roll for initiative!" : opponents[ 1 ].encounterIntro;
-		variables.data.log.prepend( introText );
-		combatService.rollForInitiative( variables.data );
+		combatService.startNewRound( variables.data );
+		variables.data.player.inCombat = false;
+		variables.data.log.prepend( "You enter the dungeon. Move toward the enemies to begin combat." );
+		_updateCombatState();
+	}
+
+	/**
+	 * Recalculates player.inCombat based on whether any living opponent
+	 * currently has line of sight to the player, then handles two transitions:
+	 *
+	 * - First time inCombat becomes true: rolls initiative.
+	 * - inCombat false and movement exhausted: auto-ends the turn (or resets
+	 *   exploration movement when initiative hasn't rolled yet).
+	 */
+	private function _updateCombatState() {
+		if ( variables.data.gameOver ) {
+			return;
+		}
+		var player = variables.data.player;
+		var nowInCombat = false;
+		for ( var opp in variables.data.opponents ) {
+			if ( opp.hitPoints > 0 && combatService.hasLineOfSight( variables.data.grid, opp.position, player.position ) ) {
+				nowInCombat = true;
+				break;
+			}
+		}
+		player.inCombat = nowInCombat;
+
+		if ( nowInCombat && !variables.data.initiativeRolled ) {
+			variables.data.initiativeRolled = true;
+			combatService.rollForInitiative( variables.data );
+			return;
+		}
+
+		if ( !nowInCombat && variables.data.movementRemaining <= 0 && variables.data.currentTurn == "player" ) {
+			if ( variables.data.initiativeRolled ) {
+				combatService.endPlayerTurn( variables.data );
+			} else {
+				combatService.startNewRound( variables.data );
+			}
+		}
 	}
 
 	/**
@@ -364,6 +412,7 @@ class extends="cbwire.models.Component" {
 		variables.data.movementRemaining -= distance;
 		variables.data.log.prepend( "#player.name# moves to (#arguments.x#, #arguments.y#)." );
 		combatService.checkOpportunityAttacks( variables.data, player, true, startPosition );
+		_updateCombatState();
 	}
 
 	/**
@@ -373,7 +422,7 @@ class extends="cbwire.models.Component" {
 	 */
 	function attack() {
 		if (
-			variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" ||
+			variables.data.gameOver || !variables.data.initiativeRolled || variables.data.autoBattling || variables.data.currentTurn != "player" ||
 			variables.data.player.hitPoints <= 0 ||
 			variables.data.attacksUsedThisTurn >= combatService.attacksPerTurn( variables.data.player )
 		) {
@@ -403,6 +452,7 @@ class extends="cbwire.models.Component" {
 		if ( !variables.data.gameOver && variables.data.attacksUsedThisTurn >= combatService.attacksPerTurn( player ) ) {
 			combatService.endPlayerTurn( variables.data );
 		}
+		_maybeSaveProgress();
 	}
 
 	/**
@@ -411,7 +461,7 @@ class extends="cbwire.models.Component" {
 	 * Grappler feat) subsequent attacks against them get Advantage.
 	 */
 	function attemptGrapple() {
-		if ( variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" || variables.data.actionUsed || variables.data.player.hitPoints <= 0 ) {
+		if ( variables.data.gameOver || !variables.data.initiativeRolled || variables.data.autoBattling || variables.data.currentTurn != "player" || variables.data.actionUsed || variables.data.player.hitPoints <= 0 ) {
 			return;
 		}
 		_syncSelectedOpponent();
@@ -428,7 +478,7 @@ class extends="cbwire.models.Component" {
 	 * them, Disadvantage on their own attacks) until the fight ends.
 	 */
 	function attemptShove() {
-		if ( variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" || variables.data.actionUsed || variables.data.player.hitPoints <= 0 ) {
+		if ( variables.data.gameOver || !variables.data.initiativeRolled || variables.data.autoBattling || variables.data.currentTurn != "player" || variables.data.actionUsed || variables.data.player.hitPoints <= 0 ) {
 			return;
 		}
 		_syncSelectedOpponent();
@@ -443,7 +493,7 @@ class extends="cbwire.models.Component" {
 	 * Dragonborn Breath Weapon: once per encounter, in place of a weapon attack.
 	 */
 	function useBreathWeapon() {
-		if ( variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" || variables.data.actionUsed || variables.data.player.hitPoints <= 0 ) {
+		if ( variables.data.gameOver || !variables.data.initiativeRolled || variables.data.autoBattling || variables.data.currentTurn != "player" || variables.data.actionUsed || variables.data.player.hitPoints <= 0 ) {
 			return;
 		}
 		_syncSelectedOpponent();
@@ -452,6 +502,7 @@ class extends="cbwire.models.Component" {
 		if ( !variables.data.gameOver ) {
 			combatService.endPlayerTurn( variables.data );
 		}
+		_maybeSaveProgress();
 	}
 
 	/**
@@ -459,7 +510,7 @@ class extends="cbwire.models.Component" {
 	 * in place of a weapon attack.
 	 */
 	function castCantrip() {
-		if ( variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" || variables.data.actionUsed || variables.data.player.hitPoints <= 0 ) {
+		if ( variables.data.gameOver || !variables.data.initiativeRolled || variables.data.autoBattling || variables.data.currentTurn != "player" || variables.data.actionUsed || variables.data.player.hitPoints <= 0 ) {
 			return;
 		}
 		_syncSelectedOpponent();
@@ -468,6 +519,7 @@ class extends="cbwire.models.Component" {
 		if ( !variables.data.gameOver ) {
 			combatService.endPlayerTurn( variables.data );
 		}
+		_maybeSaveProgress();
 	}
 
 	/**
@@ -476,7 +528,7 @@ class extends="cbwire.models.Component" {
 	 * a spell slot (or Magic Initiate's bonus spell if they have no slots).
 	 */
 	function castLeveledSpell() {
-		if ( variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" || variables.data.actionUsed || variables.data.player.hitPoints <= 0 ) {
+		if ( variables.data.gameOver || !variables.data.initiativeRolled || variables.data.autoBattling || variables.data.currentTurn != "player" || variables.data.actionUsed || variables.data.player.hitPoints <= 0 ) {
 			return;
 		}
 		_syncSelectedOpponent();
@@ -485,6 +537,7 @@ class extends="cbwire.models.Component" {
 		if ( !variables.data.gameOver ) {
 			combatService.endPlayerTurn( variables.data );
 		}
+		_maybeSaveProgress();
 	}
 
 	/**
@@ -493,12 +546,13 @@ class extends="cbwire.models.Component" {
 	 */
 	function offHandAttack() {
 		if (
-			variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" ||
+			variables.data.gameOver || !variables.data.initiativeRolled || variables.data.autoBattling || variables.data.currentTurn != "player" ||
 			variables.data.player.hitPoints <= 0
 		) {
 			return;
 		}
 		combatService.offHandAttack( variables.data );
+		_maybeSaveProgress();
 	}
 
 	/**
@@ -517,6 +571,7 @@ class extends="cbwire.models.Component" {
 		if ( !variables.data.gameOver ) {
 			combatService.endPlayerTurn( variables.data );
 		}
+		_maybeSaveProgress();
 	}
 
 	/**
@@ -551,7 +606,7 @@ class extends="cbwire.models.Component" {
 	 * only, or stabilized-but-still-unconscious with nothing else to do).
 	 */
 	function endTurn() {
-		if ( variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" ) {
+		if ( variables.data.gameOver || !variables.data.initiativeRolled || variables.data.autoBattling || variables.data.currentTurn != "player" ) {
 			return;
 		}
 		combatService.endPlayerTurn( variables.data );
@@ -563,7 +618,7 @@ class extends="cbwire.models.Component" {
 	 * fight resolving instantly.
 	 */
 	function startAutoBattle() {
-		if ( variables.data.gameOver ) {
+		if ( variables.data.gameOver || !variables.data.initiativeRolled ) {
 			return;
 		}
 		variables.data.autoBattling = true;
@@ -574,6 +629,95 @@ class extends="cbwire.models.Component" {
 	 */
 	function stopAutoBattle() {
 		variables.data.autoBattling = false;
+	}
+
+	/**
+	 * Clears the defeated enemies, spawns a fresh mob roster at the level's
+	 * designed spawn point, and resets all encounter-phase flags so the player
+	 * returns to exploration mode — carrying over their current HP, spell slots,
+	 * and position from the just-finished fight.
+	 */
+	function continueExploring() {
+		if ( !variables.data.gameOver || variables.data.outcome != "victory" ) {
+			return;
+		}
+
+		var templates = _monsterTemplates();
+		var mobCount = randRange( MIN_MOB_COUNT, MAX_MOB_COUNT );
+		var opponents = [];
+		var takenPositions = [ variables.data.player.position ];
+
+		for ( var i = 1; i <= mobCount; i++ ) {
+			var mob = duplicate( templates[ randRange( 1, templates.len() ) ] );
+			var spawnPoint = variables.data.grid.opponentSpawn;
+			mob.position = ( i == 1 )
+				? { "x": spawnPoint.x, "y": spawnPoint.y }
+				: combatService.findOpenTileNear( variables.data.grid, spawnPoint, takenPositions );
+			mob.mobIndex = i;
+			arrayAppend( takenPositions, mob.position );
+			arrayAppend( opponents, mob );
+		}
+
+		variables.data.opponents = opponents;
+		variables.data.opponent  = opponents[ 1 ];
+		variables.data.selectedOpponentIndex = 1;
+
+		variables.data.gameOver        = false;
+		variables.data.outcome         = "";
+		variables.data.initiativeRolled = false;
+		variables.data.player.inCombat  = false;
+		variables.data.restDone        = false;
+		variables.data.stateSaved      = false;
+		variables.data.round           = 1;
+		variables.data.currentTurn     = "player";
+		variables.data.autoBattling    = false;
+		variables.data.log             = [ "You press deeper into the dungeon." ];
+
+		combatService.startNewRound( variables.data );
+		_updateCombatState();
+	}
+
+	/**
+	 * Persists end-of-combat character state (HP, hit dice, spell slots) to the
+	 * DB the first time the encounter ends, so rests and the next encounter load
+	 * accurate values. Idempotent — guarded by stateSaved.
+	 */
+	private function _maybeSaveProgress() {
+		if ( variables.data.gameOver && !variables.data.stateSaved ) {
+			variables.data.stateSaved = true;
+			variables.data.player.inCombat = false;
+			combatService.saveCharacterState( variables.data.player );
+		}
+	}
+
+	/**
+	 * Short Rest action: spends one Hit Die (1d[hitDieSize] + CON modifier) to
+	 * recover HP. Only available after combat ends while the character has
+	 * remaining Hit Dice and is not at full HP.
+	 */
+	function spendHitDie() {
+		var player = variables.data.player;
+		if ( !variables.data.gameOver || ( structKeyExists( player, "inCombat" ) && player.inCombat ) || player.hitDiceSpent >= player.hitDiceMax || player.hitPoints >= player.maxHitPoints ) {
+			return;
+		}
+		var result = combatService.shortRest( player );
+		var sign   = result.conMod >= 0 ? "+" : "";
+		variables.data.log.prepend( "#player.name# spends a Hit Die (1d#player.hitDieSize#): rolled #result.roll##sign##result.conMod# = +#result.healing# HP (#player.hitPoints#/#player.maxHitPoints# HP)." );
+		variables.data.restDone = true;
+	}
+
+	/**
+	 * Long Rest action: restores all HP, recovers half of spent hit dice
+	 * (minimum 1), and resets all spell slots. Available after combat ends.
+	 */
+	function takeLongRest() {
+		if ( !variables.data.gameOver || ( structKeyExists( variables.data.player, "inCombat" ) && variables.data.player.inCombat ) ) {
+			return;
+		}
+		combatService.longRest( variables.data.player );
+		var player = variables.data.player;
+		variables.data.log.prepend( "#player.name# takes a Long Rest — fully restored (#player.maxHitPoints#/#player.maxHitPoints# HP). All spell slots recovered." );
+		variables.data.restDone = true;
 	}
 
 	/**
@@ -611,6 +755,7 @@ class extends="cbwire.models.Component" {
 
 		if ( variables.data.gameOver ) {
 			variables.data.autoBattling = false;
+			_maybeSaveProgress();
 		}
 	}
 

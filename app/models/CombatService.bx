@@ -1333,7 +1333,7 @@ class singleton {
 			.whereRaw( "( heal_dice IS NULL OR heal_dice REGEXP '^[0-9]+d[0-9]+$' )" )
 			.orderByRaw( "( name = ? ) DESC, name", [ arguments.preferredName ] )
 			.limit( 1 )
-			.get( DB );
+			.get( options = DB );
 
 		if ( rows.isEmpty() ) {
 			// Try the other effect type before giving up — e.g. Warlock only
@@ -1351,7 +1351,7 @@ class singleton {
 				.whereRaw( "( heal_dice IS NULL OR heal_dice REGEXP '^[0-9]+d[0-9]+$' )" )
 				.orderByRaw( "( name = ? ) DESC, name", [ arguments.preferredName ] )
 				.limit( 1 )
-				.get( DB );
+				.get( options = DB );
 		}
 
 		if ( rows.isEmpty() ) {
@@ -1410,7 +1410,7 @@ class singleton {
 			.whereRaw( "( damage_dice IS NULL OR damage_dice REGEXP '^[0-9]+d[0-9]+$' )" )
 			.whereRaw( "( heal_dice IS NULL OR heal_dice REGEXP '^[0-9]+d[0-9]+$' )" )
 			.orderByAsc( "name" )
-			.get( DB );
+			.get( options = DB );
 		var results = [];
 		for ( var spellRow in rows ) {
 			results.append( _spellStructFromRow( spellRow ) );
@@ -2130,7 +2130,7 @@ class singleton {
 			.where( "c.id", arguments.player.characterId )
 			.where( "cf.level", arguments.player.level )
 			.whereNull( "cf.subclass_id" )
-			.get( DB );
+			.get( options = DB );
 
 		var names = [];
 		for ( var row in rows ) {
@@ -2426,7 +2426,7 @@ class singleton {
 			.where( "chf.character_id", arguments.characterId )
 			.orderByAsc( "cf.level" )
 			.orderByAsc( "cf.sort_order" )
-			.get( DB );
+			.get( options = DB );
 		for ( var featureRow in featureRows ) {
 			arrayAppend( player.features, featureRow.name );
 		}
@@ -2436,7 +2436,7 @@ class singleton {
 			.join( "feats AS f", "f.id", "=", "chf.feat_id" )
 			.select( "f.name" )
 			.where( "chf.character_id", arguments.characterId )
-			.get( DB );
+			.get( options = DB );
 		for ( var featRow in featRows ) {
 			arrayAppend( player.feats, featRow.name );
 		}
@@ -2464,7 +2464,7 @@ class singleton {
 				"w.name", "w.damage_dice", "w.damage_type", "w.properties"
 			] )
 			.where( "ci.character_id", arguments.characterId )
-			.get( DB );
+			.get( options = DB );
 		for ( var invRow in inventoryRows ) {
 			var item = {
 				// Maps this item back to its database rows.

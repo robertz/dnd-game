@@ -38,7 +38,7 @@ class singleton {
 			.from( "classes" )
 			.select( [ "id", "name", "primary_ability", "hit_die", "saving_throw_proficiencies", "starting_equipment" ] )
 			.orderByAsc( "name" )
-			.get( DB );
+			.get( options = DB );
 	}
 
 	/**
@@ -51,7 +51,7 @@ class singleton {
 			.join( "classes AS cl", "cl.id", "=", "c.class_id" )
 			.select( [ "c.id", "c.name", "cl.name AS className", "c.species", "c.level" ] )
 			.orderByAsc( "c.name" )
-			.get( DB );
+			.get( options = DB );
 	}
 
 	/**
@@ -137,7 +137,7 @@ class singleton {
 			.where( "class_id", arguments.classId )
 			.where( "level", 1 )
 			.where( "name", "Fighting Style" )
-			.count( "*", DB );
+			.count( "*", 0, DB );
 		if ( !hasStyle ) {
 			return;
 		}
@@ -147,7 +147,7 @@ class singleton {
 			.join( "weapons AS w", "w.id", "=", "ci.weapon_id" )
 			.select( [ "ci.equipped", "ci.category", "w.properties" ] )
 			.where( "ci.character_id", arguments.characterId )
-			.get( DB );
+			.get( options = DB );
 		var inventory = [];
 		for ( var row in inventoryRows ) {
 			arrayAppend( inventory, {
@@ -218,7 +218,7 @@ class singleton {
 		var weapons = qb.newQuery()
 			.from( "weapons" )
 			.select( [ "id", "name", "weapon_type", "properties" ] )
-			.get( DB );
+			.get( options = DB );
 
 		var hasMelee = false;
 		var hasRanged = false;
@@ -328,7 +328,7 @@ class singleton {
 			.where( "chf.character_id", arguments.characterId )
 			.orderByAsc( "cf.level" )
 			.orderByAsc( "cf.sort_order" )
-			.get( DB );
+			.get( options = DB );
 		for ( var featureRow in featureRows ) {
 			sheet.features.append( { "name": featureRow.name, "level": featureRow.level } );
 		}
@@ -338,7 +338,7 @@ class singleton {
 			.join( "feats AS f", "f.id", "=", "chf.feat_id" )
 			.select( "f.name" )
 			.where( "chf.character_id", arguments.characterId )
-			.get( DB );
+			.get( options = DB );
 		for ( var featRow in featRows ) {
 			sheet.feats.append( featRow.name );
 		}
@@ -361,7 +361,7 @@ class singleton {
 			.where( "ci.character_id", arguments.characterId )
 			.orderByDesc( "ci.equipped" )
 			.orderByAsc( "w.name" )
-			.get( DB );
+			.get( options = DB );
 		var result = [];
 		for ( var inventoryRow in rows ) {
 			result.append( {
@@ -390,7 +390,7 @@ class singleton {
 			.select( [ "id", "name", "category", "weapon_type", "damage_dice", "damage_type" ] )
 			.orderByAsc( "category" )
 			.orderByAsc( "name" )
-			.get( DB );
+			.get( options = DB );
 		var result = [];
 		for ( var weaponRow in rows ) {
 			result.append( {

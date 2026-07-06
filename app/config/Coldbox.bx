@@ -142,7 +142,15 @@ class {
 		 *
 		 * }
 		 */
-		variables.moduleSettings = {}
+		variables.moduleSettings = {
+			// This app serves modules from lib/modules (see box.json installPaths),
+			// not ColdBox's conventional root modules/ folder. cbwire's shipped
+			// default of "/modules/cbwire" gets rewritten by box installs to the
+			// physical relative path "/lib/modules/cbwire", which isn't web-servable
+			// under this app's "public" webroot. Pin it back to the URL exposed by
+			// the "/modules" alias in server.json, so this survives future installs.
+			cbwire : { moduleRootURL : "/modules/cbwire" }
+		}
 
 		/**
 		 * --------------------------------------------------------------------------

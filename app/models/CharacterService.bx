@@ -1,0 +1,266 @@
+/**
+ * Character creation and equipment assignment against the gameserver schema.
+ * Kept separate from CombatService (which is scoped to the turn-based combat
+ * rules engine) since creating/equipping a character isn't a combat concern.
+ */
+class singleton {
+
+	property name="combatService" inject="CombatService";
+
+	// Backgrounds grant a specific feat, per "Character Origin" (Step 2).
+	// Only the feat's name is recorded here — Acolyte/Sage's "Magic Initiate"
+	// spell-list choice (Cleric vs. Wizard) isn't tracked, since this app has
+	// no spellcasting system for it to feed into.
+	BACKGROUND_FEATS = {
+		"Acolyte": "Magic Initiate",
+		"Criminal": "Alert",
+		"Sage": "Magic Initiate",
+		"Soldier": "Savage Attacker"
+	};
+
+	// Species base Speed, per their SRD stat blocks. Every other species is 30 ft.
+	SPECIES_SPEED = { "Goliath": 35 };
+
+	// Species-derived flat Hit Point maximum bonus. Dwarven Toughness (+1 HP
+	// at level 1, +1 more per level thereafter) is applied here at creation;
+	// CombatService applies the "+1 more per level" half during level-ups.
+	SPECIES_HP_BONUS = { "Dwarf": 1 };
+
+	/**
+	 * Returns a summary of every class, for a character creation UI to list
+	 * (id, name, primary ability, hit die, saving throws, starting equipment).
+	 */
+	function listClasses() {
+		return queryExecute(
+			"SELECT id, name, primary_ability, hit_die, saving_throw_proficiencies, starting_equipment
+			 FROM classes ORDER BY name",
+			{}, { datasource: "gameserver" }
+		);
+	}
+
+	/**
+	 * Creates a new character row with standard derived stats — Level 1 Hit
+	 * Points (class hit die max + Con modifier, per the "Level 1 Hit Points
+	 * by Class" table), base Armor Class (10 + Dex modifier; class features
+	 * like Unarmored Defense can be applied on top of this later), and
+	 * Proficiency Bonus for the given level — then automatically assigns the
+	 * class's starting equipment. Returns the new characters.id.
+	 *
+	 * @name Character name.
+	 * @classId classes.id.
+	 * @str,dex,con,intScore,wis,cha The six ability scores.
+	 * @species,background,alignment Flavor choices from character creation
+	 *  Steps 2 and 4 — recorded on the sheet, not mechanically modeled.
+	 * @level Starting level (defaults to 1).
+	 */
+	function createCharacter(
+		name, classId, str, dex, con, intScore, wis, cha,
+		species = "", background = "", alignment = "", level = 1
+	) {
+		var classRows = queryExecute(
+			"SELECT hit_die FROM classes WHERE id = :classId",
+			{ "classId": arguments.classId },
+			{ datasource: "gameserver" }
+		);
+		if ( classRows.recordCount == 0 ) {
+			throw( type = "ClassNotFound", message = "No class with id #arguments.classId#." );
+		}
+
+		var dieSize = int( reReplace( classRows.hit_die[ 1 ], "[^0-9]*(\d+).*", "\1" ) );
+		var speciesHpBonus = SPECIES_HP_BONUS.keyExists( arguments.species ) ? SPECIES_HP_BONUS[ arguments.species ] : 0;
+		var maxHitPoints = dieSize + combatService.abilityModifier( arguments.con ) + speciesHpBonus;
+		var armorClass = 10 + combatService.abilityModifier( arguments.dex );
+		var proficiencyBonus = combatService.proficiencyBonusForLevel( arguments.level );
+		var speed = SPECIES_SPEED.keyExists( arguments.species ) ? SPECIES_SPEED[ arguments.species ] : 30;
+
+		queryExecute(
+			"INSERT INTO characters
+			 (name, class_id, species, background, alignment, level, str, dex, con, int_score, wis, cha, proficiency_bonus, armor_class, hit_points, max_hit_points, speed)
+			 VALUES (:name, :classId, :species, :background, :alignment, :level, :str, :dex, :con, :intScore, :wis, :cha, :proficiencyBonus, :armorClass, :hitPoints, :maxHitPoints, :speed)",
+			{
+				"name": arguments.name,
+				"classId": arguments.classId,
+				"species": len( arguments.species ) ? arguments.species : javaCast( "null", 0 ),
+				"background": len( arguments.background ) ? arguments.background : javaCast( "null", 0 ),
+				"alignment": len( arguments.alignment ) ? arguments.alignment : javaCast( "null", 0 ),
+				"level": arguments.level,
+				"str": arguments.str, "dex": arguments.dex, "con": arguments.con,
+				"intScore": arguments.intScore, "wis": arguments.wis, "cha": arguments.cha,
+				"proficiencyBonus": proficiencyBonus,
+				"armorClass": armorClass,
+				"hitPoints": maxHitPoints,
+				"maxHitPoints": maxHitPoints,
+				"speed": speed
+			},
+			{ datasource: "gameserver", result: "insertResult" }
+		);
+
+		var characterId = insertResult.generatedKey;
+		assignStartingEquipment( characterId );
+		_grantBackgroundFeat( characterId, arguments.background );
+		_grantLevelOneFightingStyle( characterId, arguments.classId );
+		return characterId;
+	}
+
+	/**
+	 * Fighter is the only class that grants a Fighting Style at level 1 (the
+	 * level a new character starts at); Paladin/Ranger grant theirs at level
+	 * 2, handled by CombatService._grantNewFeatures() during a later level-up.
+	 * Auto-picks a style via CombatService.grantFightingStyle(), since this
+	 * app has no UI for the player to choose one.
+	 */
+	private function _grantLevelOneFightingStyle( characterId, classId ) {
+		var featureRows = queryExecute(
+			"SELECT 1 FROM class_features WHERE class_id = :classId AND level = 1 AND name = 'Fighting Style'",
+			{ "classId": arguments.classId },
+			{ datasource: "gameserver" }
+		);
+		if ( featureRows.recordCount == 0 ) {
+			return;
+		}
+
+		var inventoryRows = queryExecute(
+			"SELECT ci.equipped, ci.category, w.properties
+			 FROM character_inventory ci JOIN weapons w ON w.id = ci.weapon_id
+			 WHERE ci.character_id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		var inventory = [];
+		for ( var row in inventoryRows ) {
+			arrayAppend( inventory, {
+				"equipped": row.equipped,
+				"category": row.category,
+				"properties": listToArray( row.properties )
+			} );
+		}
+		combatService.grantFightingStyle( arguments.characterId, [], inventory );
+	}
+
+	/**
+	 * Grants the feat tied to a character's background (e.g. Soldier ->
+	 * Savage Attacker), if any. Safe to call more than once (INSERT IGNORE).
+	 */
+	private function _grantBackgroundFeat( characterId, background ) {
+		if ( !BACKGROUND_FEATS.keyExists( arguments.background ) ) {
+			return;
+		}
+
+		var featRows = queryExecute(
+			"SELECT id FROM feats WHERE name = :name",
+			{ "name": BACKGROUND_FEATS[ arguments.background ] },
+			{ datasource: "gameserver" }
+		);
+		if ( featRows.recordCount == 0 ) {
+			return;
+		}
+
+		queryExecute(
+			"INSERT IGNORE INTO character_feats (character_id, feat_id) VALUES (:characterId, :featId)",
+			{ "characterId": arguments.characterId, "featId": featRows.id[ 1 ] },
+			{ datasource: "gameserver" }
+		);
+	}
+
+	/**
+	 * Scans the character's class's starting equipment text (e.g. "Choose A
+	 * or B: (A) Greataxe, 4 Handaxes, Explorer's Pack, and 15 GP; or (B) 75
+	 * GP") for weapon names from the `weapons` table and adds each one found
+	 * to character_inventory. A class's starting equipment is always
+	 * something it's proficient with, so attack bonus always includes the
+	 * character's Proficiency Bonus.
+	 *
+	 * A weapon counts as this character's ranged option if it's Ranged type
+	 * or has the Thrown property (e.g. Handaxe, Javelin can be thrown even
+	 * though their weapon_type is "Melee"); otherwise it's melee. The first
+	 * melee match and first ranged match found are equipped; any further
+	 * matches are added unequipped. Safe to call more than once — existing
+	 * character/weapon pairs are left alone (INSERT IGNORE).
+	 *
+	 * @characterId characters.id to assign equipment to.
+	 */
+	function assignStartingEquipment( characterId ) {
+		var rows = queryExecute(
+			"SELECT c.str, c.dex, c.proficiency_bonus, cl.starting_equipment
+			 FROM characters c JOIN classes cl ON cl.id = c.class_id
+			 WHERE c.id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		if ( rows.recordCount == 0 ) {
+			throw( type = "CharacterNotFound", message = "No saved character with id #arguments.characterId#." );
+		}
+
+		var strModifier = combatService.abilityModifier( rows.str[ 1 ] );
+		var dexModifier = combatService.abilityModifier( rows.dex[ 1 ] );
+		var proficiencyBonus = rows.proficiency_bonus[ 1 ];
+		var equipmentText = _optionAText( rows.starting_equipment[ 1 ] );
+
+		var weapons = queryExecute( "SELECT id, name, weapon_type, properties FROM weapons", {}, { datasource: "gameserver" } );
+
+		var hasMelee = false;
+		var hasRanged = false;
+
+		for ( var weapon in weapons ) {
+			if ( !findNoCase( weapon.name, equipmentText ) ) {
+				continue;
+			}
+
+			var isRanged = ( weapon.weapon_type == "Ranged" || findNoCase( "Thrown", weapon.properties ) );
+			var category = isRanged ? "ranged" : "melee";
+			var abilityMod = isRanged ? dexModifier : strModifier;
+			var equipped = isRanged ? !hasRanged : !hasMelee;
+
+			if ( isRanged ) {
+				hasRanged = true;
+			} else {
+				hasMelee = true;
+			}
+
+			// Detects e.g. "2 Daggers" so Two-Weapon Fighting can find a second
+			// Light melee weapon to dual-wield, even when it's the same weapon.
+			var quantity = 1;
+			var quantityMatch = reFindNoCase( "(\d+)\s+" & weapon.name, equipmentText, 1, true );
+			if ( structKeyExists( quantityMatch, "len" ) && quantityMatch.len.len() >= 2 && quantityMatch.len[ 2 ] > 0 ) {
+				quantity = int( mid( equipmentText, quantityMatch.pos[ 2 ], quantityMatch.len[ 2 ] ) );
+			}
+
+			queryExecute(
+				"INSERT IGNORE INTO character_inventory
+				 (character_id, weapon_id, category, equipped, quantity, attack_bonus, damage_bonus)
+				 VALUES (:characterId, :weaponId, :category, :equipped, :quantity, :attackBonus, :damageBonus)",
+				{
+					"characterId": arguments.characterId,
+					"weaponId": weapon.id,
+					"category": category,
+					// Bound as 0/1, not a bare boolean — BoxLang's queryExecute
+					// otherwise sends the literal text "true"/"false", which
+					// MySQL's strict mode rejects for a BOOLEAN/TINYINT column.
+					"equipped": equipped ? 1 : 0,
+					"quantity": quantity,
+					"attackBonus": abilityMod + proficiencyBonus,
+					"damageBonus": abilityMod
+				},
+				{ datasource: "gameserver" }
+			);
+		}
+	}
+
+	/**
+	 * Several classes' starting equipment offers a lettered choice (e.g.
+	 * "Choose A or B: (A) Greataxe, ...; or (B) 75 GP", or a 3-way choice for
+	 * Fighter). Scanning the full text would pick up weapons from every
+	 * option at once, so this isolates option "A"'s text and defaults to it.
+	 * Returns the text unchanged if there's no lettered choice at all.
+	 */
+	private function _optionAText( equipmentText ) {
+		var posA = find( "(A)", arguments.equipmentText );
+		if ( posA == 0 ) {
+			return arguments.equipmentText;
+		}
+		var afterA = mid( arguments.equipmentText, posA + 3, len( arguments.equipmentText ) );
+		var posB = find( "(B)", afterA );
+		return ( posB > 0 ) ? left( afterA, posB - 1 ) : afterA;
+	}
+
+}

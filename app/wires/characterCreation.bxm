@@ -1,0 +1,121 @@
+<bx:output>
+<div class="creation">
+	<h1 class="fantasy-heading">Create Your Character</h1>
+
+	<bx:if len( createdCharacterId )>
+		<p class="encounter-banner encounter-banner-victory">
+			#characterName# the #selectedClassName( classes, selectedClassId )# has been created (character id #createdCharacterId#)!
+		</p>
+		<div class="stat-card">
+			<h2 class="fantasy-heading">#characterName#</h2>
+			<p class="stat-subtitle">#selectedSpecies# #selectedClassName( classes, selectedClassId )# — #selectedBackground# — #selectedAlignment#</p>
+			<ul class="stat-list">
+				<li><strong>STR</strong> #assignedScores.str# &nbsp; <strong>DEX</strong> #assignedScores.dex# &nbsp; <strong>CON</strong> #assignedScores.con#</li>
+				<li><strong>INT</strong> #assignedScores.int# &nbsp; <strong>WIS</strong> #assignedScores.wis# &nbsp; <strong>CHA</strong> #assignedScores.cha#</li>
+			</ul>
+		</div>
+	<bx:else>
+		<p class="encounter-intro">Step #step# of #totalSteps#</p>
+
+		<bx:if len( formError )>
+			<p class="encounter-banner encounter-banner-defeat">#formError#</p>
+		</bx:if>
+
+		<bx:if step == 1>
+			<h2 class="fantasy-heading">Choose a Class</h2>
+			<div class="creation-grid">
+				<bx:loop array="#classes#" index="cls">
+					<div
+						class="creation-card#( selectedClassId == cls.id ? ' creation-card-selected' : '' )#"
+						wire:click="selectClass(#cls.id#)"
+					>
+						<h3 class="fantasy-heading">#cls.name#</h3>
+						<p class="stat-subtitle">Primary: #cls.primaryAbility# — #cls.hitDie#</p>
+						<p>Saves: #cls.savingThrows#</p>
+					</div>
+				</bx:loop>
+			</div>
+		</bx:if>
+
+		<bx:if step == 2>
+			<h2 class="fantasy-heading">Character Origin</h2>
+			<p class="stat-subtitle">Choose a Species</p>
+			<div class="creation-grid">
+				<bx:loop array="#speciesOptions#" index="opt">
+					<div
+						class="creation-card creation-card-compact#( selectedSpecies == opt ? ' creation-card-selected' : '' )#"
+						wire:click="selectSpecies('#opt#')"
+					>#opt#</div>
+				</bx:loop>
+			</div>
+			<p class="stat-subtitle">Choose a Background</p>
+			<div class="creation-grid">
+				<bx:loop array="#backgroundOptions#" index="opt">
+					<div
+						class="creation-card creation-card-compact#( selectedBackground == opt ? ' creation-card-selected' : '' )#"
+						wire:click="selectBackground('#opt#')"
+					>#opt#</div>
+				</bx:loop>
+			</div>
+		</bx:if>
+
+		<bx:if step == 3>
+			<h2 class="fantasy-heading">Ability Scores</h2>
+			<p class="stat-subtitle">Click a value below to assign it to the next ability (Strength, Dexterity, Constitution, Intelligence, Wisdom, Charisma, in order).</p>
+
+			<div class="creation-grid">
+				<bx:loop array="#standardArray#" index="value">
+					<div class="creation-card creation-card-compact" wire:click="assignScore(#value#)">#value#</div>
+				</bx:loop>
+			</div>
+
+			<ul class="stat-list creation-scores">
+				<bx:loop array="#abilityOrder#" index="ability">
+					<li><strong>#uCase( ability )#</strong> #( structKeyExists( assignedScores, ability ) ? assignedScores[ ability ] : "—" )#</li>
+				</bx:loop>
+			</ul>
+
+			<button type="button" class="btn btn-end-turn" wire:click="resetScores()">Reset</button>
+		</bx:if>
+
+		<bx:if step == 4>
+			<h2 class="fantasy-heading">Alignment</h2>
+			<div class="creation-grid">
+				<bx:loop array="#alignmentOptions#" index="opt">
+					<div
+						class="creation-card creation-card-compact#( selectedAlignment == opt ? ' creation-card-selected' : '' )#"
+						wire:click="selectAlignment('#opt#')"
+					>#opt#</div>
+				</bx:loop>
+			</div>
+		</bx:if>
+
+		<bx:if step == 5>
+			<h2 class="fantasy-heading">Name Your Character</h2>
+			<input type="text" class="creation-input" placeholder="Character name" wire:model="characterName" value="#characterName#" />
+
+			<div class="stat-card">
+				<h3 class="fantasy-heading">Review</h3>
+				<ul class="stat-list">
+					<li><strong>Class</strong> #selectedClassName( classes, selectedClassId )#</li>
+					<li><strong>Species</strong> #selectedSpecies#</li>
+					<li><strong>Background</strong> #selectedBackground#</li>
+					<li><strong>Alignment</strong> #selectedAlignment#</li>
+					<li><strong>Ability Scores</strong> STR #assignedScores.str#, DEX #assignedScores.dex#, CON #assignedScores.con#, INT #assignedScores.int#, WIS #assignedScores.wis#, CHA #assignedScores.cha#</li>
+				</ul>
+			</div>
+		</bx:if>
+
+		<div class="turn-actions">
+			<bx:if step gt 1>
+				<button type="button" class="btn btn-end-turn" wire:click="previousStep()">Back</button>
+			</bx:if>
+			<bx:if step lt totalSteps>
+				<button type="button" class="btn btn-auto-battle" wire:click="nextStep()">Next</button>
+			<bx:else>
+				<button type="button" class="btn btn-attack" wire:click="createCharacter()">Create Character</button>
+			</bx:if>
+		</div>
+	</bx:if>
+</div>
+</bx:output>

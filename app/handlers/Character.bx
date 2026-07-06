@@ -1,0 +1,10 @@
+class extends="coldbox.system.EventHandler" {
+
+	/**
+	 * Character creation wizard page.
+	 */
+	function new( event, rc, prc ){
+		event.setView( "character/new" );
+	}
+
+}

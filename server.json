@@ -16,7 +16,8 @@
         },
         "aliases":{
             "/coldbox/system/exceptions":"./lib/coldbox/system/exceptions/",
-            "/tests":"./tests/"
+            "/tests":"./tests/",
+            "/modules":"./lib/modules/"
         }
     },
     "scripts":{

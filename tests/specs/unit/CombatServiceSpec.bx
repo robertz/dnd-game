@@ -1,0 +1,447 @@
+/**
+ * Unit tests for app/models/CombatService.bx — the grid combat rules engine.
+ *
+ * This is instantiated directly (no ColdBox app bootstrap, no WireBox), since
+ * CombatService has no injected dependencies of its own. Attack rolls are real
+ * dice (no mocked RNG), so tests that depend on a roll either use overwhelming
+ * bonuses/penalties to make the outcome effectively certain, account for both
+ * possible outcomes explicitly, or assert on an aggregate across many trials —
+ * see inline notes. Tests intentionally avoid ever reducing a defender's HP to
+ * 0, since a kill triggers a real UPDATE against the `characters` table via
+ * awardExperience(); covering that write path belongs in an integration-style
+ * test with its own DB fixture, not here.
+ */
+class extends="testbox.system.BaseSpec" {
+
+	function beforeAll(){
+		variables.service = new app.models.CombatService();
+	}
+
+	private function makeCombatant( x, y, extra = {} ){
+		var base = {
+			"name": "Combatant",
+			"position": { "x": arguments.x, "y": arguments.y },
+			"speed": 30,
+			"armorClass": 10,
+			"hitPoints": 500,
+			"maxHitPoints": 500,
+			"inventory": []
+		};
+		base.append( arguments.extra );
+		return base;
+	}
+
+	/**
+	 * A 5x5 test grid. If `wallRow` is between 1-5, that entire row is a wall
+	 * except for a single-tile gap at `gapCol` (or no gap at all, fully
+	 * sealing the grid in two halves, if `gapCol` is out of range). If
+	 * `wallRow` is out of range, the grid is entirely open floor.
+	 */
+	private function makeWallGrid( wallRow, gapCol ){
+		var width = 5;
+		var height = 5;
+		var tiles = [];
+		for ( var y = 1; y <= height; y++ ) {
+			var row = [];
+			for ( var x = 1; x <= width; x++ ) {
+				var isWall = ( y == arguments.wallRow && x != arguments.gapCol );
+				arrayAppend( row, isWall ? "wall" : "floor" );
+			}
+			arrayAppend( tiles, row );
+		}
+		return { "width": width, "height": height, "tiles": tiles };
+	}
+
+	function run(){
+		describe( "CombatService", () => {
+
+			describe( "chebyshev()", () => {
+				it( "is 0 for the same position", () => {
+					var a = makeCombatant( 5, 5 );
+					expect( service.chebyshev( a, a ) ).toBe( 0 );
+				} );
+
+				it( "is the straight-line distance along one axis", () => {
+					var a = makeCombatant( 0, 0 );
+					var b = makeCombatant( 0, 7 );
+					expect( service.chebyshev( a, b ) ).toBe( 7 );
+				} );
+
+				it( "uses the larger axis for diagonals, not Euclidean distance", () => {
+					var a = makeCombatant( 0, 0 );
+					var b = makeCombatant( 3, 4 );
+					expect( service.chebyshev( a, b ) ).toBe( 4 );
+				} );
+			} );
+
+			describe( "moveToward()", () => {
+				it( "does not move if already adjacent", () => {
+					var mover = makeCombatant( 5, 5 );
+					var target = makeCombatant( 6, 5 );
+					var steps = service.moveToward( mover, target, 6 );
+					expect( steps ).toBe( 0 );
+					expect( mover.position.x ).toBe( 5 );
+				} );
+
+				it( "steps toward the target up to the step budget", () => {
+					var mover = makeCombatant( 0, 0 );
+					var target = makeCombatant( 10, 0 );
+					var steps = service.moveToward( mover, target, 4 );
+					expect( steps ).toBe( 4 );
+					expect( mover.position.x ).toBe( 4 );
+				} );
+
+				it( "stops once adjacent, even with movement budget left", () => {
+					var mover = makeCombatant( 0, 0 );
+					var target = makeCombatant( 3, 0 );
+					var steps = service.moveToward( mover, target, 6 );
+					expect( steps ).toBe( 2 );
+					expect( service.chebyshev( mover, target ) ).toBe( 1 );
+				} );
+
+				it( "moves diagonally when both axes differ", () => {
+					var mover = makeCombatant( 0, 0 );
+					var target = makeCombatant( 10, 10 );
+					var steps = service.moveToward( mover, target, 6 );
+					expect( steps ).toBe( 6 );
+					expect( mover.position.x ).toBe( 6 );
+					expect( mover.position.y ).toBe( 6 );
+				} );
+
+				it( "with a grid, routes around a wall instead of walking through it", () => {
+					// 5x5 grid: row 3 (1-based) is a solid wall except a gap at
+					// column 1. Mover and target sit on opposite sides, off the
+					// gap's column, so a direct line would cross the wall.
+					var grid = makeWallGrid( 3, 1 );
+					var mover = makeCombatant( 5, 1 );
+					var target = makeCombatant( 5, 5 );
+					var steps = service.moveToward( mover, target, 100, grid );
+					expect( service.isWalkable( grid, mover.position.x, mover.position.y ) ).toBeTrue();
+					// A direct line is 4 squares (Chebyshev); detouring to the
+					// column-1 gap and back costs strictly more.
+					expect( steps ).toBeGT( 4 );
+				} );
+
+				it( "with a grid, doesn't move if the target is unreachable", () => {
+					var grid = makeWallGrid( 3, -1 ); // no gap at all — fully sealed
+					var mover = makeCombatant( 5, 1 );
+					var target = makeCombatant( 5, 5 );
+					var steps = service.moveToward( mover, target, 100, grid );
+					expect( steps ).toBe( 0 );
+					expect( mover.position.x ).toBe( 5 );
+					expect( mover.position.y ).toBe( 1 );
+				} );
+			} );
+
+			describe( "isWalkable()", () => {
+				it( "is true for a floor tile and false for a wall tile", () => {
+					var grid = makeWallGrid( 3, 1 );
+					expect( service.isWalkable( grid, 1, 3 ) ).toBeTrue(); // the gap
+					expect( service.isWalkable( grid, 4, 3 ) ).toBeFalse(); // the wall
+				} );
+
+				it( "is false outside the grid's bounds", () => {
+					var grid = makeWallGrid( 3, 1 );
+					expect( service.isWalkable( grid, 0, 1 ) ).toBeFalse();
+					expect( service.isWalkable( grid, 6, 1 ) ).toBeFalse();
+					expect( service.isWalkable( grid, 1, 0 ) ).toBeFalse();
+					expect( service.isWalkable( grid, 1, 6 ) ).toBeFalse();
+				} );
+			} );
+
+			describe( "pathDistance()", () => {
+				it( "matches Chebyshev distance on an open grid", () => {
+					var grid = makeWallGrid( -1, -1 ); // no wall row at all
+					expect( service.pathDistance( grid, { "x": 1, "y": 1 }, { "x": 4, "y": 3 } ) ).toBe( 3 );
+				} );
+
+				it( "is longer than the raw Chebyshev distance when a wall forces a detour", () => {
+					var grid = makeWallGrid( 3, 1 );
+					var rawChebyshev = 4;
+					var distance = service.pathDistance( grid, { "x": 5, "y": 1 }, { "x": 5, "y": 5 } );
+					expect( distance ).toBeGT( rawChebyshev );
+				} );
+
+				it( "returns -1 when the destination is walled off entirely", () => {
+					var grid = makeWallGrid( 3, -1 ); // no gap — fully sealed
+					expect( service.pathDistance( grid, { "x": 5, "y": 1 }, { "x": 5, "y": 5 } ) ).toBe( -1 );
+				} );
+
+				it( "returns -1 when the destination tile is itself a wall", () => {
+					var grid = makeWallGrid( 3, 1 );
+					expect( service.pathDistance( grid, { "x": 1, "y": 1 }, { "x": 4, "y": 3 } ) ).toBe( -1 );
+				} );
+			} );
+
+			describe( "equippedWeapon()", () => {
+				it( "returns the equipped weapon of the requested category", () => {
+					var combatant = makeCombatant( 0, 0, { "inventory": [
+						{ "category": "melee", "equipped": true, "name": "Greatsword" },
+						{ "category": "ranged", "equipped": true, "name": "Javelin" }
+					] } );
+					expect( service.equippedWeapon( combatant, "ranged" ).name ).toBe( "Javelin" );
+				} );
+
+				it( "ignores unequipped items", () => {
+					var combatant = makeCombatant( 0, 0, { "inventory": [
+						{ "category": "melee", "equipped": false, "name": "Dagger" }
+					] } );
+					expect( isNull( service.equippedWeapon( combatant, "melee" ) ) ).toBeTrue();
+				} );
+
+				it( "returns null when nothing of that category is carried", () => {
+					var combatant = makeCombatant( 0, 0 );
+					expect( isNull( service.equippedWeapon( combatant, "ranged" ) ) ).toBeTrue();
+				} );
+			} );
+
+			describe( "pickWeaponForDistance()", () => {
+				function fighterWithBothWeapons(){
+					return makeCombatant( 0, 0, { "inventory": [
+						{ "category": "melee", "equipped": true, "name": "Greatsword" },
+						{ "category": "ranged", "equipped": true, "name": "Javelin", "normalRange": 6, "longRange": 24 }
+					] } );
+				}
+
+				it( "prefers melee when adjacent", () => {
+					var choice = service.pickWeaponForDistance( fighterWithBothWeapons(), 1 );
+					expect( choice.weapon.name ).toBe( "Greatsword" );
+					expect( choice.disadvantage ).toBeFalse();
+				} );
+
+				it( "falls back to the ranged weapon within normal range, no Disadvantage", () => {
+					var choice = service.pickWeaponForDistance( fighterWithBothWeapons(), 4 );
+					expect( choice.weapon.name ).toBe( "Javelin" );
+					expect( choice.disadvantage ).toBeFalse();
+				} );
+
+				it( "applies Disadvantage beyond normal range but within long range", () => {
+					var choice = service.pickWeaponForDistance( fighterWithBothWeapons(), 10 );
+					expect( choice.weapon.name ).toBe( "Javelin" );
+					expect( choice.disadvantage ).toBeTrue();
+				} );
+
+				it( "returns null when the target is beyond long range", () => {
+					var combatant = makeCombatant( 0, 0, { "inventory": [
+						{ "category": "ranged", "equipped": true, "name": "Javelin", "normalRange": 6, "longRange": 24 }
+					] } );
+					expect( isNull( service.pickWeaponForDistance( combatant, 25 ) ) ).toBeTrue();
+				} );
+
+				it( "returns null when no weapon is carried at all", () => {
+					expect( isNull( service.pickWeaponForDistance( makeCombatant( 0, 0 ), 1 ) ) ).toBeTrue();
+				} );
+
+				it( "returns null for a ranged shot blocked by a wall, even within range", () => {
+					// Wall spans row 3 with no gap, so a shot straight across it is blocked.
+					var grid = makeWallGrid( 3, -1 );
+					var archer = makeCombatant( 3, 1, { "inventory": [
+						{ "category": "ranged", "equipped": true, "name": "Shortbow", "normalRange": 16, "longRange": 64 }
+					] } );
+					var choice = service.pickWeaponForDistance( archer, 4, grid, { "x": 3, "y": 5 } );
+					expect( isNull( choice ) ).toBeTrue();
+				} );
+
+				it( "still offers the ranged shot when the line of sight is clear", () => {
+					var grid = makeWallGrid( 3, 1 ); // gap at column 1
+					var archer = makeCombatant( 1, 1, { "inventory": [
+						{ "category": "ranged", "equipped": true, "name": "Shortbow", "normalRange": 16, "longRange": 64 }
+					] } );
+					// Straight down column 1, through the gap — nothing in the way.
+					var choice = service.pickWeaponForDistance( archer, 4, grid, { "x": 1, "y": 5 } );
+					expect( isNull( choice ) ).toBeFalse();
+					expect( choice.weapon.name ).toBe( "Shortbow" );
+				} );
+			} );
+
+			describe( "hasLineOfSight()", () => {
+				it( "is true across an open grid", () => {
+					var grid = makeWallGrid( -1, -1 );
+					expect( service.hasLineOfSight( grid, { "x": 1, "y": 1 }, { "x": 5, "y": 5 } ) ).toBeTrue();
+				} );
+
+				it( "is false when a wall lies on the straight line between two points", () => {
+					var grid = makeWallGrid( 3, -1 ); // solid wall all the way across row 3
+					expect( service.hasLineOfSight( grid, { "x": 3, "y": 1 }, { "x": 3, "y": 5 } ) ).toBeFalse();
+				} );
+
+				it( "is true when the line threads through a gap in the wall", () => {
+					var grid = makeWallGrid( 3, 1 ); // gap at column 1
+					expect( service.hasLineOfSight( grid, { "x": 1, "y": 1 }, { "x": 1, "y": 5 } ) ).toBeTrue();
+				} );
+
+				it( "doesn't check the endpoints themselves, only tiles in between", () => {
+					// Target sits one tile short of (and adjacent to) a solid wall
+					// row — the line from directly above it never crosses any
+					// wall tile in between, so sight is clear right up to it.
+					var grid = makeWallGrid( 3, -1 );
+					expect( service.hasLineOfSight( grid, { "x": 3, "y": 1 }, { "x": 3, "y": 2 } ) ).toBeTrue();
+				} );
+			} );
+
+			describe( "parseDice()", () => {
+				it( "parses NdM notation into count and sides", () => {
+					var dice = service.parseDice( "2d6" );
+					expect( dice.count ).toBe( 2 );
+					expect( dice.sides ).toBe( 6 );
+				} );
+
+				it( "handles a single die", () => {
+					var dice = service.parseDice( "1d4" );
+					expect( dice.count ).toBe( 1 );
+					expect( dice.sides ).toBe( 4 );
+				} );
+			} );
+
+			describe( "rollSum()", () => {
+				it( "stays within the mathematically possible range across many rolls", () => {
+					for ( var i = 1; i <= 100; i++ ) {
+						var total = service.rollSum( 2, 6 );
+						expect( total ).toBeGTE( 2 );
+						expect( total ).toBeLTE( 12 );
+					}
+				} );
+			} );
+
+			describe( "resolveAttack()", () => {
+				it( "deals damage within the weapon's dice range on an overwhelming hit", () => {
+					// attackBonus 100 vs AC 1: only a natural 1 (auto-miss, per the rules) can
+					// prevent a hit, so across many trials the outcome is either "missed" (0
+					// damage), a normal hit (2d6+2 -> 4-14), or a Critical Hit, which doubles
+					// the damage dice (4d6+2 -> 6-26).
+					for ( var i = 1; i <= 40; i++ ) {
+						var log = [];
+						var attacker = { "name": "Attacker" };
+						var defender = makeCombatant( 0, 0, { "armorClass": 1 } );
+						var weapon = { "name": "Greatsword", "damageDice": "2d6", "damageType": "Slashing", "attackBonus": 100, "damageBonus": 2 };
+						service.resolveAttack( log, attacker, defender, weapon, false );
+						var damageTaken = 500 - defender.hitPoints;
+						expect( damageTaken == 0 || ( damageTaken >= 4 && damageTaken <= 26 ) ).toBeTrue();
+						expect( log.len() ).toBe( 1 );
+					}
+				} );
+
+				it( "mostly misses on an overwhelming penalty, barring a natural 20", () => {
+					var misses = 0;
+					var trials = 100;
+					for ( var i = 1; i <= trials; i++ ) {
+						var log = [];
+						var attacker = { "name": "Attacker" };
+						var defender = makeCombatant( 0, 0, { "armorClass": 999 } );
+						var weapon = { "name": "Dagger", "damageDice": "1d4", "damageType": "Piercing", "attackBonus": -50, "damageBonus": 0 };
+						service.resolveAttack( log, attacker, defender, weapon, false );
+						if ( defender.hitPoints == 500 ) {
+							misses += 1;
+						}
+					}
+					// Only a natural 20 (1-in-20) can hit here, so misses should dominate.
+					expect( misses ).toBeGTE( trials * 0.8 );
+				} );
+
+				it( "zeroes damage against an immune damage type", () => {
+					var log = [];
+					var attacker = { "name": "Attacker" };
+					var defender = makeCombatant( 0, 0, { "armorClass": 1, "immunities": [ "Poison" ] } );
+					var weapon = { "name": "Poison Dart", "damageDice": "2d6", "damageType": "Poison", "attackBonus": 100, "damageBonus": 5 };
+					service.resolveAttack( log, attacker, defender, weapon, false );
+					// Immune on a hit, and untouched on a (rare) fumble — either way, no damage.
+					expect( defender.hitPoints ).toBe( 500 );
+				} );
+
+				it( "doubles damage against a vulnerable damage type", () => {
+					// A 1-sided die always rolls 1, so a normal hit deals exactly 1 damage;
+					// Vulnerability doubles that to 2. A fumble (no hit at all) leaves HP untouched.
+					var log = [];
+					var attacker = { "name": "Attacker" };
+					var defender = makeCombatant( 0, 0, { "armorClass": 1, "vulnerabilities": [ "Bludgeoning" ] } );
+					var weapon = { "name": "Club", "damageDice": "1d1", "damageType": "Bludgeoning", "attackBonus": 100, "damageBonus": 0 };
+					service.resolveAttack( log, attacker, defender, weapon, false );
+					expect( defender.hitPoints == 500 || defender.hitPoints == 498 ).toBeTrue();
+				} );
+
+				it( "rolls damage dice twice on a natural 20 (Critical Hit)", () => {
+					// A 1-sided die always rolls 1: normal hit = 1+0 = 1 damage, critical = 2+0 = 2 damage.
+					// Force the crit deterministically isn't possible without mocking, so run enough
+					// trials that at least one natural 20 (1-in-20) is virtually guaranteed to appear,
+					// and confirm at least one trial took exactly the critical amount.
+					var sawCritDamage = false;
+					for ( var i = 1; i <= 200; i++ ) {
+						var log = [];
+						var attacker = { "name": "Attacker" };
+						var defender = makeCombatant( 0, 0, { "armorClass": 1 } );
+						var weapon = { "name": "Club", "damageDice": "1d1", "damageType": "Bludgeoning", "attackBonus": 0, "damageBonus": 0 };
+						service.resolveAttack( log, attacker, defender, weapon, false );
+						if ( ( 500 - defender.hitPoints ) == 2 ) {
+							sawCritDamage = true;
+							break;
+						}
+					}
+					expect( sawCritDamage ).toBeTrue();
+				} );
+			} );
+
+			describe( "playerDecideAndAct() / runEnemyTurn() / endPlayerTurn() turn bookkeeping", () => {
+				function makeState(){
+					return {
+						"player": makeCombatant( 1, 1, {
+							"characterId": -1, // no such row — these tests never reduce HP to 0, so awardExperience() never fires
+							"name": "Test Hero",
+							"inventory": [ { "name": "Greatsword", "category": "melee", "damageDice": "2d6", "damageType": "Slashing", "attackBonus": 100, "damageBonus": 2, "equipped": true } ]
+						} ),
+						"opponent": makeCombatant( 20, 20, {
+							"name": "Test Dummy",
+							"xp": 10,
+							"inventory": [ { "name": "Club", "category": "melee", "damageDice": "1d4", "damageType": "Bludgeoning", "attackBonus": 100, "damageBonus": 1, "equipped": true } ]
+						} ),
+						"movementRemaining": 6,
+						"actionUsed": false,
+						"gameOver": false,
+						"outcome": "",
+						"log": [],
+						"round": 1,
+						"currentTurn": "player"
+					};
+				}
+
+				it( "advances the player toward the opponent when not adjacent, without attacking", () => {
+					var state = makeState();
+					service.playerDecideAndAct( state );
+					// Distance starts at 19 (Chebyshev), farther than the 6-square move budget.
+					expect( state.movementRemaining ).toBe( 0 );
+					expect( state.player.position.x ).toBe( 7 );
+					expect( state.player.position.y ).toBe( 7 );
+					expect( state.actionUsed ).toBeFalse();
+				} );
+
+				it( "attacks instead of moving once adjacent", () => {
+					var state = makeState();
+					state.player.position = { "x": 19, "y": 20 };
+					service.playerDecideAndAct( state );
+					expect( state.actionUsed ).toBeTrue();
+					expect( state.player.position.x ).toBe( 19 );
+					expect( state.log.len() ).toBe( 1 );
+				} );
+
+				it( "hands off to the enemy and resets for the next player turn", () => {
+					var state = makeState();
+					state.currentTurn = "enemy";
+					service.endPlayerTurn( state );
+					expect( state.round ).toBe( 2 );
+					expect( state.currentTurn ).toBe( "player" );
+					expect( state.actionUsed ).toBeFalse();
+					expect( state.movementRemaining ).toBe( 6 );
+					expect( state.gameOver ).toBeFalse();
+				} );
+
+				it( "runEnemyTurn() closes the distance and attacks once adjacent", () => {
+					var state = makeState();
+					state.opponent.position = { "x": 2, "y": 1 };
+					service.runEnemyTurn( state );
+					expect( state.log.len() ).toBeGTE( 1 );
+				} );
+			} );
+
+		} );
+	}
+
+}

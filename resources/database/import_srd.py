@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Parses classes.md, feats.md, and magic-items.md from the dnd-5e-srd-markdown
-repo and emits a SQL seed file for the `gameserver` MySQL schema defined in
+Parses classes.md, feats.md, magic-items.md, monsters-A-Z.md, spells.md, and
+equipment.md from the dnd-5e-srd-markdown repo and emits a SQL seed file for
+the `gameserver` MySQL schema defined in
 resources/database/migrations/001_srd_schema.sql.
 
 Usage:
@@ -361,6 +362,347 @@ def emit_magic_items_sql(items, out):
 
 
 # --------------------------------------------------------------------------
+# Monsters
+# --------------------------------------------------------------------------
+
+# Unicode minus (U+2212) is used in the SRD stat tables; normalize to ASCII.
+def parse_signed_int(text):
+    """Convert '+5', '−2', '+0', '−0' etc. to a Python int."""
+    if text is None:
+        return None
+    text = text.strip().replace("−", "-").replace("−", "-")
+    try:
+        return int(text)
+    except ValueError:
+        return None
+
+
+MONSTER_AC_RE = re.compile(r"\*\*AC\*\*\s+(\d+).*?\*\*Initiative\*\*\s+([+\-−–]\d+)\s+\((\d+)\)")
+MONSTER_HP_RE = re.compile(r"\*\*HP\*\*\s+(\d+)\s+\(([^)]+)\)")
+MONSTER_SPEED_RE = re.compile(r"\*\*Speed\*\*\s+(.+?)(?:\s*<br>|$)", re.MULTILINE)
+MONSTER_CR_RE = re.compile(r"\*\*CR\*\*\s+(\S+)\s+\(XP\s+([\d,]+).*?PB\s+\+(\d+)\)", re.IGNORECASE)
+MONSTER_BOLD_RE = re.compile(r"^\*\*(\w[\w\s]*?)\*\*\s+(.+?)(?:<br>|$)", re.MULTILINE)
+
+ABILITY_ORDER = ["str", "dex", "con", "int_score", "wis", "cha"]
+
+
+def parse_ability_table(text):
+    """Extract ability scores and saves from the stat block HTML table."""
+    table_m = re.search(r"<table>.*?</table>", text, re.DOTALL)
+    if not table_m:
+        return {}
+    cells = re.findall(r"<td>(.*?)</td>", table_m.group(0), re.DOTALL)
+    # Each ability occupies 4 cells: label, score, mod, save. There are 6 abilities.
+    # The label cells contain <strong>STR</strong> etc.
+    result = {}
+    ability_cells = [c.strip() for c in cells]
+    # Strip HTML tags from labels to get raw content, then group by 4
+    i = 0
+    ability_idx = 0
+    while i + 3 < len(ability_cells) and ability_idx < 6:
+        label = re.sub(r"<.*?>", "", ability_cells[i]).strip()
+        score_text = re.sub(r"<.*?>", "", ability_cells[i + 1]).strip()
+        save_text = re.sub(r"<.*?>", "", ability_cells[i + 3]).strip()
+        if label.upper() in ("STR", "DEX", "CON", "INT", "WIS", "CHA"):
+            key = ABILITY_ORDER[ability_idx]
+            save_key = key.replace("_score", "") + "_save"
+            try:
+                result[key] = int(score_text)
+            except ValueError:
+                result[key] = None
+            result[save_key] = parse_signed_int(save_text)
+            ability_idx += 1
+            i += 4
+        else:
+            i += 1
+    return result
+
+
+def parse_monster_section(text, heading):
+    """Extract the body of a #### section (e.g. '#### Traits') from a stat block."""
+    pattern = re.compile(r"^#### " + re.escape(heading) + r"\s*\n(?:<hr>\s*\n)?(.+?)(?=\n#### |\Z)", re.MULTILINE | re.DOTALL)
+    m = pattern.search(text)
+    return clean_block(m.group(1)) if m else None
+
+
+def parse_monster_stat_block(group_name, name, text):
+    """Parse a single ### stat block into a dict."""
+    monster = {"group_name": group_name, "name": name}
+
+    # _Size Type, Alignment_
+    subtitle_m = re.search(r"^_(.+?)_", text, re.MULTILINE)
+    if subtitle_m:
+        parts = subtitle_m.group(1).split(",", 1)
+        size_type = parts[0].strip()
+        # The size is the first word; the rest is creature type.
+        size_words = size_type.split()
+        monster["size"] = size_words[0] if size_words else None
+        monster["creature_type"] = " ".join(size_words[1:]) if len(size_words) > 1 else None
+        monster["alignment"] = parts[1].strip() if len(parts) > 1 else None
+    else:
+        monster["size"] = monster["creature_type"] = monster["alignment"] = None
+
+    ac_m = MONSTER_AC_RE.search(text)
+    if ac_m:
+        monster["armor_class"] = int(ac_m.group(1))
+        monster["initiative_modifier"] = parse_signed_int(ac_m.group(2))
+        monster["initiative_score"] = int(ac_m.group(3))
+    else:
+        monster["armor_class"] = monster["initiative_modifier"] = monster["initiative_score"] = None
+
+    hp_m = MONSTER_HP_RE.search(text)
+    if hp_m:
+        monster["hit_points"] = int(hp_m.group(1))
+        monster["hit_dice"] = hp_m.group(2).strip()
+    else:
+        monster["hit_points"] = monster["hit_dice"] = None
+
+    speed_m = MONSTER_SPEED_RE.search(text)
+    monster["speed"] = clean_inline(speed_m.group(1)) if speed_m else None
+
+    monster.update(parse_ability_table(text))
+
+    # Optional bold-prefixed detail lines
+    for label, value in MONSTER_BOLD_RE.findall(text):
+        key = label.strip().lower()
+        val = clean_inline(re.sub(r"<.*?>", "", value))
+        if key == "skills":
+            monster["skills"] = val
+        elif key == "resistances":
+            monster["resistances"] = val
+        elif key == "immunities":
+            monster["immunities"] = val
+        elif key == "vulnerabilities":
+            monster["vulnerabilities"] = val
+        elif key == "gear":
+            monster["gear"] = val
+        elif key == "senses":
+            monster["senses"] = val
+        elif key == "languages":
+            monster["languages"] = val
+
+    cr_m = MONSTER_CR_RE.search(text)
+    if cr_m:
+        monster["cr"] = cr_m.group(1)
+        monster["xp"] = int(cr_m.group(2).replace(",", ""))
+        monster["proficiency_bonus"] = int(cr_m.group(3))
+    else:
+        monster["cr"] = monster["xp"] = monster["proficiency_bonus"] = None
+
+    for section in ("Traits", "Actions", "Bonus Actions", "Reactions", "Legendary Actions"):
+        key = section.lower().replace(" ", "_") + "_text"
+        monster[key] = parse_monster_section(text, section)
+
+    return monster
+
+
+def parse_monsters(srd_path):
+    raw = (srd_path / "monsters-A-Z.md").read_text(encoding="utf-8")
+    monsters = []
+
+    for group_name, group_body in split_sections(raw, "## "):
+        if not group_name:
+            continue
+        for variant_name, variant_body in split_sections(group_body, "### "):
+            if not variant_name:
+                continue
+            monsters.append(parse_monster_stat_block(
+                clean_inline(group_name),
+                clean_inline(variant_name),
+                variant_body,
+            ))
+
+    return monsters
+
+
+def emit_monsters_sql(monsters, out):
+    out.write("\n-- monsters --------------------------------------------------------------\n")
+    for m in monsters:
+        cols = (
+            "group_name, name, size, creature_type, alignment, "
+            "armor_class, initiative_modifier, initiative_score, hit_points, hit_dice, speed, "
+            "str, dex, con, int_score, wis, cha, "
+            "str_save, dex_save, con_save, int_save, wis_save, cha_save, "
+            "skills, resistances, immunities, vulnerabilities, gear, senses, languages, "
+            "cr, xp, proficiency_bonus, "
+            "traits_text, actions_text, bonus_actions_text, reactions_text, legendary_actions_text"
+        )
+
+        def v(key):
+            val = m.get(key)
+            if val is None:
+                return "NULL"
+            if isinstance(val, (int, float)):
+                return str(val)
+            return sql_escape(val)
+
+        vals = ", ".join(v(k) for k in [
+            "group_name", "name", "size", "creature_type", "alignment",
+            "armor_class", "initiative_modifier", "initiative_score", "hit_points", "hit_dice", "speed",
+            "str", "dex", "con", "int_score", "wis", "cha",
+            "str_save", "dex_save", "con_save", "int_save", "wis_save", "cha_save",
+            "skills", "resistances", "immunities", "vulnerabilities", "gear", "senses", "languages",
+            "cr", "xp", "proficiency_bonus",
+            "traits_text", "actions_text", "bonus_actions_text", "reactions_text", "legendary_actions_text",
+        ])
+        out.write(f"INSERT INTO monsters ({cols}) VALUES ({vals});\n")
+
+
+# --------------------------------------------------------------------------
+# Spells
+# --------------------------------------------------------------------------
+
+SPELL_SUBTITLE_RE = re.compile(r"^_(?:Level (\d+)|(\w+) Cantrip)\s+(\w+)\s+\(([^)]+)\)_", re.MULTILINE)
+# Handles both "**Label:** Value" (colon inside bold) and "**Label**: Value" (outside).
+SPELL_FIELD_RE = re.compile(r"^\*\*([^*:]+):?\*\*:?\s+(.+)$", re.MULTILINE)
+HIGHER_LEVEL_RE = re.compile(r"_Using a Higher-Level Spell Slot\._\s*(.+?)(?=\n\n|\Z)", re.DOTALL)
+
+
+def parse_spells(srd_path):
+    raw = (srd_path / "spells.md").read_text(encoding="utf-8")
+
+    descriptions_marker = "## Spell Descriptions"
+    idx = raw.find(descriptions_marker)
+    if idx == -1:
+        raise RuntimeError("Could not find '## Spell Descriptions' in spells.md")
+    az_text = raw[idx:]
+
+    spells = []
+    for spell_name, spell_body in split_sections(az_text, "#### "):
+        if not spell_name or spell_name.strip() == "Spell Descriptions":
+            continue
+
+        subtitle_m = SPELL_SUBTITLE_RE.search(spell_body)
+        if not subtitle_m:
+            continue
+
+        level_str = subtitle_m.group(1)
+        is_cantrip = subtitle_m.group(2) is not None
+        school = subtitle_m.group(3) if not is_cantrip else subtitle_m.group(2)
+        classes = subtitle_m.group(4)
+        level = 0 if is_cantrip else int(level_str)
+
+        fields = {}
+        for field_name, field_val in SPELL_FIELD_RE.findall(spell_body):
+            fields[field_name.strip().lower()] = clean_inline(field_val)
+
+        higher_m = HIGHER_LEVEL_RE.search(spell_body)
+        higher_level_text = clean_block(higher_m.group(1)) if higher_m else None
+
+        # Strip the subtitle, bold field lines, and higher-level note from the description.
+        desc = spell_body[subtitle_m.end():]
+        desc = SPELL_FIELD_RE.sub("", desc)
+        desc = HIGHER_LEVEL_RE.sub("", desc)
+        desc = clean_block(desc)
+
+        spells.append({
+            "name": clean_inline(spell_name),
+            "level": level,
+            "school": clean_inline(school),
+            "classes": clean_inline(classes),
+            "casting_time": fields.get("casting time"),
+            "range": fields.get("range"),
+            "components": fields.get("components"),
+            "duration": fields.get("duration"),
+            "description": desc,
+            "higher_level_text": higher_level_text,
+        })
+
+    return spells
+
+
+def emit_spells_sql(spells, out):
+    out.write("\n-- spells ----------------------------------------------------------------\n")
+    for spell in spells:
+        out.write(
+            "INSERT INTO spells "
+            "(name, level, school, classes, casting_time, `range`, components, duration, description, higher_level_text) VALUES "
+            f"({sql_escape(spell['name'])}, {spell['level']}, {sql_escape(spell['school'])}, "
+            f"{sql_escape(spell['classes'])}, {sql_escape(spell['casting_time'])}, "
+            f"{sql_escape(spell['range'])}, {sql_escape(spell['components'])}, "
+            f"{sql_escape(spell['duration'])}, {sql_escape(spell['description'])}, "
+            f"{sql_escape(spell['higher_level_text'])});\n"
+        )
+
+
+# --------------------------------------------------------------------------
+# Weapons
+# --------------------------------------------------------------------------
+
+WEAPON_TABLE_RE = re.compile(r"\*\*Weapons\*\*\s*\n<table>(.*?)</table>", re.DOTALL)
+WEAPON_SUBTYPE_RE = re.compile(r"<th colspan[^>]*><em>([^<]+)</em></th>")
+
+
+def parse_weapons(srd_path):
+    raw = (srd_path / "equipment.md").read_text(encoding="utf-8")
+
+    table_m = WEAPON_TABLE_RE.search(raw)
+    if not table_m:
+        raise RuntimeError("Could not find Weapons table in equipment.md")
+
+    weapons = []
+    current_category = "Simple"
+    current_type = "Melee"
+
+    rows = re.split(r"<tr>", table_m.group(1))
+    for row in rows:
+        subtype_m = WEAPON_SUBTYPE_RE.search(row)
+        if subtype_m:
+            label = subtype_m.group(1).strip()
+            if "Martial" in label:
+                current_category = "Martial"
+            else:
+                current_category = "Simple"
+            current_type = "Ranged" if "Ranged" in label else "Melee"
+            continue
+
+        cells = re.findall(r"<td>(.*?)</td>", row, re.DOTALL)
+        if len(cells) < 6:
+            continue
+
+        def cell(i):
+            return clean_inline(re.sub(r"<.*?>", "", cells[i])) or None
+
+        name = cell(0)
+        if not name:
+            continue
+
+        damage_raw = cell(1) or ""
+        # e.g. "1d6 Piercing" or "2d6 Slashing"
+        damage_m = re.match(r"(\d+d\d+(?:\s*/\s*\d+d\d+)?)\s+(\w+)", damage_raw)
+        damage_dice = damage_m.group(1) if damage_m else None
+        damage_type = damage_m.group(2) if damage_m else None
+
+        weapons.append({
+            "name": name,
+            "category": current_category,
+            "weapon_type": current_type,
+            "damage": damage_raw,
+            "damage_dice": damage_dice,
+            "damage_type": damage_type,
+            "properties": cell(2),
+            "mastery": cell(3),
+            "weight": cell(4),
+            "cost": cell(5),
+        })
+
+    return weapons
+
+
+def emit_weapons_sql(weapons, out):
+    out.write("\n-- weapons ---------------------------------------------------------------\n")
+    for w in weapons:
+        out.write(
+            "INSERT INTO weapons "
+            "(name, category, weapon_type, damage, damage_dice, damage_type, properties, mastery, weight, cost) VALUES "
+            f"({sql_escape(w['name'])}, {sql_escape(w['category'])}, {sql_escape(w['weapon_type'])}, "
+            f"{sql_escape(w['damage'])}, {sql_escape(w['damage_dice'])}, {sql_escape(w['damage_type'])}, "
+            f"{sql_escape(w['properties'])}, {sql_escape(w['mastery'])}, {sql_escape(w['weight'])}, "
+            f"{sql_escape(w['cost'])});\n"
+        )
+
+
+# --------------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -371,6 +713,9 @@ def main():
     classes = parse_classes(args.srd_path)
     feats = parse_feats(args.srd_path)
     items = parse_magic_items(args.srd_path)
+    monsters = parse_monsters(args.srd_path)
+    spells = parse_spells(args.srd_path)
+    weapons = parse_weapons(args.srd_path)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     with args.out.open("w", encoding="utf-8") as out:
@@ -380,9 +725,15 @@ def main():
         emit_classes_sql(classes, out)
         emit_feats_sql(feats, out)
         emit_magic_items_sql(items, out)
+        emit_monsters_sql(monsters, out)
+        emit_spells_sql(spells, out)
+        emit_weapons_sql(weapons, out)
 
-    print(f"Parsed {len(classes)} classes, {sum(len(c['features']) for c in classes)} class features, "
-          f"{sum(1 for c in classes if c['subclass'])} subclasses, {len(feats)} feats, {len(items)} magic items.")
+    print(
+        f"Parsed {len(classes)} classes, {sum(len(c['features']) for c in classes)} class features, "
+        f"{sum(1 for c in classes if c['subclass'])} subclasses, {len(feats)} feats, {len(items)} magic items, "
+        f"{len(monsters)} monsters, {len(spells)} spells, {len(weapons)} weapons."
+    )
     print(f"Wrote SQL seed file to {args.out}")
 
 

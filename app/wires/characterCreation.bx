@@ -1,0 +1,195 @@
+class extends="cbwire.models.Component" {
+
+	/**
+	 * Character creation wizard, stepping through the SRD's official 5-step
+	 * process (Character Creation): Class, Origin (species/background),
+	 * Ability Scores, Alignment, then Details (name) and creation. Only
+	 * Class and Ability Scores feed real mechanics via CharacterService;
+	 * species/background/alignment are recorded as flavor choices.
+	 */
+	property name="characterService" inject="CharacterService";
+
+	data = {
+		"step": 1,
+		"totalSteps": 5,
+
+		"classes": [],
+		"selectedClassId": "",
+
+		"speciesOptions": [ "Dragonborn", "Dwarf", "Elf", "Gnome", "Goliath", "Halfling", "Human", "Orc", "Tiefling" ],
+		"selectedSpecies": "",
+		"backgroundOptions": [ "Acolyte", "Criminal", "Sage", "Soldier" ],
+		"selectedBackground": "",
+
+		// Standard Array (Ability Scores step): each value is assigned to
+		// exactly one ability, in STR/DEX/CON/INT/WIS/CHA order as clicked.
+		"abilityOrder": [ "str", "dex", "con", "int", "wis", "cha" ],
+		"standardArray": [ 15, 14, 13, 12, 10, 8 ],
+		"assignedScores": {},
+
+		"alignmentOptions": [
+			"Lawful Good", "Neutral Good", "Chaotic Good",
+			"Lawful Neutral", "True Neutral", "Chaotic Neutral",
+			"Lawful Evil", "Neutral Evil", "Chaotic Evil"
+		],
+		"selectedAlignment": "",
+
+		"characterName": "",
+		"createdCharacterId": "",
+		"formError": ""
+	}
+
+	/**
+	 * Loads the class list for step 1.
+	 */
+	function onMount( event, rc, prc, params ) {
+		var rows = characterService.listClasses();
+		var classes = [];
+		for ( var row in rows ) {
+			arrayAppend( classes, {
+				"id": row.id,
+				"name": row.name,
+				"primaryAbility": row.primary_ability,
+				"hitDie": row.hit_die,
+				"savingThrows": row.saving_throw_proficiencies,
+				"startingEquipment": row.starting_equipment
+			} );
+		}
+		variables.data.classes = classes;
+	}
+
+	/**
+	 * View helper: looks up a class's name by id from the loaded class list.
+	 * Public so it's exposed to the template (CBWIRE adds every non-computed
+	 * public method to the view's scope).
+	 */
+	function selectedClassName( classes, classId ) {
+		for ( var cls in arguments.classes ) {
+			if ( cls.id == arguments.classId ) {
+				return cls.name;
+			}
+		}
+		return "";
+	}
+
+	/**
+	 * Step 1: Choose Class.
+	 */
+	function selectClass( classId ) {
+		variables.data.selectedClassId = arguments.classId;
+		variables.data.formError = "";
+	}
+
+	/**
+	 * Step 2: Character Origin.
+	 */
+	function selectSpecies( species ) {
+		variables.data.selectedSpecies = arguments.species;
+		variables.data.formError = "";
+	}
+
+	function selectBackground( background ) {
+		variables.data.selectedBackground = arguments.background;
+		variables.data.formError = "";
+	}
+
+	/**
+	 * Step 3: Ability Scores. Assigns the next available Standard Array
+	 * value to the next not-yet-assigned ability, in a fixed order.
+	 */
+	function assignScore( value ) {
+		for ( var ability in variables.data.abilityOrder ) {
+			if ( !structKeyExists( variables.data.assignedScores, ability ) ) {
+				variables.data.assignedScores[ ability ] = arguments.value;
+				arrayDelete( variables.data.standardArray, arguments.value );
+				variables.data.formError = "";
+				return;
+			}
+		}
+	}
+
+	function resetScores() {
+		variables.data.assignedScores = {};
+		variables.data.standardArray = [ 15, 14, 13, 12, 10, 8 ];
+	}
+
+	/**
+	 * Step 4: Alignment.
+	 */
+	function selectAlignment( alignment ) {
+		variables.data.selectedAlignment = arguments.alignment;
+		variables.data.formError = "";
+	}
+
+	/**
+	 * Advances to the next step, validating the current one first.
+	 */
+	function nextStep() {
+		var validationError = _validateStep( variables.data.step );
+		if ( len( validationError ) ) {
+			variables.data.formError = validationError;
+			return;
+		}
+		variables.data.formError = "";
+		if ( variables.data.step < variables.data.totalSteps ) {
+			variables.data.step += 1;
+		}
+	}
+
+	function previousStep() {
+		variables.data.formError = "";
+		if ( variables.data.step > 1 ) {
+			variables.data.step -= 1;
+		}
+	}
+
+	/**
+	 * Step 5: Details + creation. Validates the name, then persists the
+	 * character (and its starting equipment) via CharacterService.
+	 */
+	function createCharacter() {
+		var validationError = _validateStep( 5 );
+		if ( len( validationError ) ) {
+			variables.data.formError = validationError;
+			return;
+		}
+
+		var scores = variables.data.assignedScores;
+		variables.data.createdCharacterId = characterService.createCharacter(
+			name = variables.data.characterName,
+			classId = variables.data.selectedClassId,
+			str = scores.str, dex = scores.dex, con = scores.con,
+			intScore = scores.int, wis = scores.wis, cha = scores.cha,
+			species = variables.data.selectedSpecies,
+			background = variables.data.selectedBackground,
+			alignment = variables.data.selectedAlignment
+		);
+		variables.data.formError = "";
+	}
+
+	/**
+	 * Validates that the given step's required choice(s) have been made.
+	 * Returns an empty string if valid, or an error message.
+	 */
+	private function _validateStep( step ) {
+		switch ( arguments.step ) {
+			case 1:
+				return len( variables.data.selectedClassId ) ? "" : "Choose a class to continue.";
+			case 2:
+				if ( !len( variables.data.selectedSpecies ) ) {
+					return "Choose a species to continue.";
+				}
+				return len( variables.data.selectedBackground ) ? "" : "Choose a background to continue.";
+			case 3:
+				return ( structCount( variables.data.assignedScores ) == 6 )
+					? ""
+					: "Assign all six ability scores to continue.";
+			case 4:
+				return len( variables.data.selectedAlignment ) ? "" : "Choose an alignment to continue.";
+			case 5:
+				return len( trim( variables.data.characterName ) ) ? "" : "Give your character a name.";
+		}
+		return "";
+	}
+
+}

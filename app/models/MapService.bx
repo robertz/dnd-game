@@ -1,0 +1,247 @@
+/**
+ * Level definitions for the grid encounter — separate from CombatService (the
+ * rules engine) since "what a level looks like" is content, not mechanics.
+ *
+ * A level is authored as an ASCII grid (an array of equal-length row strings)
+ * plus explicit spawn points, then parsed into the `{width, height, tiles,
+ * decorations, playerSpawn, opponentSpawn}` struct the rest of the app
+ * consumes. Both `tiles` and `decorations` are indexed `[row][col]` (row = y,
+ * col = x, both 1-based), matching the grid-rendering loop's `row`/`col`
+ * order in default.bxm.
+ *
+ * `tiles` holds only `"wall"` or `"floor"` — the two values CombatService's
+ * pathfinding/line-of-sight logic actually cares about. `decorations` is a
+ * separate, purely cosmetic layer (which specific art a cell renders with,
+ * e.g. a torch-lit wall vs. a plain one) so adding more dungeon dressing never
+ * risks changing walkability. The ASCII legend:
+ *   `#` wall (plain)         `.` floor (plain)
+ *   `^` wall + torch         `O` wall + pillar (still blocks movement/sight)
+ *   `D` floor + door         `x` floor + spikes (hazard flavor only, no trap logic yet)
+ *   `c` floor + chest
+ */
+class singleton {
+
+	// Maps an ASCII legend character to its {tile, decoration} meaning.
+	// Anything not listed here is treated as plain "#" (wall) or "." (floor).
+	TILE_LEGEND = {
+		"##": { "tile": "wall", "decoration": "" },
+		".": { "tile": "floor", "decoration": "" },
+		"^": { "tile": "wall", "decoration": "torch" },
+		"O": { "tile": "wall", "decoration": "pillar" },
+		"D": { "tile": "floor", "decoration": "door" },
+		"x": { "tile": "floor", "decoration": "spikes" },
+		"c": { "tile": "floor", "decoration": "chest" }
+	};
+
+	/**
+	 * Returns the named level, parsed and ready to use. Falls back to
+	 * "openField" (a plain walls-free room) for an unknown name, so callers
+	 * never have to null-check.
+	 *
+	 * @name The level's name (see LEVELS below).
+	 */
+	function getLevel( name ) {
+		var levels = _levels();
+		var definition = levels.keyExists( arguments.name ) ? levels[ arguments.name ] : levels[ "openField" ];
+		return _parseAsciiLevel( definition.rows, definition.playerSpawn, definition.opponentSpawn );
+	}
+
+	/**
+	 * Level definitions, as ASCII rows + spawn points. Kept as a function
+	 * (not a class-body constant) purely so the large ASCII literals don't
+	 * clutter the top of the file.
+	 */
+	private function _levels() {
+		return {
+			// A plain 20x20 open room, no walls — the original encounter layout,
+			// kept as the fallback/default level.
+			"openField": {
+				"rows": _repeatRow( ".", 20, 20 ),
+				"playerSpawn": { "x": 10, "y": 10 },
+				"opponentSpawn": { "x": 5, "y": 5 }
+			},
+			// Top and bottom chambers split by a horizontal wall at row 10,
+			// connected only by a 2-tile gap at columns 2-3 (far from either
+			// spawn) — exercises wall-aware pathfinding. A single-column
+			// vertical wall with a same-row gap can't force a real detour: if
+			// nothing else blocks that row, the gap is open along its entire
+			// width, so any path already crossing that row passes through for
+			// free. A full-width horizontal wall with a narrow gap actually
+			// funnels every crossing through one place.
+			"ruinedCrypt": {
+				// Literal "#" must be escaped to "##" in a BoxLang string
+				// literal — an unescaped "#" starts an interpolation
+				// expression, the same rule as bx:output templates, and it
+				// applies here in plain .bx script string literals too.
+				"rows": [
+					"########################################",
+					"##..................##",
+					"##..................##",
+					"##..................##",
+					"##..................##",
+					"##..................##",
+					"##..................##",
+					"##..................##",
+					"##..................##",
+					"##..##################################",
+					"##..................##",
+					"##..................##",
+					"##..................##",
+					"##..................##",
+					"##..................##",
+					"##..................##",
+					"##..................##",
+					"##..................##",
+					"##..................##",
+					"########################################"
+				],
+				// Both spawns sit near the right edge, far from the gap at
+				// columns 2-3 — a straight line between them would hit the
+				// row-10 wall, so reaching the other chamber requires
+				// detouring left to the gap and back, not just luck.
+				"playerSpawn": { "x": 18, "y": 5 },
+				"opponentSpawn": { "x": 18, "y": 15 }
+			},
+			// A proper multi-room dungeon: two small chambers up top (an
+			// Entrance Hall and a side Chamber) joined directly by a corridor
+			// across row 4, each also dropping via its own corridor into one
+			// large Great Hall below — so there are two different routes
+			// between the top rooms (the direct one, or via the Great Hall),
+			// and a two-tile pillar in the Great Hall blocks both movement and
+			// ranged line of sight through its own square.
+			"shatteredHalls": {
+				"rows": [
+					"########################################",
+					"##......##########......####",
+					"##......##########......####",
+					"##.................####",
+					"##......##########......####",
+					"##......##########......####",
+					"##......##########......####",
+					"######.######################.########",
+					"######.######################.########",
+					"######.######################.########",
+					"######.######################.########",
+					"##.................####",
+					"##.................####",
+					"##.................####",
+					"##........##........####",
+					"##........##........####",
+					"##.................####",
+					"##.................####",
+					"########################################",
+					"########################################"
+				],
+				// Entrance Hall (top-left) to the Great Hall's far corridor
+				// mouth (top-right, beyond the pillar) — neither the direct
+				// top corridor nor the Great Hall route is a straight line, so
+				// both wall-avoiding movement and pillar line-of-sight blocking
+				// come into play.
+				"playerSpawn": { "x": 4, "y": 4 },
+				"opponentSpawn": { "x": 16, "y": 15 }
+			},
+			// A large, six-room dungeon (40x30): three small upper chambers
+			// (Entrance Hall, Armory, Library) joined by a corridor along row
+			// 5, each with its own corridor dropping into one big Great Hall
+			// spanning the middle, which in turn drops via two more corridors
+			// into a Treasure Vault and a Throne Room at the bottom. Three
+			// pillars spaced across the Great Hall block both movement and
+			// ranged line of sight through their own squares. Doors mark every
+			// room-to-room threshold, torches flank the upper rooms' entrances,
+			// spikes flavor the floor near the pillars, and a chest sits in
+			// the Treasure Vault.
+			"grandDungeon": {
+				"rows": [
+					"################################################################################",
+					"##........##########........############..........####",
+					"##........##########........############..........####",
+					"##........##########........############..........####",
+					"##^......^..D..^......^..D...^........^####",
+					"##........##########........############..........####",
+					"##........##########........############..........####",
+					"##........##########........############..........####",
+					"########.########################.############################.##############",
+					"########.########################.############################.##############",
+					"########.########################.############################.##############",
+					"########.########################.############################.##############",
+					"##.....................................####",
+					"##.....................................####",
+					"##.....................................####",
+					"##..........Ox......O......xO..........####",
+					"##.....................................####",
+					"##.....................................####",
+					"##.....................................####",
+					"##.....................................####",
+					"##############.##############################################.################",
+					"##############D##############################################D################",
+					"##############.##############################################.################",
+					"######.........##############################..........######",
+					"######.........##############################..........######",
+					"######....c....##############################..........######",
+					"######.........##############################..........######",
+					"######.........##############################..........######",
+					"################################################################################",
+					"################################################################################"
+				],
+				// Entrance Hall (top-left) to the Throne Room (bottom-right) —
+				// the far opposite corners of the dungeon, forcing a long route
+				// down through the Great Hall and its pillars.
+				"playerSpawn": { "x": 5, "y": 5 },
+				"opponentSpawn": { "x": 32, "y": 26 }
+			}
+		};
+	}
+
+	/**
+	 * Builds a walls-free rectangular room's ASCII rows (all floor).
+	 */
+	private function _repeatRow( tileChar, width, height ) {
+		var row = "";
+		for ( var i = 1; i <= arguments.width; i++ ) {
+			row &= arguments.tileChar;
+		}
+		var rows = [];
+		for ( var i = 1; i <= arguments.height; i++ ) {
+			arrayAppend( rows, row );
+		}
+		return rows;
+	}
+
+	/**
+	 * Parses ASCII rows (see the class doc-comment's legend) into the
+	 * {width, height, tiles, decorations, playerSpawn, opponentSpawn} struct
+	 * the rest of the app uses. Every row must be the same length; that
+	 * length is the level's width.
+	 */
+	private function _parseAsciiLevel( rows, playerSpawn, opponentSpawn ) {
+		var height = arguments.rows.len();
+		var width = len( arguments.rows[ 1 ] );
+		var tiles = [];
+		var decorations = [];
+		for ( var y = 1; y <= height; y++ ) {
+			var rowText = arguments.rows[ y ];
+			if ( len( rowText ) != width ) {
+				throw( type = "InvalidLevel", message = "Row #y# has length #len( rowText )#, expected #width# (every row must match the first row's length)." );
+			}
+			var tileRow = [];
+			var decorationRow = [];
+			for ( var x = 1; x <= width; x++ ) {
+				var symbol = mid( rowText, x, 1 );
+				var meaning = TILE_LEGEND.keyExists( symbol ) ? TILE_LEGEND[ symbol ] : TILE_LEGEND[ "." ];
+				arrayAppend( tileRow, meaning.tile );
+				arrayAppend( decorationRow, meaning.decoration );
+			}
+			arrayAppend( tiles, tileRow );
+			arrayAppend( decorations, decorationRow );
+		}
+		return {
+			"width": width,
+			"height": height,
+			"tiles": tiles,
+			"decorations": decorations,
+			"playerSpawn": { "x": arguments.playerSpawn.x, "y": arguments.playerSpawn.y },
+			"opponentSpawn": { "x": arguments.opponentSpawn.x, "y": arguments.opponentSpawn.y }
+		};
+	}
+
+}

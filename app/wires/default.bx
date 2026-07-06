@@ -1,7 +1,346 @@
 class extends="cbwire.models.Component" {
 
+	/**
+	 * The rules engine — attack resolution, movement, weapon selection, XP
+	 * awarding. This component only holds the `data` struct that drives
+	 * rendering and the wire:click action handlers; the actual game mechanics
+	 * live in CombatService so they can be tested and reused independently
+	 * of this wire's reactive data-binding.
+	 */
+	property name="combatService" inject="CombatService";
+	property name="mapService" inject="MapService";
+
+	// How far (in squares) the visible viewport extends from the player in
+	// each direction — a 15x15 window, regardless of how large the level's
+	// actual grid is. Keeps rendering (and the DOM) bounded to what's on
+	// screen instead of the whole map, which matters once a level is bigger
+	// than a single screenful (e.g. the 40x30 grandDungeon).
+	VIEWPORT_RADIUS = 7;
+
+	/**
+	 * The player character is loaded from the gameserver `characters` schema
+	 * (see onMount()) rather than hardcoded here — this is just a placeholder
+	 * so "player" exists as a data property before the component mounts.
+	 * Skeleton stats are taken directly from the SRD monster stat block.
+	 */
 	data = {
-		"message": "hello world"
+		// Placeholder — replaced with a real level (tiles, spawn points) from
+		// MapService in onMount(). Keeping a plain width/height here means
+		// "grid" exists as a data property before the component mounts.
+		"grid": {
+			"width": 20,
+			"height": 20
+		},
+		"player": {},
+		"opponent": {
+			"name": "Skeleton",
+			"creatureType": "Undead",
+			// CR 1/4 (XP 50), per its SRD stat block.
+			"xp": 50,
+			"armorClass": 14,
+			"hitPoints": 13,
+			"maxHitPoints": 13,
+			"speed": 30,
+			"abilityScores": { "str": 10, "dex": 16, "con": 15, "int": 6, "wis": 8, "cha": 5 },
+			// Per its SRD stat block: Gear is Shortbow, Shortsword, and it has
+			// both a Shortsword and a Shortbow action (range 80/320 ft -> 16/64 squares).
+			"inventory": [
+				{
+					"name": "Shortsword",
+					"category": "melee",
+					"damageDice": "1d6",
+					"damageType": "Piercing",
+					"attackBonus": 5,
+					"damageBonus": 3,
+					"equipped": true
+				},
+				{
+					"name": "Shortbow",
+					"category": "ranged",
+					"damageDice": "1d6",
+					"damageType": "Piercing",
+					"attackBonus": 5,
+					"damageBonus": 3,
+					"normalRange": 16,
+					"longRange": 64,
+					"equipped": true
+				}
+			],
+			"vulnerabilities": [ "Bludgeoning" ],
+			"immunities": [ "Poison", "Exhaustion", "Poisoned" ],
+			"position": { "x": 1, "y": 1 }
+		},
+		// Turn/combat state. Movement is tracked in 5-foot squares (Speed / 5),
+		// per the "Playing on a Grid" rules: entering an adjacent square (orthogonal
+		// or diagonal) costs 1 square, so range is Chebyshev distance.
+		"currentTurn": "player",
+		"round": 1,
+		"movementRemaining": 6,
+		"actionUsed": false,
+		"bonusActionUsed": false,
+		"gameOver": false,
+		"outcome": "",
+		"log": [],
+		// When true, wire:poll drives one side's turn per tick so the fight
+		// plays out visibly instead of resolving all at once.
+		"autoBattling": false
+	}
+
+	/**
+	 * Loads the saved character of record (Dev the Mighty, characters.id 2)
+	 * from the gameserver schema, loads the level's grid (tiles + spawn
+	 * points) from MapService, and places both combatants at their designed
+	 * spawn points.
+	 */
+	function onMount( event, rc, prc, params ) {
+		variables.data.player = combatService.loadCharacter( 2 );
+		variables.data.grid = mapService.getLevel( "grandDungeon" );
+		variables.data.player.position = { "x": variables.data.grid.playerSpawn.x, "y": variables.data.grid.playerSpawn.y };
+		variables.data.opponent.position = { "x": variables.data.grid.opponentSpawn.x, "y": variables.data.grid.opponentSpawn.y };
+
+		variables.data.log.prepend( "A skeletal warrior blocks your path. Roll for initiative!" );
+		combatService.rollForInitiative( variables.data );
+	}
+
+	/**
+	 * The currently visible window into the level's grid — a VIEWPORT_RADIUS-
+	 * square box centered on the player, clamped so it never runs past the
+	 * map's edges (shifting instead of shrinking, so it's always a full-size
+	 * window unless the map itself is smaller than one). The template loops
+	 * over just this range instead of the whole grid, so only on-screen tiles
+	 * are ever rendered.
+	 */
+	function viewportBounds() {
+		var grid = variables.data.grid;
+		var player = variables.data.player;
+
+		var minCol = max( 1, min( player.position.x - VIEWPORT_RADIUS, grid.width - ( VIEWPORT_RADIUS * 2 ) ) );
+		var maxCol = min( grid.width, minCol + ( VIEWPORT_RADIUS * 2 ) );
+		var minRow = max( 1, min( player.position.y - VIEWPORT_RADIUS, grid.height - ( VIEWPORT_RADIUS * 2 ) ) );
+		var maxRow = min( grid.height, minRow + ( VIEWPORT_RADIUS * 2 ) );
+
+		return { "minCol": minCol, "maxCol": maxCol, "minRow": minRow, "maxRow": maxRow };
+	}
+
+	/**
+	 * True if (x, y) is a floor tile the player could path to and stand on
+	 * this turn — used by the template to highlight reachable tiles, since
+	 * walls make raw Chebyshev distance an unreliable proxy for reachability.
+	 */
+	function tileReachable( x, y ) {
+		if ( variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" ) {
+			return false;
+		}
+		var player = variables.data.player;
+		var opponent = variables.data.opponent;
+		if ( ( arguments.x == player.position.x && arguments.y == player.position.y ) || ( arguments.x == opponent.position.x && arguments.y == opponent.position.y ) ) {
+			return false;
+		}
+		var distance = combatService.pathDistance( variables.data.grid, player.position, { "x": arguments.x, "y": arguments.y } );
+		return distance > 0 && distance <= variables.data.movementRemaining;
+	}
+
+	/**
+	 * Single click entrypoint for the grid: attacks the opponent's tile if
+	 * adjacent, otherwise attempts to move there.
+	 */
+	function tileClick( x, y ) {
+		if ( variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" ) {
+			return;
+		}
+		var opponent = variables.data.opponent;
+		if ( arguments.x == opponent.position.x && arguments.y == opponent.position.y ) {
+			attack();
+		} else {
+			movePlayer( arguments.x, arguments.y );
+		}
+	}
+
+	/**
+	 * Moves the player to (x, y) if it's unoccupied and within remaining movement.
+	 */
+	function movePlayer( x, y ) {
+		if ( variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" ) {
+			return;
+		}
+
+		var player = variables.data.player;
+		var opponent = variables.data.opponent;
+
+		if ( arguments.x == player.position.x && arguments.y == player.position.y ) {
+			return;
+		}
+		if ( arguments.x == opponent.position.x && arguments.y == opponent.position.y ) {
+			return;
+		}
+		if ( !combatService.isWalkable( variables.data.grid, arguments.x, arguments.y ) ) {
+			return;
+		}
+
+		var distance = combatService.pathDistance( variables.data.grid, player.position, { "x": arguments.x, "y": arguments.y } );
+		if ( distance < 0 || distance > variables.data.movementRemaining ) {
+			variables.data.log.prepend( "#player.name# can't reach that tile — only #variables.data.movementRemaining# square(s) of movement left." );
+			return;
+		}
+
+		player.position = { "x": arguments.x, "y": arguments.y };
+		variables.data.movementRemaining -= distance;
+		variables.data.log.prepend( "#player.name# moves to (#arguments.x#, #arguments.y#)." );
+	}
+
+	/**
+	 * Player's Attack action against the opponent: melee if adjacent, otherwise
+	 * whatever equipped ranged weapon can reach at the current distance.
+	 * Ends the player's turn once resolved.
+	 */
+	function attack() {
+		if ( variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" || variables.data.actionUsed ) {
+			return;
+		}
+
+		var player = variables.data.player;
+		var opponent = variables.data.opponent;
+		var choice = combatService.pickWeaponForDistance( player, combatService.chebyshev( player, opponent ), variables.data.grid, opponent.position );
+		if ( isNull( choice ) ) {
+			variables.data.log.prepend( "#opponent.name# is out of reach." );
+			return;
+		}
+
+		variables.data.actionUsed = true;
+		combatService.playerAttack( variables.data, choice.weapon, choice.disadvantage );
+
+		if ( !variables.data.gameOver ) {
+			combatService.endPlayerTurn( variables.data );
+		}
+	}
+
+	/**
+	 * Grapples the opponent instead of attacking (Grappler feat). Requires
+	 * being adjacent; on success, the opponent is Grappled and (with the
+	 * Grappler feat) subsequent attacks against them get Advantage.
+	 */
+	function attemptGrapple() {
+		if ( variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" || variables.data.actionUsed ) {
+			return;
+		}
+		combatService.attemptGrapple( variables.data, variables.data.player, variables.data.opponent );
+		if ( !variables.data.gameOver ) {
+			combatService.endPlayerTurn( variables.data );
+		}
+	}
+
+	/**
+	 * Dragonborn Breath Weapon: once per encounter, in place of a weapon attack.
+	 */
+	function useBreathWeapon() {
+		if ( variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" || variables.data.actionUsed ) {
+			return;
+		}
+		combatService.useBreathWeapon( variables.data );
+		if ( !variables.data.gameOver ) {
+			combatService.endPlayerTurn( variables.data );
+		}
+	}
+
+	/**
+	 * Casts the player's known cantrip (from their class, or Magic Initiate)
+	 * in place of a weapon attack.
+	 */
+	function castCantrip() {
+		if ( variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" || variables.data.actionUsed ) {
+			return;
+		}
+		combatService.castCantrip( variables.data );
+		if ( !variables.data.gameOver ) {
+			combatService.endPlayerTurn( variables.data );
+		}
+	}
+
+	/**
+	 * Casts the player's known 1st-level spell (Magic Missile, Cure Wounds, or
+	 * Healing Word, depending on class) in place of a weapon attack, spending
+	 * a spell slot (or Magic Initiate's bonus spell if they have no slots).
+	 */
+	function castLeveledSpell() {
+		if ( variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" || variables.data.actionUsed ) {
+			return;
+		}
+		combatService.castLeveledSpell( variables.data );
+		if ( !variables.data.gameOver ) {
+			combatService.endPlayerTurn( variables.data );
+		}
+	}
+
+	/**
+	 * Two-Weapon Fighting: an off-hand attack with a second Light weapon,
+	 * using the bonus action instead of the action — doesn't end the turn.
+	 */
+	function offHandAttack() {
+		if ( variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" ) {
+			return;
+		}
+		combatService.offHandAttack( variables.data );
+	}
+
+	/**
+	 * Manually ends the player's turn without attacking (e.g. repositioned only).
+	 */
+	function endTurn() {
+		if ( variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" ) {
+			return;
+		}
+		combatService.endPlayerTurn( variables.data );
+	}
+
+	/**
+	 * Starts auto-battle mode: from here, wire:poll calls autoStep() on a
+	 * timer so each side's turn appears one at a time instead of the whole
+	 * fight resolving instantly.
+	 */
+	function startAutoBattle() {
+		if ( variables.data.gameOver ) {
+			return;
+		}
+		variables.data.autoBattling = true;
+	}
+
+	/**
+	 * Cancels auto-battle mode; manual controls take back over.
+	 */
+	function stopAutoBattle() {
+		variables.data.autoBattling = false;
+	}
+
+	/**
+	 * One tick of auto-battle: resolves exactly one side's turn (player OR
+	 * enemy, whichever is current) and stops itself once the fight ends.
+	 * Called repeatedly by wire:poll while autoBattling is true.
+	 */
+	function autoStep() {
+		if ( variables.data.gameOver || !variables.data.autoBattling ) {
+			variables.data.autoBattling = false;
+			return;
+		}
+
+		if ( variables.data.currentTurn == "player" ) {
+			combatService.playerDecideAndAct( variables.data );
+			if ( !variables.data.gameOver ) {
+				variables.data.currentTurn = "enemy";
+			}
+		} else {
+			combatService.runEnemyTurn( variables.data );
+			if ( !variables.data.gameOver ) {
+				variables.data.round += 1;
+				variables.data.currentTurn = "player";
+				variables.data.movementRemaining = int( variables.data.player.speed / 5 );
+				variables.data.actionUsed = false;
+				variables.data.bonusActionUsed = false;
+			}
+		}
+
+		if ( variables.data.gameOver ) {
+			variables.data.autoBattling = false;
+		}
 	}
 
 }

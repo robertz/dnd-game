@@ -71,7 +71,12 @@ class extends="cbwire.models.Component" {
 		"log": [],
 		// When true, wire:poll drives one side's turn per tick so the fight
 		// plays out visibly instead of resolving all at once.
-		"autoBattling": false
+		"autoBattling": false,
+		// Ability Score Improvement level-up screen (see confirmAbilityScoreImprovement()):
+		// "single" picks one ability for +2, "double" picks two for +1 each.
+		"asiMode": "single",
+		"asiAbility1": "str",
+		"asiAbility2": "dex"
 	}
 
 	/**
@@ -512,6 +517,33 @@ class extends="cbwire.models.Component" {
 		if ( !variables.data.gameOver ) {
 			combatService.endPlayerTurn( variables.data );
 		}
+	}
+
+	/**
+	 * Switches the level-up screen between "+2 to one ability" and "+1 to
+	 * two abilities" (see confirmAbilityScoreImprovement()).
+	 */
+	function setAsiMode( mode ) {
+		if ( arguments.mode == "single" || arguments.mode == "double" ) {
+			variables.data.asiMode = arguments.mode;
+		}
+	}
+
+	/**
+	 * Applies the level-up screen's chosen Ability Score Improvement — +2 to
+	 * `asiAbility1` alone (asiMode "single"), or +1 to both `asiAbility1` and
+	 * `asiAbility2` (asiMode "double") — consuming one of the character's
+	 * pending improvements. A no-op if none are pending (e.g. a stray
+	 * double-submit after the last one's already been spent).
+	 */
+	function confirmAbilityScoreImprovement() {
+		if ( !structKeyExists( variables.data.player, "pendingAbilityScoreImprovements" ) || variables.data.player.pendingAbilityScoreImprovements <= 0 ) {
+			return;
+		}
+		var abilities = ( variables.data.asiMode == "double" )
+			? [ variables.data.asiAbility1, variables.data.asiAbility2 ]
+			: [ variables.data.asiAbility1 ];
+		combatService.applyAbilityScoreImprovement( variables.data, { "abilities": abilities } );
 	}
 
 	/**

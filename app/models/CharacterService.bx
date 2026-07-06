@@ -65,10 +65,15 @@ class singleton {
 	 * @species,background,alignment Flavor choices from character creation
 	 *  Steps 2 and 4 — recorded on the sheet, not mechanically modeled.
 	 * @level Starting level (defaults to 1).
+	 * @knownCantrip,knownSpell The player's chosen cantrip/1st-level spell
+	 *  names from character creation's Spells step (full casters only) —
+	 *  resolved into full casting mechanics by CombatService._assignSpellcasting()
+	 *  whenever the character is loaded. Empty for a non-caster class.
 	 */
 	function createCharacter(
 		name, classId, str, dex, con, intScore, wis, cha,
-		species = "", background = "", alignment = "", level = 1
+		species = "", background = "", alignment = "", level = 1,
+		knownCantrip = "", knownSpell = ""
 	) {
 		var classRows = queryExecute(
 			"SELECT hit_die FROM classes WHERE id = :classId",
@@ -88,8 +93,8 @@ class singleton {
 
 		queryExecute(
 			"INSERT INTO characters
-			 (name, class_id, species, background, alignment, level, str, dex, con, int_score, wis, cha, proficiency_bonus, armor_class, hit_points, max_hit_points, speed)
-			 VALUES (:name, :classId, :species, :background, :alignment, :level, :str, :dex, :con, :intScore, :wis, :cha, :proficiencyBonus, :armorClass, :hitPoints, :maxHitPoints, :speed)",
+			 (name, class_id, species, background, alignment, level, str, dex, con, int_score, wis, cha, proficiency_bonus, armor_class, hit_points, max_hit_points, speed, known_cantrip, known_spell)
+			 VALUES (:name, :classId, :species, :background, :alignment, :level, :str, :dex, :con, :intScore, :wis, :cha, :proficiencyBonus, :armorClass, :hitPoints, :maxHitPoints, :speed, :knownCantrip, :knownSpell)",
 			{
 				"name": arguments.name,
 				"classId": arguments.classId,
@@ -103,7 +108,9 @@ class singleton {
 				"armorClass": armorClass,
 				"hitPoints": maxHitPoints,
 				"maxHitPoints": maxHitPoints,
-				"speed": speed
+				"speed": speed,
+				"knownCantrip": len( arguments.knownCantrip ) ? arguments.knownCantrip : javaCast( "null", 0 ),
+				"knownSpell": len( arguments.knownSpell ) ? arguments.knownSpell : javaCast( "null", 0 )
 			},
 			{ datasource: "gameserver", result: "insertResult" }
 		);

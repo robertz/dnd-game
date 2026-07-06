@@ -91,7 +91,10 @@ class singleton {
 
 			if ( distance > 1 ) {
 				var startPosition = { "x": player.position.x, "y": player.position.y };
-				var steps = moveToward( player, opponent, arguments.state.movementRemaining, _stateGrid( arguments.state ) );
+				var steps = moveToward(
+					player, opponent, arguments.state.movementRemaining, _stateGrid( arguments.state ),
+					_otherLivingPositions( arguments.state, player, opponent )
+				);
 				if ( steps > 0 ) {
 					arguments.state.movementRemaining -= steps;
 					arguments.state.log.prepend( "#player.name# advances toward #opponent.name#." );
@@ -305,7 +308,10 @@ class singleton {
 			return;
 		}
 
-		var steps = moveToward( arguments.opponent, player, int( arguments.opponent.speed / 5 ), grid );
+		var steps = moveToward(
+			arguments.opponent, player, int( arguments.opponent.speed / 5 ), grid,
+			_otherLivingPositions( arguments.state, arguments.opponent, player )
+		);
 
 		if ( steps > 0 ) {
 			arguments.state.log.prepend( "#arguments.opponent.name# closes in." );
@@ -355,8 +361,9 @@ class singleton {
 	 * rather than walking through the wall.
 	 *
 	 * @grid Optional level grid (`{width, height, tiles}`, from MapService) to route around walls.
+	 * @occupiedPositions Optional array of `{x, y}` — other living combatants' positions (never the mover's own or the target's), treated as impassable alongside walls, so two combatants never end up sharing a tile. Only applies with a `grid`; ignored for the no-grid straight-line stepper (only ever used by callers with no map at all — real gameplay always has one).
 	 */
-	function moveToward( mover, target, maxSteps, grid = javaCast( "null", 0 ) ) {
+	function moveToward( mover, target, maxSteps, grid = javaCast( "null", 0 ), occupiedPositions = [] ) {
 		// Restrained: speed is 0, per the condition's own rules.
 		if ( hasCondition( arguments.mover, "Restrained" ) ) {
 			return 0;
@@ -367,7 +374,11 @@ class singleton {
 
 		var targetX = arguments.target.position.x;
 		var targetY = arguments.target.position.y;
-		var path = _bfs( arguments.grid, arguments.mover.position, ( x, y ) => ( max( abs( x - targetX ), abs( y - targetY ) ) <= 1 ) );
+		var path = _bfs(
+			arguments.grid, arguments.mover.position,
+			( x, y ) => ( max( abs( x - targetX ), abs( y - targetY ) ) <= 1 ),
+			arguments.occupiedPositions
+		);
 		if ( path.len() <= 1 ) {
 			// Already adjacent (path is just the start), or no route exists.
 			return 0;
@@ -412,6 +423,34 @@ class singleton {
 	 */
 	private function _stateOpponents( state ) {
 		return structKeyExists( arguments.state, "opponents" ) ? arguments.state.opponents : [ arguments.state.opponent ];
+	}
+
+	/**
+	 * Positions of every living combatant in `state` except `mover` and
+	 * `target` themselves — passed to moveToward() as `occupiedPositions` so
+	 * a mover's path never lands on a tile another living combatant already
+	 * occupies. `mover`/`target` are excluded by identity (their own current
+	 * square is obviously not an obstacle to themselves, and the target's
+	 * square is handled separately by moveToward()'s own "adjacent to
+	 * target" goal, not by blocking it outright).
+	 */
+	private function _otherLivingPositions( state, mover, target ) {
+		var positions = [];
+		var candidates = [ arguments.state.player ];
+		for ( var o in _stateOpponents( arguments.state ) ) {
+			candidates.append( o );
+		}
+		for ( var candidate in candidates ) {
+			if (
+				candidate.hitPoints <= 0 ||
+				candidate.name == arguments.mover.name ||
+				candidate.name == arguments.target.name
+			) {
+				continue;
+			}
+			positions.append( { "x": candidate.position.x, "y": candidate.position.y } );
+		}
+		return positions;
 	}
 
 	/**
@@ -527,10 +566,22 @@ class singleton {
 	 * an array of `{x, y}` points including `start` and the goal tile, or an
 	 * empty array if no such tile is reachable. If `start` itself satisfies
 	 * `isGoal`, returns a single-element path (just `start`).
+	 *
+	 * @blocked Optional array of `{x, y}` tiles to treat as impassable, in
+	 *  addition to walls — other living combatants' positions, so two
+	 *  combatants never path onto the same square. A goal tile that's also
+	 *  blocked is simply skipped like any other blocked tile, same as it
+	 *  would be if it were a wall — moveToward()'s "adjacent to target" goal
+	 *  usually has several other candidate tiles to fall back to.
 	 */
-	private function _bfs( grid, start, isGoal ) {
+	private function _bfs( grid, start, isGoal, blocked = [] ) {
 		if ( arguments.isGoal( arguments.start.x, arguments.start.y ) ) {
 			return [ { "x": arguments.start.x, "y": arguments.start.y } ];
+		}
+
+		var blockedKeys = {};
+		for ( var blockedPos in arguments.blocked ) {
+			blockedKeys[ blockedPos.x & "," & blockedPos.y ] = true;
 		}
 
 		var visited = {};
@@ -554,6 +605,9 @@ class singleton {
 						continue;
 					}
 					var key = nx & "," & ny;
+					if ( blockedKeys.keyExists( key ) ) {
+						continue;
+					}
 					if ( visited.keyExists( key ) ) {
 						continue;
 					}
@@ -1184,10 +1238,17 @@ class singleton {
 	 * character is loaded — this app has no long-rest tracking between
 	 * encounters, so every encounter starts with a full set, same as HP/other
 	 * once-per-encounter resources elsewhere in this file.
+	 *
+	 * If the player chose a cantrip/spell at character creation (stored on
+	 * `player.knownCantripName`/`knownSpellName` by loadCharacter(), from the
+	 * `characters.known_cantrip`/`known_spell` columns), that exact spell is
+	 * used instead of the auto-pick — falling back to the old
+	 * iconic/heal-preferring auto-pick for any character created before this
+	 * choice existed (both columns NULL) or a non-caster with Magic Initiate.
 	 */
 	private function _assignSpellcasting( player ) {
 		var className = arguments.player.class;
-		var isFullCaster = arrayFindNoCase( FULL_CASTER_CLASSES, className ) > 0;
+		var isFullCaster = isFullCasterClass( className );
 		var isHalfCaster = arrayFindNoCase( HALF_CASTER_CLASSES, className ) > 0;
 
 		arguments.player.isSpellcaster = isFullCaster || isHalfCaster || arguments.player.hasMagicInitiate;
@@ -1201,15 +1262,23 @@ class singleton {
 			arguments.player.spellcastingAbility = ( mods.int >= mods.wis && mods.int >= mods.cha ) ? "int" : ( mods.wis >= mods.cha ? "wis" : "cha" );
 		}
 
-		var preferredCantrip = ICONIC_CANTRIP_BY_CLASS.keyExists( className ) ? ICONIC_CANTRIP_BY_CLASS[ className ] : "";
-		var dbCantrip = _lookupClassSpell( className, 0, false, preferredCantrip );
+		var chosenCantripName = structKeyExists( arguments.player, "knownCantripName" ) ? arguments.player.knownCantripName : "";
+		var dbCantrip = len( chosenCantripName ) ? lookupSpellByName( chosenCantripName ) : javaCast( "null", 0 );
+		if ( isNull( dbCantrip ) ) {
+			var preferredCantrip = ICONIC_CANTRIP_BY_CLASS.keyExists( className ) ? ICONIC_CANTRIP_BY_CLASS[ className ] : "";
+			dbCantrip = _lookupClassSpell( className, 0, false, preferredCantrip );
+		}
 		arguments.player.knownCantrip = !isNull( dbCantrip )
 			? dbCantrip
 			// Fire Bolt: 120 ft.
 			: ( arguments.player.hasMagicInitiate ? { "type": "attack", "name": "Fire Bolt", "damageType": "Fire", "rangeSquares": 24 } : javaCast( "null", 0 ) );
 
-		var preferHeal = arrayFindNoCase( HEAL_PREFERRING_CLASSES, className ) > 0;
-		var dbSpell = _lookupClassSpell( className, 1, preferHeal );
+		var chosenSpellName = structKeyExists( arguments.player, "knownSpellName" ) ? arguments.player.knownSpellName : "";
+		var dbSpell = len( chosenSpellName ) ? lookupSpellByName( chosenSpellName ) : javaCast( "null", 0 );
+		if ( isNull( dbSpell ) ) {
+			var preferHeal = arrayFindNoCase( HEAL_PREFERRING_CLASSES, className ) > 0;
+			dbSpell = _lookupClassSpell( className, 1, preferHeal );
+		}
 		arguments.player.knownLeveledSpell = !isNull( dbSpell )
 			? dbSpell
 			// Magic Missile: 120 ft.
@@ -1288,25 +1357,105 @@ class singleton {
 		if ( rows.recordCount == 0 ) {
 			return javaCast( "null", 0 );
 		}
+		return _spellStructFromRow( rows, 1 );
+	}
 
-		if ( rows.effect_type[ 1 ] == "heal" ) {
-			var healDice = parseDice( rows.heal_dice[ 1 ] );
-			return { "type": "heal", "name": rows.name[ 1 ], "diceCount": healDice.count, "diceSides": healDice.sides };
+	/**
+	 * Converts one row of a `spells` query (with the standard SELECT list
+	 * used throughout this file — name, effect_type, attack_type,
+	 * save_ability, save_effect, damage_dice, damage_type, heal_dice,
+	 * `range`) into the discriminated struct shape castCantrip()/
+	 * castLeveledSpell()/_runOneOpponentTurn() all expect. Shared by
+	 * _lookupClassSpell() (picks one row), listCastableSpells() (every
+	 * matching row), and lookupSpellByName() (one row by exact name).
+	 */
+	private function _spellStructFromRow( rows, i ) {
+		if ( arguments.rows.effect_type[ arguments.i ] == "heal" ) {
+			var healDice = parseDice( arguments.rows.heal_dice[ arguments.i ] );
+			return { "type": "heal", "name": arguments.rows.name[ arguments.i ], "diceCount": healDice.count, "diceSides": healDice.sides };
 		}
 
-		var damageDice = parseDice( rows.damage_dice[ 1 ] );
-		var rangeSquares = _parseSpellRangeSquares( rows.range[ 1 ] );
-		if ( rows.effect_type[ 1 ] == "attack" ) {
+		var damageDice = parseDice( arguments.rows.damage_dice[ arguments.i ] );
+		var rangeSquares = _parseSpellRangeSquares( arguments.rows.range[ arguments.i ] );
+		if ( arguments.rows.effect_type[ arguments.i ] == "attack" ) {
 			return {
-				"type": "attack", "name": rows.name[ 1 ], "damageType": rows.damage_type[ 1 ],
+				"type": "attack", "name": arguments.rows.name[ arguments.i ], "damageType": arguments.rows.damage_type[ arguments.i ],
 				"diceCount": damageDice.count, "diceSides": damageDice.sides, "rangeSquares": rangeSquares
 			};
 		}
 		return {
-			"type": "save", "name": rows.name[ 1 ], "damageType": rows.damage_type[ 1 ],
-			"saveAbility": rows.save_ability[ 1 ], "saveEffect": rows.save_effect[ 1 ],
+			"type": "save", "name": arguments.rows.name[ arguments.i ], "damageType": arguments.rows.damage_type[ arguments.i ],
+			"saveAbility": arguments.rows.save_ability[ arguments.i ], "saveEffect": arguments.rows.save_effect[ arguments.i ],
 			"diceCount": damageDice.count, "diceSides": damageDice.sides, "rangeSquares": rangeSquares
 		};
+	}
+
+	/**
+	 * Lists every castable (non-utility, plain-"NdM"-dice) spell `className`
+	 * has available at `level` (0 for cantrips, 1 for 1st-level spells) — the
+	 * options a player picks from at character creation (see
+	 * app/wires/characterCreation.bx). Each entry is the same struct shape
+	 * `player.knownCantrip`/`knownLeveledSpell` use in combat.
+	 *
+	 * @className The class to list spells for (must match a name in the spells table's `classes` column).
+	 * @level The spell's level (0 for cantrips, 1-9 otherwise).
+	 */
+	function listCastableSpells( className, level ) {
+		var rows = queryExecute(
+			"SELECT name, effect_type, attack_type, save_ability, save_effect, damage_dice, damage_type, heal_dice, `range`
+			 FROM spells
+			 WHERE FIND_IN_SET( :className, REPLACE( classes, ', ', ',' ) ) > 0
+			   AND level = :level
+			   AND effect_type IN ( 'attack', 'save', 'heal' )
+			   AND ( damage_dice IS NULL OR damage_dice REGEXP '^[0-9]+d[0-9]+$' )
+			   AND ( heal_dice IS NULL OR heal_dice REGEXP '^[0-9]+d[0-9]+$' )
+			 ORDER BY name",
+			{ "className": arguments.className, "level": arguments.level },
+			{ datasource: "gameserver" }
+		);
+		var results = [];
+		for ( var i = 1; i <= rows.recordCount; i++ ) {
+			results.append( _spellStructFromRow( rows, i ) );
+		}
+		return results;
+	}
+
+	/**
+	 * Looks up one specific castable spell by its exact name — used to
+	 * resolve a character's stored `known_cantrip`/`known_spell` choice (see
+	 * loadCharacter()) into full casting mechanics. Returns null if there's
+	 * no such castable spell (e.g. the name doesn't exist, or is a
+	 * utility-only spell this app can't mechanize).
+	 *
+	 * @name The spell's exact name, as stored in the `spells` table.
+	 */
+	function lookupSpellByName( name ) {
+		var rows = queryExecute(
+			"SELECT name, effect_type, attack_type, save_ability, save_effect, damage_dice, damage_type, heal_dice, `range`
+			 FROM spells
+			 WHERE name = :name
+			   AND effect_type IN ( 'attack', 'save', 'heal' )
+			   AND ( damage_dice IS NULL OR damage_dice REGEXP '^[0-9]+d[0-9]+$' )
+			   AND ( heal_dice IS NULL OR heal_dice REGEXP '^[0-9]+d[0-9]+$' )
+			 LIMIT 1",
+			{ "name": arguments.name },
+			{ datasource: "gameserver" }
+		);
+		if ( rows.recordCount == 0 ) {
+			return javaCast( "null", 0 );
+		}
+		return _spellStructFromRow( rows, 1 );
+	}
+
+	/**
+	 * Whether `className` is one of the six full-caster classes (Bard,
+	 * Cleric, Druid, Sorcerer, Warlock, Wizard) — the only classes with any
+	 * spells to choose at 1st level (half-casters get their first spell
+	 * slot at 2nd, per SPELL_SLOTS_HALF_CASTER). Public so the
+	 * character-creation wire can decide whether to show the Spells step.
+	 */
+	function isFullCasterClass( className ) {
+		return arrayFindNoCase( FULL_CASTER_CLASSES, arguments.className ) > 0;
 	}
 
 	// A cone/cube/line AoE centered on the caster (Burning Hands, Thunderwave,
@@ -1884,12 +2033,16 @@ class singleton {
 		}
 
 		if ( leveledUp ) {
+			// hit_points is persisted as the new max, not the character's
+			// (possibly damaged) current total — loadCharacter() always
+			// starts a fresh encounter at full HP (see there), so keeping
+			// hit_points in sync with max_hit_points avoids leaving a stale,
+			// no-longer-meaningful lower number sitting in the row.
 			queryExecute(
-				"UPDATE characters SET level = :level, proficiency_bonus = :proficiencyBonus, hit_points = :hitPoints, max_hit_points = :maxHitPoints WHERE id = :characterId",
+				"UPDATE characters SET level = :level, proficiency_bonus = :proficiencyBonus, hit_points = :maxHitPoints, max_hit_points = :maxHitPoints WHERE id = :characterId",
 				{
 					"level": player.level,
 					"proficiencyBonus": player.proficiencyBonus,
-					"hitPoints": player.hitPoints,
 					"maxHitPoints": player.maxHitPoints,
 					"characterId": player.characterId
 				},
@@ -1998,88 +2151,111 @@ class singleton {
 				}
 			}
 
-			// Ability Score Improvement: auto-apply +2 to the class's primary
-			// ability (capped at 20), since this app has no UI for the player
-			// to choose. Bumps derived AC/attack/damage where relevant.
+			// Ability Score Improvement: queue it instead of auto-applying —
+			// the player chooses which ability/abilities to raise via the
+			// level-up screen (see applyAbilityScoreImprovement()). Queued as
+			// a count rather than a flag since a big enough XP award can carry
+			// the player through more than one ASI-granting level at once.
 			if ( row.name == "Ability Score Improvement" ) {
-				var improvedAbility = _applyAbilityScoreImprovement( arguments.player );
-				if ( len( improvedAbility ) ) {
-					names[ names.len() ] = "+2 #improvedAbility#";
-				}
+				arguments.player.pendingAbilityScoreImprovements = (
+					structKeyExists( arguments.player, "pendingAbilityScoreImprovements" ) ? arguments.player.pendingAbilityScoreImprovements : 0
+				) + 1;
+				names[ names.len() ] = "an Ability Score Improvement (choose below)";
 			}
 		}
 		return names;
 	}
 
 	/**
-	 * Applies an Ability Score Improvement: +2 to the class's primary ability
-	 * (the first one named in classes.primary_ability, e.g. "Strength" from
-	 * "Strength or Dexterity"), capped at 20 per the rules. Updates the
-	 * ability score, its modifier, and any AC/equipped-weapon bonuses derived
-	 * from that ability, then persists the change. Returns the full ability
-	 * name improved (e.g. "Strength"), or "" if already at the 20 cap.
+	 * Applies a player-chosen Ability Score Improvement, consuming one of the
+	 * character's `pendingAbilityScoreImprovements` (queued by
+	 * _grantNewFeatures() instead of auto-applying it) — either +2 to one
+	 * ability, or +1 to two different ones, per the "Ability Scores"
+	 * increase rule, each capped at 20. A no-op if there's no pending
+	 * improvement to spend, or if `choice.abilities` isn't 1 or 2 entries.
+	 * (This app doesn't model the alternative — taking a feat instead of an
+	 * ability increase — since it has no broader feat-selection UI at all.)
+	 *
+	 * @state The encounter's full mutable game state struct.
+	 * @choice `{ "abilities": [ "str" ] }` for +2 to one ability, or `{ "abilities": [ "str", "dex" ] }` for +1 to two.
 	 */
-	private function _applyAbilityScoreImprovement( player ) {
-		var classRows = queryExecute(
-			"SELECT cl.primary_ability FROM classes cl JOIN characters c ON c.class_id = cl.id WHERE c.id = :characterId",
-			{ "characterId": arguments.player.characterId },
-			{ datasource: "gameserver" }
-		);
-		var primaryAbilityText = classRows.primary_ability[ 1 ];
+	function applyAbilityScoreImprovement( state, choice ) {
+		var player = arguments.state.player;
+		if ( !structKeyExists( player, "pendingAbilityScoreImprovements" ) || player.pendingAbilityScoreImprovements <= 0 ) {
+			return;
+		}
+		var abilities = arguments.choice.abilities;
+		if ( abilities.len() != 1 && abilities.len() != 2 ) {
+			return;
+		}
 
-		var abilityNames = [ "Strength", "Dexterity", "Constitution", "Intelligence", "Wisdom", "Charisma" ];
-		var earliestPos = 0;
-		var chosenName = "";
-		for ( var name in abilityNames ) {
-			var pos = findNoCase( name, primaryAbilityText );
-			if ( pos > 0 && ( earliestPos == 0 || pos < earliestPos ) ) {
-				earliestPos = pos;
-				chosenName = name;
+		var amountEach = ( abilities.len() == 1 ) ? 2 : 1;
+		var improvedNames = [];
+		for ( var abbrev in abilities ) {
+			var improvedName = _increaseAbilityScore( player, abbrev, amountEach );
+			if ( len( improvedName ) ) {
+				improvedNames.append( "+#amountEach# #improvedName#" );
 			}
 		}
-		if ( !len( chosenName ) ) {
-			return "";
-		}
 
-		var abbreviations = { "Strength": "str", "Dexterity": "dex", "Constitution": "con", "Intelligence": "int", "Wisdom": "wis", "Charisma": "cha" };
-		var abbrev = abbreviations[ chosenName ];
+		player.pendingAbilityScoreImprovements -= 1;
+		arguments.state.log.prepend(
+			improvedNames.len()
+				? "#player.name# improves their abilities: #arrayToList( improvedNames, ", " )#."
+				: "#player.name#'s chosen abilities are already at the maximum of 20."
+		);
+	}
 
-		var oldScore = arguments.player.abilityScores[ abbrev ];
+	/**
+	 * Raises `player`'s `abbrev` ability score by `amount` (capped at 20),
+	 * updating its modifier and any AC/equipped-weapon bonuses derived from
+	 * it, then persisting the change — shared by applyAbilityScoreImprovement()
+	 * for both the "+2 to one ability" and "+1 to two abilities" choices.
+	 * Returns the full ability name raised (e.g. "Strength"), or "" if
+	 * already at the cap.
+	 */
+	private function _increaseAbilityScore( player, abbrev, amount ) {
+		var oldScore = arguments.player.abilityScores[ arguments.abbrev ];
 		if ( oldScore >= 20 ) {
 			return "";
 		}
-		var newScore = min( 20, oldScore + 2 );
-		var oldMod = arguments.player.modifiers[ abbrev ];
+		var newScore = min( 20, oldScore + arguments.amount );
+		var oldMod = arguments.player.modifiers[ arguments.abbrev ];
 		var newMod = abilityModifier( newScore );
-		arguments.player.abilityScores[ abbrev ] = newScore;
-		arguments.player.modifiers[ abbrev ] = newMod;
+		arguments.player.abilityScores[ arguments.abbrev ] = newScore;
+		arguments.player.modifiers[ arguments.abbrev ] = newMod;
 		var modDelta = newMod - oldMod;
 
 		if ( modDelta != 0 ) {
-			if ( abbrev == "dex" ) {
+			if ( arguments.abbrev == "dex" ) {
 				arguments.player.armorClass += modDelta;
 			}
 			for ( var item in arguments.player.inventory ) {
-				if ( item.equipped && ( ( item.category == "melee" && abbrev == "str" ) || ( item.category == "ranged" && abbrev == "dex" ) ) ) {
+				if ( item.equipped && ( ( item.category == "melee" && arguments.abbrev == "str" ) || ( item.category == "ranged" && arguments.abbrev == "dex" ) ) ) {
 					item.attackBonus += modDelta;
 					item.damageBonus += modDelta;
-					queryExecute(
-						"UPDATE character_inventory SET attack_bonus = :attackBonus, damage_bonus = :damageBonus WHERE id = :id",
-						{ "attackBonus": item.attackBonus, "damageBonus": item.damageBonus, "id": item.id },
-						{ datasource: "gameserver" }
-					);
+					if ( structKeyExists( item, "id" ) ) {
+						queryExecute(
+							"UPDATE character_inventory SET attack_bonus = :attackBonus, damage_bonus = :damageBonus WHERE id = :id",
+							{ "attackBonus": item.attackBonus, "damageBonus": item.damageBonus, "id": item.id },
+							{ datasource: "gameserver" }
+						);
+					}
 				}
 			}
 		}
 
-		var dbColumns = { "str": "str", "dex": "dex", "con": "con", "int": "int_score", "wis": "wis", "cha": "cha" };
-		queryExecute(
-			"UPDATE characters SET #dbColumns[ abbrev ]# = :score, armor_class = :armorClass WHERE id = :characterId",
-			{ "score": newScore, "armorClass": arguments.player.armorClass, "characterId": arguments.player.characterId },
-			{ datasource: "gameserver" }
-		);
+		if ( structKeyExists( arguments.player, "characterId" ) ) {
+			var dbColumns = { "str": "str", "dex": "dex", "con": "con", "int": "int_score", "wis": "wis", "cha": "cha" };
+			queryExecute(
+				"UPDATE characters SET #dbColumns[ arguments.abbrev ]# = :score, armor_class = :armorClass WHERE id = :characterId",
+				{ "score": newScore, "armorClass": arguments.player.armorClass, "characterId": arguments.player.characterId },
+				{ datasource: "gameserver" }
+			);
+		}
 
-		return chosenName;
+		var abilityFullNames = { "str": "Strength", "dex": "Dexterity", "con": "Constitution", "int": "Intelligence", "wis": "Wisdom", "cha": "Charisma" };
+		return abilityFullNames[ arguments.abbrev ];
 	}
 
 	/**
@@ -2186,7 +2362,14 @@ class singleton {
 			"modifiers": modifiers,
 			"proficiencyBonus": row.proficiency_bonus[ 1 ],
 			"armorClass": row.armor_class[ 1 ],
-			"hitPoints": row.hit_points[ 1 ],
+			// Every encounter starts fully rested, same as spell slots/Breath
+			// Weapon/Heroic Inspiration/etc. below — a character never begins
+			// an adventure carrying over damage from a previous one, since
+			// this app has no rest UI to explain how they'd have healed
+			// otherwise. `characters.hit_points` still exists and is kept in
+			// sync with max on level-up (see awardExperience()), but is no
+			// longer read as a starting value.
+			"hitPoints": row.max_hit_points[ 1 ],
 			"maxHitPoints": row.max_hit_points[ 1 ],
 			"hitPointsPerLevel": _fixedHitPointsPerLevel( row.hit_die[ 1 ] ),
 			// Dwarven Toughness: +1 Hit Point maximum per level, on top of the
@@ -2221,7 +2404,12 @@ class singleton {
 			"usedHeroicInspiration": false,
 			"features": [],
 			"feats": [],
-			"inventory": []
+			"inventory": [],
+			// The player's character-creation spell choices, if any (see
+			// _assignSpellcasting()) — empty for a non-caster, or any
+			// character created before this feature existed.
+			"knownCantripName": len( row.known_cantrip[ 1 ] ) ? row.known_cantrip[ 1 ] : "",
+			"knownSpellName": len( row.known_spell[ 1 ] ) ? row.known_spell[ 1 ] : ""
 		};
 
 		var featureRows = queryExecute(

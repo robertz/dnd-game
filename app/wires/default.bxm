@@ -1,12 +1,44 @@
 <bx:output>
 <div class="encounter">
 	<div class="encounter-main">
-		<h1 class="fantasy-heading">The Adventure Begins</h1>
-
 		<bx:if gameOver>
 			<p class="encounter-banner encounter-banner-#outcome#">
 				#( outcome == "victory" ? "Victory! Every enemy is defeated." : "Defeat! " & player.name & " has fallen." )#
 			</p>
+			<bx:if outcome == "victory" && structKeyExists( player, "pendingAbilityScoreImprovements" ) && player.pendingAbilityScoreImprovements gt 0>
+				<bx:set abilityAbbreviations = [ "str", "dex", "con", "int", "wis", "cha" ]>
+				<div class="parchment-panel asi-panel">
+					<h2 class="fantasy-heading">Ability Score Improvement</h2>
+					<p class="encounter-intro">
+						#player.name# gains an Ability Score Improvement#( player.pendingAbilityScoreImprovements gt 1 ? " (#player.pendingAbilityScoreImprovements# to choose)" : "" )#. Choose one:
+					</p>
+					<div class="turn-actions">
+						<button type="button" class="btn#( asiMode == "single" ? " btn-auto-battle" : "" )#" wire:click="setAsiMode('single')">+2 to one ability</button>
+						<button type="button" class="btn#( asiMode == "double" ? " btn-auto-battle" : "" )#" wire:click="setAsiMode('double')">+1 to two abilities</button>
+					</div>
+					<div class="creation-scores">
+						<label>
+							Ability <bx:if asiMode == "double">1</bx:if>:
+							<select class="creation-input" wire:model="asiAbility1">
+								<bx:loop array="#abilityAbbreviations#" index="abbrev">
+									<option value="#abbrev#" #( asiAbility1 == abbrev ? "selected" : "" )#>#uCase( abbrev )# (#player.abilityScores[ abbrev ]#)</option>
+								</bx:loop>
+							</select>
+						</label>
+						<bx:if asiMode == "double">
+							<label>
+								Ability 2:
+								<select class="creation-input" wire:model="asiAbility2">
+									<bx:loop array="#abilityAbbreviations#" index="abbrev">
+										<option value="#abbrev#" #( asiAbility2 == abbrev ? "selected" : "" )#>#uCase( abbrev )# (#player.abilityScores[ abbrev ]#)</option>
+									</bx:loop>
+								</select>
+							</label>
+						</bx:if>
+					</div>
+					<button type="button" class="btn btn-attack" wire:click="confirmAbilityScoreImprovement()">Confirm</button>
+				</div>
+			</bx:if>
 		<bx:else>
 			<p class="encounter-intro">Round #round# — #( currentTurn == "player" ? "Your turn." : "Enemy turn…" )#
 				<bx:if currentTurn == "player">(#movementRemaining# square(s) of movement left#( actionUsed ? ", action used" : "" )#)</bx:if>

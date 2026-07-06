@@ -63,6 +63,52 @@
 			display: flex;
 		}
 
+		.site-header {
+			width: 100%;
+			max-width: 1600px;
+			margin: 0 auto clamp(0.75rem, 2vw, 1.5rem);
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			flex-wrap: wrap;
+			gap: 0.75rem;
+			padding-bottom: 0.75rem;
+			border-bottom: 2px solid var(--gold);
+		}
+
+		.site-title {
+			margin: 0;
+			font-size: 1.4rem;
+		}
+
+		.site-nav {
+			display: flex;
+			gap: 0.5rem;
+			flex-wrap: wrap;
+		}
+
+		.site-nav a {
+			font-family: "Cinzel Decorative", serif;
+			font-size: 0.85rem;
+			text-decoration: none;
+			color: var(--parchment);
+			background: var(--night);
+			border: 1px solid var(--gold);
+			border-radius: 4px;
+			padding: 0.4rem 0.9rem;
+			transition: background 0.15s ease, color 0.15s ease;
+		}
+
+		.site-nav a:hover {
+			background: var(--gold);
+			color: var(--night);
+		}
+
+		.site-nav a.site-nav-active {
+			background: var(--gold);
+			color: var(--night);
+		}
+
 		.parchment-panel {
 			background:
 				radial-gradient( ellipse at top left, rgba(255,255,255,0.15), transparent 60% ),
@@ -465,6 +511,17 @@
 	<title>The Adventure Begins</title>
 </head>
 <body>
+	<bx:set currentEvent = event.getCurrentEvent()>
+	<header class="site-header">
+		<h1 class="fantasy-heading site-title">The Adventure Begins</h1>
+		<nav class="site-nav">
+			<a href="/" wire:navigate class="#( currentEvent == "main.index" ? "site-nav-active" : "" )#">Character Select</a>
+			<a href="/character/new" wire:navigate class="#( currentEvent == "character.new" ? "site-nav-active" : "" )#">Create Character</a>
+			<bx:if structKeyExists( session, "charid" ) && len( session.charid )>
+				<a href="/combat" wire:navigate class="#( currentEvent == "combat.index" ? "site-nav-active" : "" )#">Adventure</a>
+			</bx:if>
+		</nav>
+	</header>
 	<!---Container And Views --->
 	<main class="scroll">
 		<div class="parchment-panel">

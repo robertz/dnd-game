@@ -131,6 +131,43 @@ class extends="testbox.system.BaseSpec" {
 					expect( mover.position.x ).toBe( 5 );
 					expect( mover.position.y ).toBe( 1 );
 				} );
+
+				it( "with a grid, never ends on a tile occupied by another living combatant", () => {
+					// makeWallGrid() is always 5x5, so a target at the center
+					// (3,3) has a full ring of 8 in-bounds neighbors — block 7
+					// of them, leaving exactly one (3,4) free to route to.
+					var grid = makeWallGrid( -1, -1 ); // fully open
+					var mover = makeCombatant( 1, 1 );
+					var target = makeCombatant( 3, 3 );
+					var occupied = [
+						{ "x": 2, "y": 2 }, { "x": 3, "y": 2 }, { "x": 4, "y": 2 },
+						{ "x": 2, "y": 3 }, { "x": 4, "y": 3 },
+						{ "x": 2, "y": 4 }, { "x": 4, "y": 4 }
+					];
+					var steps = service.moveToward( mover, target, 100, grid, occupied );
+					expect( steps ).toBeGT( 0 );
+					for ( var blockedPos in occupied ) {
+						expect( mover.position.x == blockedPos.x && mover.position.y == blockedPos.y ).toBeFalse();
+					}
+					expect( mover.position.x ).toBe( 3 );
+					expect( mover.position.y ).toBe( 4 );
+				} );
+
+				it( "with a grid, detours around an occupied tile blocking the direct path", () => {
+					var grid = makeWallGrid( -1, -1 ); // fully open
+					var mover = makeCombatant( 1, 1 );
+					var target = makeCombatant( 5, 1 );
+					// Blocks the straight-line row between mover and target —
+					// with enough budget, the mover should still reach
+					// adjacency by detouring through row 2, rather than
+					// treating the occupied row as impassable and getting stuck.
+					var occupied = [ { "x": 2, "y": 1 }, { "x": 3, "y": 1 }, { "x": 4, "y": 1 } ];
+					var steps = service.moveToward( mover, target, 10, grid, occupied );
+					for ( var blockedPos in occupied ) {
+						expect( mover.position.x == blockedPos.x && mover.position.y == blockedPos.y ).toBeFalse();
+					}
+					expect( service.chebyshev( mover, target ) ).toBe( 1 );
+				} );
 			} );
 
 			describe( "isWalkable()", () => {
@@ -665,7 +702,14 @@ class extends="testbox.system.BaseSpec" {
 					} );
 					var state = { "player": player, "opponents": [ mob ], "opponent": mob, "log": [], "gameOver": false, "outcome": "" };
 
-					service.runEnemyTurn( state );
+					// attackBonus 100 guarantees a hit vs. AC 10 on any non-fumble
+					// roll, but a natural 1 always misses regardless of bonus — a
+					// miss leaves the player's HP (and the mob's fresh turn) exactly
+					// as it was, so retrying is safe (same pattern as attackUntilHit()
+					// in the multi-mob encounters above).
+					for ( var attempt = 1; attempt <= 20 && player.hitPoints > 0; attempt++ ) {
+						service.runEnemyTurn( state );
+					}
 
 					expect( state.gameOver ).toBeFalse();
 					expect( player.hitPoints ).toBe( 0 );
@@ -855,6 +899,82 @@ class extends="testbox.system.BaseSpec" {
 
 					expect( state.log.len() ).toBe( 2 );
 					expect( state.log[ 1 ] ).toInclude( "Hero" );
+				} );
+			} );
+
+			describe( "applyAbilityScoreImprovement()", () => {
+				function makePendingAsiState( abilityScores = {} ){
+					var player = makeCombatant( 0, 0, {
+						"abilityScores": { "str": 10, "dex": 10, "con": 10, "int": 10, "wis": 10, "cha": 10 }.append( arguments.abilityScores ),
+						"modifiers": { "str": 0, "dex": 0, "con": 0, "int": 0, "wis": 0, "cha": 0 },
+						"armorClass": 10, "pendingAbilityScoreImprovements": 1
+					} );
+					return { "player": player, "log": [] };
+				}
+
+				it( "is a no-op when there's no pending improvement", () => {
+					var state = makePendingAsiState();
+					state.player.pendingAbilityScoreImprovements = 0;
+					service.applyAbilityScoreImprovement( state, { "abilities": [ "str" ] } );
+					expect( state.player.abilityScores.str ).toBe( 10 );
+					expect( state.log.len() ).toBe( 0 );
+				} );
+
+				it( "applies +2 to a single chosen ability and consumes the pending improvement", () => {
+					var state = makePendingAsiState();
+					service.applyAbilityScoreImprovement( state, { "abilities": [ "str" ] } );
+					expect( state.player.abilityScores.str ).toBe( 12 );
+					expect( state.player.modifiers.str ).toBe( 1 );
+					expect( state.player.pendingAbilityScoreImprovements ).toBe( 0 );
+				} );
+
+				it( "applies +1 to each of two chosen abilities", () => {
+					var state = makePendingAsiState();
+					service.applyAbilityScoreImprovement( state, { "abilities": [ "str", "dex" ] } );
+					expect( state.player.abilityScores.str ).toBe( 11 );
+					expect( state.player.abilityScores.dex ).toBe( 11 );
+					expect( state.player.pendingAbilityScoreImprovements ).toBe( 0 );
+				} );
+
+				it( "caps an ability at 20", () => {
+					var state = makePendingAsiState( { "str": 19 } );
+					service.applyAbilityScoreImprovement( state, { "abilities": [ "str" ] } );
+					expect( state.player.abilityScores.str ).toBe( 20 );
+				} );
+
+				it( "increases Dexterity's modifier bump into armor class", () => {
+					var state = makePendingAsiState();
+					service.applyAbilityScoreImprovement( state, { "abilities": [ "dex" ] } );
+					expect( state.player.armorClass ).toBe( 11 );
+				} );
+
+				it( "bumps an equipped weapon's attack/damage bonus to match the improved ability", () => {
+					var state = makePendingAsiState();
+					state.player.inventory = [ { "name": "Sword", "category": "melee", "equipped": true, "attackBonus": 2, "damageBonus": 0, "id": 42 } ];
+					service.applyAbilityScoreImprovement( state, { "abilities": [ "str" ] } );
+					expect( state.player.inventory[ 1 ].attackBonus ).toBe( 3 );
+					expect( state.player.inventory[ 1 ].damageBonus ).toBe( 1 );
+				} );
+
+				it( "ignores an invalid number of abilities", () => {
+					var state = makePendingAsiState();
+					service.applyAbilityScoreImprovement( state, { "abilities": [ "str", "dex", "con" ] } );
+					expect( state.player.abilityScores.str ).toBe( 10 );
+					expect( state.player.pendingAbilityScoreImprovements ).toBe( 1 );
+				} );
+			} );
+
+			describe( "isFullCasterClass()", () => {
+				it( "is true for each of the six full-caster classes", () => {
+					for ( var className in [ "Bard", "Cleric", "Druid", "Sorcerer", "Warlock", "Wizard" ] ) {
+						expect( service.isFullCasterClass( className ) ).toBeTrue();
+					}
+				} );
+
+				it( "is false for half-casters and non-casters", () => {
+					for ( var className in [ "Paladin", "Ranger", "Fighter", "Barbarian", "Rogue", "Monk" ] ) {
+						expect( service.isFullCasterClass( className ) ).toBeFalse();
+					}
 				} );
 			} );
 

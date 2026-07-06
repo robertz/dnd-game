@@ -95,6 +95,34 @@
 		</bx:if>
 
 		<bx:if step == 5>
+			<h2 class="fantasy-heading">Spells</h2>
+			<p class="stat-subtitle">Choose a Cantrip</p>
+			<div class="creation-grid">
+				<bx:loop array="#cantripOptions#" index="cantrip">
+					<div
+						class="creation-card#( selectedCantripName == cantrip.name ? ' creation-card-selected' : '' )#"
+						wire:click="selectCantrip('#cantrip.name#')"
+					>
+						<h3 class="fantasy-heading">#cantrip.name#</h3>
+						<p class="stat-subtitle">#describeSpellOption( cantrip )#</p>
+					</div>
+				</bx:loop>
+			</div>
+			<p class="stat-subtitle">Choose a 1st-Level Spell</p>
+			<div class="creation-grid">
+				<bx:loop array="#spellOptions#" index="spell">
+					<div
+						class="creation-card#( selectedSpellName == spell.name ? ' creation-card-selected' : '' )#"
+						wire:click="selectSpell('#spell.name#')"
+					>
+						<h3 class="fantasy-heading">#spell.name#</h3>
+						<p class="stat-subtitle">#describeSpellOption( spell )#</p>
+					</div>
+				</bx:loop>
+			</div>
+		</bx:if>
+
+		<bx:if step == 6>
 			<h2 class="fantasy-heading">Name Your Character</h2>
 			<input type="text" class="creation-input" placeholder="Character name" wire:model="characterName" value="#characterName#" />
 
@@ -106,6 +134,12 @@
 					<li><strong>Background</strong> #selectedBackground#</li>
 					<li><strong>Alignment</strong> #selectedAlignment#</li>
 					<li><strong>Ability Scores</strong> STR #assignedScores.str#, DEX #assignedScores.dex#, CON #assignedScores.con#, INT #assignedScores.int#, WIS #assignedScores.wis#, CHA #assignedScores.cha#</li>
+					<bx:if len( selectedCantripName )>
+						<li><strong>Cantrip</strong> #selectedCantripName#</li>
+					</bx:if>
+					<bx:if len( selectedSpellName )>
+						<li><strong>1st-Level Spell</strong> #selectedSpellName#</li>
+					</bx:if>
 				</ul>
 			</div>
 		</bx:if>

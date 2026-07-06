@@ -10,5 +10,6 @@
 			"directoryPath": "./lib/testbox",
 			"isPhysicalDirectoryPath" :false
 		}
-	]
+ ],
+ "cflint.enabled": false
 }

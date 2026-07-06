@@ -13,8 +13,7 @@
     "dependencies":{
         "coldbox":"^8.0.0",
         "cbwire":"^5.0.4",
-        "cbstorages":"^3.5.0+5",
-        "qb":"^13.1.0"
+        "cbstorages":"^3.5.0+5"
     },
     "devDependencies":{
         "testbox":"*",
@@ -29,8 +28,7 @@
         "testbox":"lib/testbox/",
         "route-visualizer":"lib/modules/route-visualizer/",
         "cbwire":"lib/modules/cbwire/",
-        "cbstorages":"lib/modules/cbstorages/",
-        "qb":"lib/modules/qb/"
+        "cbstorages":"lib/modules/cbstorages/"
     },
     "scripts":{
         "format":"!boxlang format --source app/,tests/specs/,*.bx",

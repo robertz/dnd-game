@@ -6,9 +6,6 @@
 class singleton {
 
 	property name="combatService" inject="CombatService";
-	property name="qb"           inject="QueryBuilder@qb";
-
-	DB = { "datasource": "gameserver" };
 
 	// Backgrounds grant a specific feat, per "Character Origin" (Step 2).
 	// Only the feat's name is recorded here — Acolyte/Sage's "Magic Initiate"
@@ -34,11 +31,11 @@ class singleton {
 	 * (id, name, primary ability, hit die, saving throws, starting equipment).
 	 */
 	function listClasses() {
-		return qb.newQuery()
-			.from( "classes" )
-			.select( [ "id", "name", "primary_ability", "hit_die", "saving_throw_proficiencies", "starting_equipment" ] )
-			.orderByAsc( "name" )
-			.get( options = DB );
+		return queryExecute(
+			"SELECT id, name, primary_ability, hit_die, saving_throw_proficiencies, starting_equipment
+			 FROM classes ORDER BY name",
+			{}, { datasource: "gameserver" }
+		);
 	}
 
 	/**
@@ -46,12 +43,12 @@ class singleton {
 	 * screen to list (id, name, class, species, level).
 	 */
 	function listSavedCharacters() {
-		return qb.newQuery()
-			.from( "characters AS c" )
-			.join( "classes AS cl", "cl.id", "=", "c.class_id" )
-			.select( [ "c.id", "c.name", "cl.name AS className", "c.species", "c.level" ] )
-			.orderByAsc( "c.name" )
-			.get( options = DB );
+		return queryExecute(
+			"SELECT c.id, c.name, cl.name AS className, c.species, c.level
+			 FROM characters c JOIN classes cl ON cl.id = c.class_id
+			 ORDER BY c.name",
+			{}, { datasource: "gameserver" }
+		);
 	}
 
 	/**
@@ -78,44 +75,45 @@ class singleton {
 		species = "", background = "", alignment = "", level = 1,
 		knownCantrip = "", knownSpell = ""
 	) {
-		var classRow = qb.newQuery()
-			.from( "classes" )
-			.select( "hit_die" )
-			.where( "id", arguments.classId )
-			.first( DB );
-		if ( classRow.isEmpty() ) {
+		var classRows = queryExecute(
+			"SELECT hit_die FROM classes WHERE id = :classId",
+			{ "classId": arguments.classId },
+			{ datasource: "gameserver" }
+		);
+		if ( classRows.recordCount == 0 ) {
 			throw( type = "ClassNotFound", message = "No class with id #arguments.classId#." );
 		}
 
-		var dieSize = int( reReplace( classRow.hit_die, "[^0-9]*(\d+).*", "\1" ) );
+		var dieSize = int( reReplace( classRows.hit_die[ 1 ], "[^0-9]*(\d+).*", "\1" ) );
 		var speciesHpBonus = SPECIES_HP_BONUS.keyExists( arguments.species ) ? SPECIES_HP_BONUS[ arguments.species ] : 0;
 		var maxHitPoints = dieSize + combatService.abilityModifier( arguments.con ) + speciesHpBonus;
 		var armorClass = 10 + combatService.abilityModifier( arguments.dex );
 		var proficiencyBonus = combatService.proficiencyBonusForLevel( arguments.level );
 		var speed = SPECIES_SPEED.keyExists( arguments.species ) ? SPECIES_SPEED[ arguments.species ] : 30;
 
-		var insertResult = qb.newQuery()
-			.from( "characters" )
-			.insert(
-				{
-					"name": arguments.name,
-					"class_id": arguments.classId,
-					"species": len( arguments.species ) ? arguments.species : "",
-					"background": len( arguments.background ) ? arguments.background : "",
-					"alignment": len( arguments.alignment ) ? arguments.alignment : "",
-					"level": arguments.level,
-					"str": arguments.str, "dex": arguments.dex, "con": arguments.con,
-					"int_score": arguments.intScore, "wis": arguments.wis, "cha": arguments.cha,
-					"proficiency_bonus": proficiencyBonus,
-					"armor_class": armorClass,
-					"hit_points": maxHitPoints,
-					"max_hit_points": maxHitPoints,
-					"speed": speed,
-					"known_cantrip": len( arguments.knownCantrip ) ? arguments.knownCantrip : "",
-					"known_spell": len( arguments.knownSpell ) ? arguments.knownSpell : ""
-				},
-				DB
-			);
+		queryExecute(
+			"INSERT INTO characters
+			 (name, class_id, species, background, alignment, level, str, dex, con, int_score, wis, cha, proficiency_bonus, armor_class, hit_points, max_hit_points, speed, known_cantrip, known_spell)
+			 VALUES (:name, :classId, :species, :background, :alignment, :level, :str, :dex, :con, :intScore, :wis, :cha, :proficiencyBonus, :armorClass, :hitPoints, :maxHitPoints, :speed, :knownCantrip, :knownSpell)",
+			{
+				"name": arguments.name,
+				"classId": arguments.classId,
+				"species": len( arguments.species ) ? arguments.species : javaCast( "null", 0 ),
+				"background": len( arguments.background ) ? arguments.background : javaCast( "null", 0 ),
+				"alignment": len( arguments.alignment ) ? arguments.alignment : javaCast( "null", 0 ),
+				"level": arguments.level,
+				"str": arguments.str, "dex": arguments.dex, "con": arguments.con,
+				"intScore": arguments.intScore, "wis": arguments.wis, "cha": arguments.cha,
+				"proficiencyBonus": proficiencyBonus,
+				"armorClass": armorClass,
+				"hitPoints": maxHitPoints,
+				"maxHitPoints": maxHitPoints,
+				"speed": speed,
+				"knownCantrip": len( arguments.knownCantrip ) ? arguments.knownCantrip : javaCast( "null", 0 ),
+				"knownSpell": len( arguments.knownSpell ) ? arguments.knownSpell : javaCast( "null", 0 )
+			},
+			{ datasource: "gameserver", result: "insertResult" }
+		);
 
 		var characterId = insertResult.generatedKey;
 		assignStartingEquipment( characterId );
@@ -132,22 +130,22 @@ class singleton {
 	 * app has no UI for the player to choose one.
 	 */
 	private function _grantLevelOneFightingStyle( characterId, classId ) {
-		var hasStyle = qb.newQuery()
-			.from( "class_features" )
-			.where( "class_id", arguments.classId )
-			.where( "level", 1 )
-			.where( "name", "Fighting Style" )
-			.count( "*", 0, DB );
-		if ( !hasStyle ) {
+		var featureRows = queryExecute(
+			"SELECT 1 FROM class_features WHERE class_id = :classId AND level = 1 AND name = 'Fighting Style'",
+			{ "classId": arguments.classId },
+			{ datasource: "gameserver" }
+		);
+		if ( featureRows.recordCount == 0 ) {
 			return;
 		}
 
-		var inventoryRows = qb.newQuery()
-			.from( "character_inventory AS ci" )
-			.join( "weapons AS w", "w.id", "=", "ci.weapon_id" )
-			.select( [ "ci.equipped", "ci.category", "w.properties" ] )
-			.where( "ci.character_id", arguments.characterId )
-			.get( options = DB );
+		var inventoryRows = queryExecute(
+			"SELECT ci.equipped, ci.category, w.properties
+			 FROM character_inventory ci JOIN weapons w ON w.id = ci.weapon_id
+			 WHERE ci.character_id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
 		var inventory = [];
 		for ( var row in inventoryRows ) {
 			arrayAppend( inventory, {
@@ -168,18 +166,20 @@ class singleton {
 			return;
 		}
 
-		var featRow = qb.newQuery()
-			.from( "feats" )
-			.select( "id" )
-			.where( "name", BACKGROUND_FEATS[ arguments.background ] )
-			.first( DB );
-		if ( featRow.isEmpty() ) {
+		var featRows = queryExecute(
+			"SELECT id FROM feats WHERE name = :name",
+			{ "name": BACKGROUND_FEATS[ arguments.background ] },
+			{ datasource: "gameserver" }
+		);
+		if ( featRows.recordCount == 0 ) {
 			return;
 		}
 
-		qb.newQuery()
-			.from( "character_feats" )
-			.insertIgnore( { "character_id": arguments.characterId, "feat_id": featRow.id }, [], DB );
+		queryExecute(
+			"INSERT IGNORE INTO character_feats (character_id, feat_id) VALUES (:characterId, :featId)",
+			{ "characterId": arguments.characterId, "featId": featRows.id[ 1 ] },
+			{ datasource: "gameserver" }
+		);
 	}
 
 	/**
@@ -200,25 +200,23 @@ class singleton {
 	 * @characterId characters.id to assign equipment to.
 	 */
 	function assignStartingEquipment( characterId ) {
-		var charRow = qb.newQuery()
-			.from( "characters AS c" )
-			.join( "classes AS cl", "cl.id", "=", "c.class_id" )
-			.select( [ "c.str", "c.dex", "c.proficiency_bonus", "cl.starting_equipment" ] )
-			.where( "c.id", arguments.characterId )
-			.first( DB );
-		if ( charRow.isEmpty() ) {
+		var rows = queryExecute(
+			"SELECT c.str, c.dex, c.proficiency_bonus, cl.starting_equipment
+			 FROM characters c JOIN classes cl ON cl.id = c.class_id
+			 WHERE c.id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		if ( rows.recordCount == 0 ) {
 			throw( type = "CharacterNotFound", message = "No saved character with id #arguments.characterId#." );
 		}
 
-		var strModifier = combatService.abilityModifier( charRow.str );
-		var dexModifier = combatService.abilityModifier( charRow.dex );
-		var proficiencyBonus = charRow.proficiency_bonus;
-		var equipmentText = _optionAText( charRow.starting_equipment );
+		var strModifier = combatService.abilityModifier( rows.str[ 1 ] );
+		var dexModifier = combatService.abilityModifier( rows.dex[ 1 ] );
+		var proficiencyBonus = rows.proficiency_bonus[ 1 ];
+		var equipmentText = _optionAText( rows.starting_equipment[ 1 ] );
 
-		var weapons = qb.newQuery()
-			.from( "weapons" )
-			.select( [ "id", "name", "weapon_type", "properties" ] )
-			.get( options = DB );
+		var weapons = queryExecute( "SELECT id, name, weapon_type, properties FROM weapons", {}, { datasource: "gameserver" } );
 
 		var hasMelee = false;
 		var hasRanged = false;
@@ -247,24 +245,24 @@ class singleton {
 				quantity = int( mid( equipmentText, quantityMatch.pos[ 2 ], quantityMatch.len[ 2 ] ) );
 			}
 
-			qb.newQuery()
-				.from( "character_inventory" )
-				.insertIgnore(
-					{
-						"character_id": arguments.characterId,
-						"weapon_id": weapon.id,
-						"category": category,
-						// Bound as 0/1, not a bare boolean — BoxLang's queryExecute
-						// otherwise sends the literal text "true"/"false", which
-						// MySQL's strict mode rejects for a BOOLEAN/TINYINT column.
-						"equipped": equipped ? 1 : 0,
-						"quantity": quantity,
-						"attack_bonus": abilityMod + proficiencyBonus,
-						"damage_bonus": abilityMod
-					},
-					[],
-					DB
-				);
+			queryExecute(
+				"INSERT IGNORE INTO character_inventory
+				 (character_id, weapon_id, category, equipped, quantity, attack_bonus, damage_bonus)
+				 VALUES (:characterId, :weaponId, :category, :equipped, :quantity, :attackBonus, :damageBonus)",
+				{
+					"characterId": arguments.characterId,
+					"weaponId": weapon.id,
+					"category": category,
+					// Bound as 0/1, not a bare boolean — BoxLang's queryExecute
+					// otherwise sends the literal text "true"/"false", which
+					// MySQL's strict mode rejects for a BOOLEAN/TINYINT column.
+					"equipped": equipped ? 1 : 0,
+					"quantity": quantity,
+					"attackBonus": abilityMod + proficiencyBonus,
+					"damageBonus": abilityMod
+				},
+				{ datasource: "gameserver" }
+			);
 		}
 	}
 
@@ -272,73 +270,74 @@ class singleton {
 	 * Returns the full character sheet data struct for display and editing.
 	 */
 	function getCharacterSheet( characterId ) {
-		var row = qb.newQuery()
-			.from( "characters AS c" )
-			.join( "classes AS cl", "cl.id", "=", "c.class_id" )
-			.select( [
-				"c.id", "c.name", "c.species", "c.background", "c.alignment", "c.level",
-				"c.str", "c.dex", "c.con", "c.int_score", "c.wis", "c.cha",
-				"c.proficiency_bonus", "c.armor_class", "c.max_hit_points", "c.speed",
-				"c.experience_points", "c.known_cantrip", "c.known_spell",
-				"cl.name AS className", "cl.hit_die", "cl.saving_throw_proficiencies"
-			] )
-			.where( "c.id", arguments.characterId )
-			.first( DB );
-		if ( row.isEmpty() ) {
+		var row = queryExecute(
+			"SELECT c.id, c.name, c.species, c.background, c.alignment, c.level,
+			        c.str, c.dex, c.con, c.int_score, c.wis, c.cha,
+			        c.proficiency_bonus, c.armor_class, c.max_hit_points, c.speed,
+			        c.experience_points, c.known_cantrip, c.known_spell,
+			        cl.name AS className, cl.hit_die, cl.saving_throw_proficiencies
+			 FROM characters c JOIN classes cl ON cl.id = c.class_id
+			 WHERE c.id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		if ( row.recordCount == 0 ) {
 			throw( type = "CharacterNotFound", message = "No character with id ##arguments.characterId##." );
 		}
 
 		var sheet = {
-			"characterId": row.id,
-			"name": row.name,
-			"className": row.className,
-			"hitDie": row.hit_die,
-			"species": len( row.species ) ? row.species : "",
-			"background": len( row.background ) ? row.background : "",
-			"alignment": len( row.alignment ) ? row.alignment : "",
-			"level": row.level,
+			"characterId": row.id[ 1 ],
+			"name": row.name[ 1 ],
+			"className": row.className[ 1 ],
+			"hitDie": row.hit_die[ 1 ],
+			"species": len( row.species[ 1 ] ) ? row.species[ 1 ] : "",
+			"background": len( row.background[ 1 ] ) ? row.background[ 1 ] : "",
+			"alignment": len( row.alignment[ 1 ] ) ? row.alignment[ 1 ] : "",
+			"level": row.level[ 1 ],
 			"abilityScores": {
-				"str": row.str, "dex": row.dex, "con": row.con,
-				"int": row.int_score, "wis": row.wis, "cha": row.cha
+				"str": row.str[ 1 ], "dex": row.dex[ 1 ], "con": row.con[ 1 ],
+				"int": row.int_score[ 1 ], "wis": row.wis[ 1 ], "cha": row.cha[ 1 ]
 			},
 			"modifiers": {
-				"str": combatService.abilityModifier( row.str ),
-				"dex": combatService.abilityModifier( row.dex ),
-				"con": combatService.abilityModifier( row.con ),
-				"int": combatService.abilityModifier( row.int_score ),
-				"wis": combatService.abilityModifier( row.wis ),
-				"cha": combatService.abilityModifier( row.cha )
+				"str": combatService.abilityModifier( row.str[ 1 ] ),
+				"dex": combatService.abilityModifier( row.dex[ 1 ] ),
+				"con": combatService.abilityModifier( row.con[ 1 ] ),
+				"int": combatService.abilityModifier( row.int_score[ 1 ] ),
+				"wis": combatService.abilityModifier( row.wis[ 1 ] ),
+				"cha": combatService.abilityModifier( row.cha[ 1 ] )
 			},
-			"proficiencyBonus": row.proficiency_bonus,
-			"armorClass": row.armor_class,
-			"maxHitPoints": row.max_hit_points,
-			"speed": row.speed,
-			"experiencePoints": row.experience_points,
-			"savingThrowProficiencies": listToArray( row.saving_throw_proficiencies, " and ", false, true ),
-			"knownCantripName": len( row.known_cantrip ) ? row.known_cantrip : "",
-			"knownSpellName": len( row.known_spell ) ? row.known_spell : "",
+			"proficiencyBonus": row.proficiency_bonus[ 1 ],
+			"armorClass": row.armor_class[ 1 ],
+			"maxHitPoints": row.max_hit_points[ 1 ],
+			"speed": row.speed[ 1 ],
+			"experiencePoints": row.experience_points[ 1 ],
+			"savingThrowProficiencies": listToArray( row.saving_throw_proficiencies[ 1 ], " and ", false, true ),
+			"knownCantripName": len( row.known_cantrip[ 1 ] ) ? row.known_cantrip[ 1 ] : "",
+			"knownSpellName": len( row.known_spell[ 1 ] ) ? row.known_spell[ 1 ] : "",
 			"features": [],
 			"feats": []
 		};
 
-		var featureRows = qb.newQuery()
-			.from( "character_features AS chf" )
-			.join( "class_features AS cf", "cf.id", "=", "chf.class_feature_id" )
-			.select( [ "cf.name", "cf.level" ] )
-			.where( "chf.character_id", arguments.characterId )
-			.orderByAsc( "cf.level" )
-			.orderByAsc( "cf.sort_order" )
-			.get( options = DB );
+		var featureRows = queryExecute(
+			"SELECT cf.name, cf.level
+			 FROM character_features chf
+			 JOIN class_features cf ON cf.id = chf.class_feature_id
+			 WHERE chf.character_id = :characterId
+			 ORDER BY cf.level, cf.sort_order",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
 		for ( var featureRow in featureRows ) {
 			sheet.features.append( { "name": featureRow.name, "level": featureRow.level } );
 		}
 
-		var featRows = qb.newQuery()
-			.from( "character_feats AS chf" )
-			.join( "feats AS f", "f.id", "=", "chf.feat_id" )
-			.select( "f.name" )
-			.where( "chf.character_id", arguments.characterId )
-			.get( options = DB );
+		var featRows = queryExecute(
+			"SELECT f.name FROM character_feats chf
+			 JOIN feats f ON f.id = chf.feat_id
+			 WHERE chf.character_id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
 		for ( var featRow in featRows ) {
 			sheet.feats.append( featRow.name );
 		}
@@ -350,18 +349,17 @@ class singleton {
 	 * Returns the character's weapon inventory as an array of structs.
 	 */
 	function getInventory( characterId ) {
-		var rows = qb.newQuery()
-			.from( "character_inventory AS ci" )
-			.join( "weapons AS w", "w.id", "=", "ci.weapon_id" )
-			.select( [
-				"ci.id", "ci.category", "ci.equipped", "ci.quantity",
-				"ci.attack_bonus", "ci.damage_bonus",
-				"w.name AS weaponName", "w.damage_dice", "w.damage_type", "w.weapon_type", "w.properties"
-			] )
-			.where( "ci.character_id", arguments.characterId )
-			.orderByDesc( "ci.equipped" )
-			.orderByAsc( "w.name" )
-			.get( options = DB );
+		var rows = queryExecute(
+			"SELECT ci.id, ci.category, ci.equipped, ci.quantity,
+			        ci.attack_bonus, ci.damage_bonus,
+			        w.name AS weaponName, w.damage_dice, w.damage_type, w.weapon_type, w.properties
+			 FROM character_inventory ci
+			 JOIN weapons w ON w.id = ci.weapon_id
+			 WHERE ci.character_id = :characterId
+			 ORDER BY ci.equipped DESC, w.name",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
 		var result = [];
 		for ( var inventoryRow in rows ) {
 			result.append( {
@@ -385,12 +383,11 @@ class singleton {
 	 * Returns every SRD weapon as an array of structs, for the add-weapon picker.
 	 */
 	function listWeapons() {
-		var rows = qb.newQuery()
-			.from( "weapons" )
-			.select( [ "id", "name", "category", "weapon_type", "damage_dice", "damage_type" ] )
-			.orderByAsc( "category" )
-			.orderByAsc( "name" )
-			.get( options = DB );
+		var rows = queryExecute(
+			"SELECT id, name, category, weapon_type, damage_dice, damage_type
+			 FROM weapons ORDER BY category, name",
+			{}, { datasource: "gameserver" }
+		);
 		var result = [];
 		for ( var weaponRow in rows ) {
 			result.append( {
@@ -406,40 +403,25 @@ class singleton {
 	}
 
 	/**
-	 * Sets the equipped flag on a character_inventory row. When equipping,
-	 * any other weapon already equipped in the same category (melee or ranged)
-	 * is unequipped first — only one weapon per slot is allowed.
+	 * Sets the equipped flag on a character_inventory row.
 	 */
 	function setEquipped( inventoryId, equip ) {
-		if ( arguments.equip ) {
-			var infoRow = qb.newQuery()
-				.from( "character_inventory" )
-				.select( [ "character_id", "category" ] )
-				.where( "id", arguments.inventoryId )
-				.first( DB );
-			if ( !infoRow.isEmpty() ) {
-				qb.newQuery()
-					.from( "character_inventory" )
-					.where( "character_id", infoRow.character_id )
-					.where( "category", infoRow.category )
-					.where( "id", "!=", arguments.inventoryId )
-					.update( { "equipped": 0 }, DB );
-			}
-		}
-		qb.newQuery()
-			.from( "character_inventory" )
-			.where( "id", arguments.inventoryId )
-			.update( { "equipped": arguments.equip ? 1 : 0 }, DB );
+		queryExecute(
+			"UPDATE character_inventory SET equipped = :equipped WHERE id = :id",
+			{ "id": arguments.inventoryId, "equipped": arguments.equip ? 1 : 0 },
+			{ datasource: "gameserver" }
+		);
 	}
 
 	/**
 	 * Changes the combat slot (melee or ranged) a carried weapon fills.
 	 */
 	function setWeaponCategory( inventoryId, category ) {
-		qb.newQuery()
-			.from( "character_inventory" )
-			.where( "id", arguments.inventoryId )
-			.update( { "category": arguments.category }, DB );
+		queryExecute(
+			"UPDATE character_inventory SET category = :category WHERE id = :id",
+			{ "id": arguments.inventoryId, "category": arguments.category },
+			{ datasource: "gameserver" }
+		);
 	}
 
 	/**
@@ -448,56 +430,55 @@ class singleton {
 	 * INSERT IGNORE silently skips if the character already carries that weapon.
 	 */
 	function addWeaponToInventory( characterId, weaponId, category ) {
-		var charRow = qb.newQuery()
-			.from( "characters" )
-			.select( [ "str", "dex", "proficiency_bonus" ] )
-			.where( "id", arguments.characterId )
-			.first( DB );
+		var charRow = queryExecute(
+			"SELECT str, dex, proficiency_bonus FROM characters WHERE id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
 		var abilityMod = ( arguments.category == "ranged" )
-			? combatService.abilityModifier( charRow.dex )
-			: combatService.abilityModifier( charRow.str );
+			? combatService.abilityModifier( charRow.dex[ 1 ] )
+			: combatService.abilityModifier( charRow.str[ 1 ] );
 
-		qb.newQuery()
-			.from( "character_inventory" )
-			.insertIgnore(
-				{
-					"character_id": arguments.characterId,
-					"weapon_id": arguments.weaponId,
-					"category": arguments.category,
-					"equipped": 0,
-					"quantity": 1,
-					"attack_bonus": abilityMod + charRow.proficiency_bonus,
-					"damage_bonus": abilityMod
-				},
-				[],
-				DB
-			);
+		queryExecute(
+			"INSERT IGNORE INTO character_inventory
+			 (character_id, weapon_id, category, equipped, quantity, attack_bonus, damage_bonus)
+			 VALUES (:characterId, :weaponId, :category, 0, 1, :attackBonus, :damageBonus)",
+			{
+				"characterId": arguments.characterId,
+				"weaponId": arguments.weaponId,
+				"category": arguments.category,
+				"attackBonus": abilityMod + charRow.proficiency_bonus[ 1 ],
+				"damageBonus": abilityMod
+			},
+			{ datasource: "gameserver" }
+		);
 	}
 
 	/**
 	 * Removes a weapon from a character's inventory by inventory row id.
 	 */
 	function removeWeapon( inventoryId ) {
-		qb.newQuery()
-			.from( "character_inventory" )
-			.where( "id", arguments.inventoryId )
-			.delete( DB );
+		queryExecute(
+			"DELETE FROM character_inventory WHERE id = :id",
+			{ "id": arguments.inventoryId },
+			{ datasource: "gameserver" }
+		);
 	}
 
 	/**
 	 * Persists a full-caster character's chosen cantrip and 1st-level spell names.
 	 */
 	function updateSpellChoices( characterId, knownCantrip, knownSpell ) {
-		qb.newQuery()
-			.from( "characters" )
-			.where( "id", arguments.characterId )
-			.update(
-				{
-					"known_cantrip": len( arguments.knownCantrip ) ? arguments.knownCantrip : "",
-					"known_spell": len( arguments.knownSpell ) ? arguments.knownSpell : ""
-				},
-				DB
-			);
+		queryExecute(
+			"UPDATE characters SET known_cantrip = :knownCantrip, known_spell = :knownSpell
+			 WHERE id = :characterId",
+			{
+				"characterId": arguments.characterId,
+				"knownCantrip": len( arguments.knownCantrip ) ? arguments.knownCantrip : javaCast( "null", 0 ),
+				"knownSpell": len( arguments.knownSpell ) ? arguments.knownSpell : javaCast( "null", 0 )
+			},
+			{ datasource: "gameserver" }
+		);
 	}
 
 	/**

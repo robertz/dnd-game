@@ -267,6 +267,221 @@ class singleton {
 	}
 
 	/**
+	 * Returns the full character sheet data struct for display and editing.
+	 */
+	function getCharacterSheet( characterId ) {
+		var row = queryExecute(
+			"SELECT c.id, c.name, c.species, c.background, c.alignment, c.level,
+			        c.str, c.dex, c.con, c.int_score, c.wis, c.cha,
+			        c.proficiency_bonus, c.armor_class, c.max_hit_points, c.speed,
+			        c.experience_points, c.known_cantrip, c.known_spell,
+			        cl.name AS className, cl.hit_die, cl.saving_throw_proficiencies
+			 FROM characters c JOIN classes cl ON cl.id = c.class_id
+			 WHERE c.id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		if ( row.recordCount == 0 ) {
+			throw( type = "CharacterNotFound", message = "No character with id ##arguments.characterId##." );
+		}
+
+		var sheet = {
+			"characterId": row.id[ 1 ],
+			"name": row.name[ 1 ],
+			"className": row.className[ 1 ],
+			"hitDie": row.hit_die[ 1 ],
+			"species": len( row.species[ 1 ] ) ? row.species[ 1 ] : "",
+			"background": len( row.background[ 1 ] ) ? row.background[ 1 ] : "",
+			"alignment": len( row.alignment[ 1 ] ) ? row.alignment[ 1 ] : "",
+			"level": row.level[ 1 ],
+			"abilityScores": {
+				"str": row.str[ 1 ], "dex": row.dex[ 1 ], "con": row.con[ 1 ],
+				"int": row.int_score[ 1 ], "wis": row.wis[ 1 ], "cha": row.cha[ 1 ]
+			},
+			"modifiers": {
+				"str": combatService.abilityModifier( row.str[ 1 ] ),
+				"dex": combatService.abilityModifier( row.dex[ 1 ] ),
+				"con": combatService.abilityModifier( row.con[ 1 ] ),
+				"int": combatService.abilityModifier( row.int_score[ 1 ] ),
+				"wis": combatService.abilityModifier( row.wis[ 1 ] ),
+				"cha": combatService.abilityModifier( row.cha[ 1 ] )
+			},
+			"proficiencyBonus": row.proficiency_bonus[ 1 ],
+			"armorClass": row.armor_class[ 1 ],
+			"maxHitPoints": row.max_hit_points[ 1 ],
+			"speed": row.speed[ 1 ],
+			"experiencePoints": row.experience_points[ 1 ],
+			"savingThrowProficiencies": listToArray( row.saving_throw_proficiencies[ 1 ], " and ", false, true ),
+			"knownCantripName": len( row.known_cantrip[ 1 ] ) ? row.known_cantrip[ 1 ] : "",
+			"knownSpellName": len( row.known_spell[ 1 ] ) ? row.known_spell[ 1 ] : "",
+			"features": [],
+			"feats": []
+		};
+
+		var featureRows = queryExecute(
+			"SELECT cf.name, cf.level
+			 FROM character_features chf
+			 JOIN class_features cf ON cf.id = chf.class_feature_id
+			 WHERE chf.character_id = :characterId
+			 ORDER BY cf.level, cf.sort_order",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		for ( var featureRow in featureRows ) {
+			sheet.features.append( { "name": featureRow.name, "level": featureRow.level } );
+		}
+
+		var featRows = queryExecute(
+			"SELECT f.name FROM character_feats chf
+			 JOIN feats f ON f.id = chf.feat_id
+			 WHERE chf.character_id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		for ( var featRow in featRows ) {
+			sheet.feats.append( featRow.name );
+		}
+
+		return sheet;
+	}
+
+	/**
+	 * Returns the character's weapon inventory as an array of structs.
+	 */
+	function getInventory( characterId ) {
+		var rows = queryExecute(
+			"SELECT ci.id, ci.category, ci.equipped, ci.quantity,
+			        ci.attack_bonus, ci.damage_bonus,
+			        w.name AS weaponName, w.damage_dice, w.damage_type, w.weapon_type, w.properties
+			 FROM character_inventory ci
+			 JOIN weapons w ON w.id = ci.weapon_id
+			 WHERE ci.character_id = :characterId
+			 ORDER BY ci.equipped DESC, w.name",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		var result = [];
+		for ( var inventoryRow in rows ) {
+			result.append( {
+				"id": inventoryRow.id,
+				"weaponName": inventoryRow.weaponName,
+				"category": inventoryRow.category,
+				"equipped": inventoryRow.equipped,
+				"quantity": inventoryRow.quantity,
+				"attackBonus": inventoryRow.attack_bonus,
+				"damageBonus": inventoryRow.damage_bonus,
+				"damageDice": inventoryRow.damage_dice,
+				"damageType": inventoryRow.damage_type,
+				"weaponType": inventoryRow.weapon_type,
+				"properties": inventoryRow.properties
+			} );
+		}
+		return result;
+	}
+
+	/**
+	 * Returns every SRD weapon as an array of structs, for the add-weapon picker.
+	 */
+	function listWeapons() {
+		var rows = queryExecute(
+			"SELECT id, name, category, weapon_type, damage_dice, damage_type
+			 FROM weapons ORDER BY category, name",
+			{}, { datasource: "gameserver" }
+		);
+		var result = [];
+		for ( var weaponRow in rows ) {
+			result.append( {
+				"id": weaponRow.id,
+				"name": weaponRow.name,
+				"category": weaponRow.category,
+				"weaponType": weaponRow.weapon_type,
+				"damageDice": weaponRow.damage_dice,
+				"damageType": weaponRow.damage_type
+			} );
+		}
+		return result;
+	}
+
+	/**
+	 * Sets the equipped flag on a character_inventory row.
+	 */
+	function setEquipped( inventoryId, equip ) {
+		queryExecute(
+			"UPDATE character_inventory SET equipped = :equipped WHERE id = :id",
+			{ "id": arguments.inventoryId, "equipped": arguments.equip ? 1 : 0 },
+			{ datasource: "gameserver" }
+		);
+	}
+
+	/**
+	 * Changes the combat slot (melee or ranged) a carried weapon fills.
+	 */
+	function setWeaponCategory( inventoryId, category ) {
+		queryExecute(
+			"UPDATE character_inventory SET category = :category WHERE id = :id",
+			{ "id": arguments.inventoryId, "category": arguments.category },
+			{ datasource: "gameserver" }
+		);
+	}
+
+	/**
+	 * Adds a weapon to a character's inventory. Attack/damage bonuses are
+	 * computed from the character's current STR/DEX + Proficiency Bonus.
+	 * INSERT IGNORE silently skips if the character already carries that weapon.
+	 */
+	function addWeaponToInventory( characterId, weaponId, category ) {
+		var charRow = queryExecute(
+			"SELECT str, dex, proficiency_bonus FROM characters WHERE id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		var abilityMod = ( arguments.category == "ranged" )
+			? combatService.abilityModifier( charRow.dex[ 1 ] )
+			: combatService.abilityModifier( charRow.str[ 1 ] );
+
+		queryExecute(
+			"INSERT IGNORE INTO character_inventory
+			 (character_id, weapon_id, category, equipped, quantity, attack_bonus, damage_bonus)
+			 VALUES (:characterId, :weaponId, :category, 0, 1, :attackBonus, :damageBonus)",
+			{
+				"characterId": arguments.characterId,
+				"weaponId": arguments.weaponId,
+				"category": arguments.category,
+				"attackBonus": abilityMod + charRow.proficiency_bonus[ 1 ],
+				"damageBonus": abilityMod
+			},
+			{ datasource: "gameserver" }
+		);
+	}
+
+	/**
+	 * Removes a weapon from a character's inventory by inventory row id.
+	 */
+	function removeWeapon( inventoryId ) {
+		queryExecute(
+			"DELETE FROM character_inventory WHERE id = :id",
+			{ "id": arguments.inventoryId },
+			{ datasource: "gameserver" }
+		);
+	}
+
+	/**
+	 * Persists a full-caster character's chosen cantrip and 1st-level spell names.
+	 */
+	function updateSpellChoices( characterId, knownCantrip, knownSpell ) {
+		queryExecute(
+			"UPDATE characters SET known_cantrip = :knownCantrip, known_spell = :knownSpell
+			 WHERE id = :characterId",
+			{
+				"characterId": arguments.characterId,
+				"knownCantrip": len( arguments.knownCantrip ) ? arguments.knownCantrip : javaCast( "null", 0 ),
+				"knownSpell": len( arguments.knownSpell ) ? arguments.knownSpell : javaCast( "null", 0 )
+			},
+			{ datasource: "gameserver" }
+		);
+	}
+
+	/**
 	 * Several classes' starting equipment offers a lettered choice (e.g.
 	 * "Choose A or B: (A) Greataxe, ...; or (B) 75 GP", or a 3-way choice for
 	 * Fighter). Scanning the full text would pick up weapons from every

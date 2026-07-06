@@ -1,0 +1,124 @@
+class extends="cbwire.models.Component" {
+
+	property name="characterService" inject="CharacterService";
+	property name="combatService"    inject="CombatService";
+
+	data = {
+		"character":            {},
+		"inventory":            [],
+		"availableWeapons":     [],
+		"cantripOptions":       [],
+		"spellOptions":         [],
+		"selectedCantripName":  "",
+		"selectedSpellName":    "",
+		"addWeaponId":          "",
+		"addWeaponCategory":    "melee",
+		"tab":                  "weapons",
+		"message":              ""
+	}
+
+	function onMount( event, rc, prc, params ) {
+		if ( !structKeyExists( session, "charid" ) || !len( session.charid ) ) {
+			redirect( "/" );
+			return;
+		}
+		_loadSheet();
+	}
+
+	private function _loadSheet() {
+		var charId = session.charid;
+		variables.data.character        = characterService.getCharacterSheet( charId );
+		variables.data.inventory        = characterService.getInventory( charId );
+		variables.data.availableWeapons = characterService.listWeapons();
+
+		if ( variables.data.availableWeapons.len() ) {
+			variables.data.addWeaponId = variables.data.availableWeapons[ 1 ].id;
+		}
+
+		var className = variables.data.character.className;
+		if ( combatService.isFullCasterClass( className ) ) {
+			variables.data.cantripOptions      = combatService.listCastableSpells( className, 0 );
+			variables.data.spellOptions        = combatService.listCastableSpells( className, 1 );
+			variables.data.selectedCantripName = variables.data.character.knownCantripName;
+			variables.data.selectedSpellName   = variables.data.character.knownSpellName;
+		}
+	}
+
+	function setTab( tab ) {
+		variables.data.tab     = arguments.tab;
+		variables.data.message = "";
+	}
+
+	function toggleEquip( inventoryId ) {
+		var currentEquipped = false;
+		for ( var inventoryItem in variables.data.inventory ) {
+			if ( inventoryItem.id == arguments.inventoryId ) {
+				currentEquipped = inventoryItem.equipped;
+				break;
+			}
+		}
+		characterService.setEquipped( arguments.inventoryId, !currentEquipped );
+		variables.data.inventory = characterService.getInventory( session.charid );
+	}
+
+	function setCategory( inventoryId, category ) {
+		characterService.setWeaponCategory( arguments.inventoryId, arguments.category );
+		variables.data.inventory = characterService.getInventory( session.charid );
+	}
+
+	function addWeapon() {
+		if ( !len( variables.data.addWeaponId ) ) {
+			return;
+		}
+		characterService.addWeaponToInventory(
+			session.charid,
+			variables.data.addWeaponId,
+			variables.data.addWeaponCategory
+		);
+		variables.data.inventory = characterService.getInventory( session.charid );
+		variables.data.message   = "Weapon added.";
+	}
+
+	function removeWeapon( inventoryId ) {
+		characterService.removeWeapon( arguments.inventoryId );
+		variables.data.inventory = characterService.getInventory( session.charid );
+		variables.data.message   = "Weapon removed.";
+	}
+
+	function selectCantrip( name ) {
+		variables.data.selectedCantripName = arguments.name;
+		variables.data.message             = "";
+	}
+
+	function selectSpell( name ) {
+		variables.data.selectedSpellName = arguments.name;
+		variables.data.message           = "";
+	}
+
+	function saveSpells() {
+		characterService.updateSpellChoices(
+			session.charid,
+			variables.data.selectedCantripName,
+			variables.data.selectedSpellName
+		);
+		variables.data.character = characterService.getCharacterSheet( session.charid );
+		variables.data.message   = "Spell choices saved.";
+	}
+
+	// Returns "+N" for non-negative, "-N" for negative — safe for display in templates.
+	function modLabel( mod ) {
+		return arguments.mod >= 0 ? "+" & arguments.mod : "" & arguments.mod;
+	}
+
+	function describeSpell( spell ) {
+		if ( arguments.spell.type == "heal" ) {
+			return "Heal — " & arguments.spell.diceCount & "d" & arguments.spell.diceSides;
+		}
+		if ( arguments.spell.type == "attack" ) {
+			return "Attack — " & arguments.spell.diceCount & "d" & arguments.spell.diceSides & " " & arguments.spell.damageType;
+		}
+		return "Save (" & uCase( arguments.spell.saveAbility ) & ") — "
+			& arguments.spell.diceCount & "d" & arguments.spell.diceSides & " " & arguments.spell.damageType;
+	}
+
+}

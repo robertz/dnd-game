@@ -1,0 +1,201 @@
+<bx:output>
+<div class="encounter">
+	<div class="encounter-main">
+
+		<bx:if !character.isEmpty()>
+
+			<div class="parchment-panel" style="margin-bottom: 1rem;">
+				<h2 class="fantasy-heading" style="margin: 0 0 0.3rem;">#character.name#</h2>
+				<p class="stat-subtitle" style="margin: 0;">
+					Level #character.level# #character.species# #character.className#
+					<bx:if len( character.background )> &bull; #character.background#</bx:if>
+					<bx:if len( character.alignment )> &bull; #character.alignment#</bx:if>
+					&bull; #character.experiencePoints# XP &bull; Hit Die: #character.hitDie#
+				</p>
+			</div>
+
+			<div class="ability-grid">
+				<bx:loop array="#['str','dex','con','int','wis','cha']#" index="abbrev">
+					<div class="ability-box">
+						<span class="ability-label">#uCase( abbrev )#</span>
+						<span class="ability-score">#character.abilityScores[ abbrev ]#</span>
+						<span class="ability-mod">#modLabel( character.modifiers[ abbrev ] )#</span>
+					</div>
+				</bx:loop>
+			</div>
+
+			<div class="core-stats-row">
+				<div class="core-stat-box">
+					<span class="core-stat-label">AC</span>
+					<span class="core-stat-value">#character.armorClass#</span>
+				</div>
+				<div class="core-stat-box">
+					<span class="core-stat-label">Max HP</span>
+					<span class="core-stat-value">#character.maxHitPoints#</span>
+				</div>
+				<div class="core-stat-box">
+					<span class="core-stat-label">Speed</span>
+					<span class="core-stat-value">#character.speed# ft</span>
+				</div>
+				<div class="core-stat-box">
+					<span class="core-stat-label">Proficiency</span>
+					<span class="core-stat-value">+#character.proficiencyBonus#</span>
+				</div>
+			</div>
+
+			<div class="parchment-panel" style="margin-bottom: 1rem;">
+				<p class="stat-subtitle" style="margin: 0 0 0.5rem;">
+					<strong>Saving Throw Proficiencies:</strong>
+					#arrayToList( character.savingThrowProficiencies, ", " )#
+				</p>
+				<bx:if character.features.len()>
+					<p class="stat-subtitle" style="margin: 0.75rem 0 0.4rem;"><strong>Features</strong></p>
+					<div class="sheet-features">
+						<bx:loop array="#character.features#" index="sheetFeature">
+							<span class="feature-chip">Lv #sheetFeature.level# — #sheetFeature.name#</span>
+						</bx:loop>
+					</div>
+				</bx:if>
+				<bx:if character.feats.len()>
+					<p class="stat-subtitle" style="margin: 0.75rem 0 0.4rem;"><strong>Feats</strong></p>
+					<div class="sheet-features">
+						<bx:loop array="#character.feats#" index="sheetFeat">
+							<span class="feature-chip">#sheetFeat#</span>
+						</bx:loop>
+					</div>
+				</bx:if>
+			</div>
+
+			<div class="sheet-tabs">
+				<button type="button"
+					class="sheet-tab#( tab == 'weapons' ? ' sheet-tab-active' : '' )#"
+					wire:click="setTab('weapons')"
+				>Weapons</button>
+				<bx:if cantripOptions.len() || spellOptions.len()>
+					<button type="button"
+						class="sheet-tab#( tab == 'spells' ? ' sheet-tab-active' : '' )#"
+						wire:click="setTab('spells')"
+					>Spells</button>
+				</bx:if>
+			</div>
+
+			<bx:if tab == 'weapons'>
+				<div class="sheet-tab-panel">
+					<bx:if inventory.len()>
+						<bx:loop array="#inventory#" index="inventoryItem">
+							<div class="inventory-row">
+								<span class="inventory-name">
+									#inventoryItem.weaponName#
+									<bx:if inventoryItem.equipped>
+										<span class="feature-chip" style="font-size: 0.7rem; padding: 0.1rem 0.45rem;">equipped</span>
+									</bx:if>
+								</span>
+								<span class="inventory-stat">#inventoryItem.damageDice# #inventoryItem.damageType#</span>
+								<span class="inventory-stat">
+									Atk #modLabel( inventoryItem.attackBonus )# / Dmg #modLabel( inventoryItem.damageBonus )#
+								</span>
+								<span class="inventory-stat" style="display: flex; gap: 0.3rem;">
+									<button type="button"
+										class="btn#( inventoryItem.category == 'melee' ? ' btn-auto-battle' : '' )#"
+										style="padding: 0.15rem 0.5rem; font-size: 0.75rem;"
+										wire:click="setCategory(#inventoryItem.id#, 'melee')"
+									>Melee</button>
+									<button type="button"
+										class="btn#( inventoryItem.category == 'ranged' ? ' btn-auto-battle' : '' )#"
+										style="padding: 0.15rem 0.5rem; font-size: 0.75rem;"
+										wire:click="setCategory(#inventoryItem.id#, 'ranged')"
+									>Ranged</button>
+								</span>
+								<button type="button"
+									class="btn"
+									style="padding: 0.15rem 0.5rem; font-size: 0.75rem;"
+									wire:click="toggleEquip(#inventoryItem.id#)"
+								>#( inventoryItem.equipped ? 'Unequip' : 'Equip' )#</button>
+								<button type="button"
+									class="btn"
+									style="padding: 0.15rem 0.5rem; font-size: 0.75rem; border-color: var(--blood); color: var(--blood);"
+									wire:click="removeWeapon(#inventoryItem.id#)"
+								>Remove</button>
+							</div>
+						</bx:loop>
+					<bx:else>
+						<p class="stat-subtitle">No weapons in inventory.</p>
+					</bx:if>
+
+					<div class="add-weapon-form">
+						<label class="stat-subtitle">
+							Add weapon
+							<select class="creation-input" wire:model="addWeaponId" style="margin: 0.3rem 0 0; max-width: 280px;">
+								<bx:loop array="#availableWeapons#" index="availableWeapon">
+									<option value="#availableWeapon.id#" #( addWeaponId == availableWeapon.id ? 'selected' : '' )#>
+										#availableWeapon.name# (#availableWeapon.damageDice# #availableWeapon.damageType#)
+									</option>
+								</bx:loop>
+							</select>
+						</label>
+						<label class="stat-subtitle">
+							Slot
+							<select class="creation-input" wire:model="addWeaponCategory" style="margin: 0.3rem 0 0; max-width: 120px;">
+								<option value="melee"  #( addWeaponCategory == 'melee'  ? 'selected' : '' )#>Melee</option>
+								<option value="ranged" #( addWeaponCategory == 'ranged' ? 'selected' : '' )#>Ranged</option>
+							</select>
+						</label>
+						<button type="button" class="btn btn-attack" wire:click="addWeapon()">Add</button>
+					</div>
+				</div>
+			</bx:if>
+
+			<bx:if tab == 'spells'>
+				<div class="sheet-tab-panel">
+					<bx:if cantripOptions.len()>
+						<h3 class="fantasy-heading">Cantrip</h3>
+						<div class="creation-grid">
+							<bx:loop array="#cantripOptions#" index="cantripOption">
+								<div
+									class="creation-card#( selectedCantripName == cantripOption.name ? ' creation-card-selected' : '' )#"
+									wire:click="selectCantrip('#cantripOption.name#')"
+								>
+									<h4 class="fantasy-heading" style="margin: 0 0 0.25rem;">#cantripOption.name#</h4>
+									<p class="stat-subtitle" style="margin: 0;">#describeSpell( cantripOption )#</p>
+								</div>
+							</bx:loop>
+						</div>
+					</bx:if>
+
+					<bx:if spellOptions.len()>
+						<h3 class="fantasy-heading">1st-Level Spell</h3>
+						<div class="creation-grid">
+							<bx:loop array="#spellOptions#" index="spellOption">
+								<div
+									class="creation-card#( selectedSpellName == spellOption.name ? ' creation-card-selected' : '' )#"
+									wire:click="selectSpell('#spellOption.name#')"
+								>
+									<h4 class="fantasy-heading" style="margin: 0 0 0.25rem;">#spellOption.name#</h4>
+									<p class="stat-subtitle" style="margin: 0;">#describeSpell( spellOption )#</p>
+								</div>
+							</bx:loop>
+						</div>
+					</bx:if>
+
+					<div class="turn-actions">
+						<button type="button" class="btn btn-attack" wire:click="saveSpells()">Save Spell Choices</button>
+					</div>
+				</div>
+			</bx:if>
+
+			<bx:if len( message )>
+				<p class="sheet-message">#message#</p>
+			</bx:if>
+
+		<bx:else>
+			<p class="encounter-intro">Loading character sheet…</p>
+		</bx:if>
+
+		<div class="turn-actions" style="margin-top: 1.5rem;">
+			<a class="btn" href="/">Back to Character Select</a>
+			<a class="btn btn-auto-battle" href="/combat">Adventure</a>
+		</div>
+
+	</div>
+</div>
+</bx:output>

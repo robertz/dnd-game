@@ -38,7 +38,7 @@ class extends="cbwire.models.Component" {
 	 */
 	function selectCharacter( characterId ) {
 		session.charid = arguments.characterId;
-		redirect( "/combat/index" );
+		redirect( "/character/sheet" );
 	}
 
 }

@@ -7,4 +7,16 @@ class extends="coldbox.system.EventHandler" {
 		event.setView( "character/new" );
 	}
 
+	/**
+	 * Character sheet viewer/editor. Requires a character already selected
+	 * in session (session.charid) — redirects to character select if not.
+	 */
+	function sheet( event, rc, prc ){
+		if ( !structKeyExists( session, "charid" ) || !len( session.charid ) ) {
+			relocate( "main.index" );
+			return;
+		}
+		event.setView( "character/sheet" );
+	}
+
 }

@@ -428,6 +428,39 @@ class extends="cbwire.models.Component" {
 	}
 
 	/**
+	 * "x,y" -> living opponent, built once per render so the template's
+	 * per-tile "who's standing here?" check is an O(1) lookup instead of
+	 * scanning the full opponents array for every one of the viewport's
+	 * tiles (opponents is small, typically 2-3, but that scan used to run
+	 * once per tile rather than once per render).
+	 */
+	function opponentPositionIndex() {
+		var index = {};
+		for ( var opp in variables.data.opponents ) {
+			if ( opp.hitPoints > 0 ) {
+				index[ opp.position.x & "," & opp.position.y ] = opp;
+			}
+		}
+		return index;
+	}
+
+	/**
+	 * "x,y" -> POI type, built once per render for the same reason as
+	 * opponentPositionIndex() above. Only loot/transition POIs are indexed —
+	 * an "encounter" POI stays invisible so a scripted ambush can still
+	 * surprise the player (see _checkEncounter()'s doc comment).
+	 */
+	function poiPositionIndex() {
+		var index = {};
+		for ( var poi in variables.data.grid.pois ) {
+			if ( listFindNoCase( "loot,transition", poi.type ) ) {
+				index[ poi.x & "," & poi.y ] = poi.type;
+			}
+		}
+		return index;
+	}
+
+	/**
 	 * Re-derives `data.opponent` from `data.opponents[data.selectedOpponentIndex]`
 	 * — call at the start of any action that reads/mutates `data.opponent`,
 	 * since CBWIRE rehydrates `data` fresh from JSON each request (see the

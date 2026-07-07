@@ -82,6 +82,10 @@
 		</bx:if>
 
 		<bx:set viewport = viewportBounds()>
+		<!--- Built once for the whole grid rather than re-scanned per tile —
+		      see opponentPositionIndex()/poiPositionIndex()'s doc comments. --->
+		<bx:set opponentIndex = opponentPositionIndex()>
+		<bx:set poiIndex = poiPositionIndex()>
 		<div class="battle-grid-wrap">
 			<div class="battle-grid" style="grid-template-columns: repeat(#viewport.maxCol - viewport.minCol + 1#, 1fr);">
 				<bx:loop from="#viewport.minRow#" to="#viewport.maxRow#" index="row">
@@ -90,12 +94,8 @@
 						<bx:set decoration = grid.decorations[ row ][ col ]>
 						<bx:set baseTileClass = len( decoration ) ? ( ' tile-' & decoration ) : ( isWall ? ' tile-wall' : '' )>
 						<bx:set isPlayerTile = ( player.position.x == col && player.position.y == row )>
-						<bx:set tileOpponent = "">
-						<bx:loop array="#opponents#" index="opponentAtTile">
-							<bx:if opponentAtTile.hitPoints gt 0 && opponentAtTile.position.x == col && opponentAtTile.position.y == row>
-								<bx:set tileOpponent = opponentAtTile>
-							</bx:if>
-						</bx:loop>
+						<bx:set tileKey = col & "," & row>
+						<bx:set tileOpponent = opponentIndex.keyExists( tileKey ) ? opponentIndex[ tileKey ] : "">
 						<bx:set isOpponentTile = !isSimpleValue( tileOpponent )>
 						<bx:set isTargetedTile = ( isOpponentTile && tileOpponent.mobIndex == selectedOpponentIndex )>
 						<bx:set chebyshev = max( abs( col - player.position.x ), abs( row - player.position.y ) )>
@@ -104,12 +104,7 @@
 						<!--- Loot/transition markers only — an "encounter" POI stays
 						      invisible so a scripted ambush can still surprise the
 						      player (see default.bx's _checkEncounter() doc comment). --->
-						<bx:set tilePoiType = "">
-						<bx:loop array="#grid.pois#" index="poiAtTile">
-							<bx:if poiAtTile.x == col && poiAtTile.y == row && listFindNoCase( "loot,transition", poiAtTile.type )>
-								<bx:set tilePoiType = poiAtTile.type>
-							</bx:if>
-						</bx:loop>
+						<bx:set tilePoiType = poiIndex.keyExists( tileKey ) ? poiIndex[ tileKey ] : "">
 						<div
 							class="tile#baseTileClass##( isPlayerTile ? ' tile-player' : ( isOpponentTile ? ' tile-opponent' : ( tilePoiType == "loot" ? ' tile-loot' : ( tilePoiType == "transition" ? ' tile-transition' : '' ) ) ) )##( isTargetedTile ? ' tile-targeted' : '' )##( isReachable ? ' tile-reachable' : '' )##( isAttackable ? ' tile-attackable' : '' )#"
 							title="#( isPlayerTile ? player.name : ( isOpponentTile ? tileOpponent.name : ( tilePoiType == "loot" ? "Treasure" : ( tilePoiType == "transition" ? "A path onward" : ( len( decoration ) ? decoration : ( isWall ? 'Wall' : 'x' & col & ', y' & row ) ) ) ) ) )#"

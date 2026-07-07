@@ -41,6 +41,13 @@ class singleton {
 		"w": { "tile": "wall", "decoration": "water" }
 	};
 
+	// Cache of fully-decoded static level geometry (tiles/decorations/
+	// spawns), keyed "moduleSlug|mapSlug" — see getModuleMap()'s doc
+	// comment. This service is a WireBox singleton, so the cache lives for
+	// the application's lifetime (cleared on ?fwreinit=1, same as any other
+	// in-memory singleton state), not just one request.
+	_gridGeometryCache = {};
+
 	/**
 	 * Returns the named level, parsed and ready to use. Falls back to
 	 * "openField" (a plain walls-free room) for an unknown name, so callers
@@ -181,6 +188,11 @@ class singleton {
 				);
 			}
 		}
+
+		// The chunks on disk just changed — drop getModuleMap()'s cached
+		// decode (if any) so the next map entry re-decodes instead of
+		// serving the pre-edit geometry.
+		_gridGeometryCache.delete( arguments.moduleSlug & "|" & arguments.mapSlug );
 
 		queryExecute(
 			"DELETE FROM adventure_map_pois WHERE map_id = :mapId AND poi_type = 'transition'",
@@ -390,7 +402,45 @@ class singleton {
 	 * @moduleSlug Adventure module slug, e.g. "lost-mines".
 	 * @mapSlug Map slug within that module, e.g. "trade-road".
 	 */
+	/**
+	 * Returns a module map's full grid, decoding every chunk's RLE data into
+	 * `tiles`/`decorations` the first time this (moduleSlug, mapSlug) pair is
+	 * requested and reusing that decode for every caller after — decoding is
+	 * the same work regardless of who's asking (every player who ever visits
+	 * a given map was independently re-decoding all of its chunks, on every
+	 * single map entry/transition). Safe to share the same tiles/decorations
+	 * arrays across callers because nothing mutates them after _blitChunk()
+	 * builds them here; `pois` is deliberately excluded from the cache and
+	 * always queried fresh, since POIs are mutable per-session game state
+	 * (a loot POI is deleted once collected — see deletePoiAt()). The cache
+	 * is invalidated per-map by saveEditorMap() so re-saving a map from the
+	 * editor doesn't leave players seeing a stale decode.
+	 */
 	function getModuleMap( moduleSlug, mapSlug ) {
+		var cacheKey = arguments.moduleSlug & "|" & arguments.mapSlug;
+		if ( !_gridGeometryCache.keyExists( cacheKey ) ) {
+			_gridGeometryCache[ cacheKey ] = _decodeMapGeometry( arguments.moduleSlug, arguments.mapSlug );
+		}
+		var geometry = _gridGeometryCache[ cacheKey ];
+
+		return {
+			"width": geometry.width,
+			"height": geometry.height,
+			"tiles": geometry.tiles,
+			"decorations": geometry.decorations,
+			"playerSpawn": geometry.playerSpawn,
+			"opponentSpawn": geometry.opponentSpawn,
+			"pois": _loadPois( geometry.mapId )
+		};
+	}
+
+	/**
+	 * Does the actual chunk fetch + RLE decode for getModuleMap() — split
+	 * out so the cache there only has to store/invalidate this static
+	 * geometry, not the whole getModuleMap() return shape (which also
+	 * carries the always-fresh `pois`).
+	 */
+	private function _decodeMapGeometry( moduleSlug, mapSlug ) {
 		var mapRow = _getMapRow( arguments.moduleSlug, arguments.mapSlug );
 		var legend = JSONDeserialize( mapRow.tile_legend[ 1 ] );
 		var width = mapRow.width[ 1 ];
@@ -411,13 +461,13 @@ class singleton {
 		}
 
 		return {
+			"mapId": mapRow.id[ 1 ],
 			"width": width,
 			"height": height,
 			"tiles": tiles,
 			"decorations": decorations,
 			"playerSpawn": { "x": mapRow.player_spawn_x[ 1 ], "y": mapRow.player_spawn_y[ 1 ] },
-			"opponentSpawn": { "x": mapRow.opponent_spawn_x[ 1 ], "y": mapRow.opponent_spawn_y[ 1 ] },
-			"pois": _loadPois( mapRow.id[ 1 ] )
+			"opponentSpawn": { "x": mapRow.opponent_spawn_x[ 1 ], "y": mapRow.opponent_spawn_y[ 1 ] }
 		};
 	}
 

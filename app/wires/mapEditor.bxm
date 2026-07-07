@@ -82,13 +82,68 @@
 			</div>
 			<div class="turn-actions">
 				<button type="button" class="btn#( placeMode == 'player' ? ' btn-auto-battle' : '' )#" wire:click="setPlaceMode('player')">Place Player Spawn</button>
-				<button type="button" class="btn#( placeMode == 'opponent' ? ' btn-auto-battle' : '' )#" wire:click="setPlaceMode('opponent')">Place Opponent Spawn</button>
 			</div>
 			<p class="encounter-intro">
-				Mode: #( placeMode == 'paint' ? 'Painting terrain' : ( placeMode == 'player' ? 'Click a tile to set the player spawn' : ( placeMode == 'opponent' ? 'Click a tile to set the opponent spawn' : 'Click a tile to place a transition' ) ) )#
+				Mode: #( placeMode == 'paint' ? 'Painting terrain' : ( placeMode == 'player' ? 'Click a tile to set the player spawn' : ( placeMode == 'spawn' ? 'Click a tile to place an opponent spawn point' : 'Click a tile to place a transition' ) ) )#
 				<bx:if !structIsEmpty( playerSpawn )> · Player spawn: (#playerSpawn.x#, #playerSpawn.y#)</bx:if>
-				<bx:if !structIsEmpty( opponentSpawn )> · Opponent spawn: (#opponentSpawn.x#, #opponentSpawn.y#)</bx:if>
 			</p>
+		</div>
+
+		<div class="parchment-panel editor-panel">
+			<h2 class="fantasy-heading">Opponent Spawn Points</h2>
+			<p class="encounter-intro">Each spawn point independently rolls how many monsters appear there and which monster(s) to spawn when a fresh encounter starts on this map. Place as many as you like.</p>
+			<div class="creation-scores">
+				<label>Spawn count
+					<select class="creation-input" wire:model.live="spawnCountMode">
+						<option value="fixed">Fixed</option>
+						<option value="random">Random range</option>
+					</select>
+				</label>
+				<bx:if spawnCountMode == "fixed">
+					<label>Count
+						<input type="number" class="creation-input" wire:model="spawnCount" min="1">
+					</label>
+				<bx:else>
+					<label>Min
+						<input type="number" class="creation-input" wire:model="spawnCountMin" min="1">
+					</label>
+					<label>Max
+						<input type="number" class="creation-input" wire:model="spawnCountMax" min="1">
+					</label>
+				</bx:if>
+			</div>
+			<div class="creation-scores">
+				<label>Monster
+					<select class="creation-input" wire:model.live="spawnMonsterMode">
+						<option value="random">Random (level-appropriate)</option>
+						<option value="specific">Specific monster</option>
+					</select>
+				</label>
+				<bx:if spawnMonsterMode == "specific">
+					<label>Which monster
+						<select class="creation-input" wire:model="spawnMonsterName">
+							<option value="">— choose a monster —</option>
+							<bx:loop array="#monsterOptions#" index="monsterOption">
+								<option value="#monsterOption.name#">#monsterOption.name# (CR #monsterOption.cr#)</option>
+							</bx:loop>
+						</select>
+					</label>
+				</bx:if>
+			</div>
+			<div class="turn-actions">
+				<button type="button" class="btn#( placeMode == 'spawn' ? ' btn-auto-battle' : '' )#" wire:click="setPlaceMode('spawn')">Place Spawn Point</button>
+			</div>
+			<bx:if spawnPoints.len() gt 0>
+				<ul class="attack-list">
+					<bx:loop from="1" to="#spawnPoints.len()#" index="spawnIndex">
+						<bx:set spawnPoint = spawnPoints[ spawnIndex ]>
+						<li>
+							(#spawnPoint.x#, #spawnPoint.y#) &mdash; #describeSpawnPoint( spawnPoint )#
+							<button type="button" class="btn btn-end-turn" wire:click="removeSpawnPoint(#spawnIndex#)">Remove</button>
+						</li>
+					</bx:loop>
+				</ul>
+			</bx:if>
 		</div>
 
 		<div class="parchment-panel editor-panel">
@@ -124,15 +179,16 @@
 					<bx:loop from="1" to="#width#" index="col">
 						<bx:set symbol = grid[ row ][ col ]>
 						<bx:set isPlayerSpawn = ( !structIsEmpty( playerSpawn ) && playerSpawn.x == col && playerSpawn.y == row )>
-						<bx:set isOpponentSpawn = ( !structIsEmpty( opponentSpawn ) && opponentSpawn.x == col && opponentSpawn.y == row )>
+						<bx:set spawnPointHere = spawnPointAt( col, row )>
+						<bx:set isSpawnPoint = !structIsEmpty( spawnPointHere )>
 						<bx:set transitionHere = transitionAt( col, row )>
 						<bx:set isTransition = !structIsEmpty( transitionHere )>
 						<bx:set cellClass = tileClasses.keyExists( symbol ) ? tileClasses[ symbol ] : ''>
 						<div
-							class="tile#( len( cellClass ) ? ' ' & cellClass : '' )##( isPlayerSpawn ? ' tile-player' : ( isOpponentSpawn ? ' tile-opponent' : ( isTransition ? ' tile-transition' : '' ) ) )#"
-							title="#( isTransition ? 'Transition to ' & transitionHere.targetModule & ' / ' & transitionHere.targetMap : 'x' & col & ', y' & row )#"
+							class="tile#( len( cellClass ) ? ' ' & cellClass : '' )##( isPlayerSpawn ? ' tile-player' : ( isSpawnPoint ? ' tile-opponent' : ( isTransition ? ' tile-transition' : '' ) ) )#"
+							title="#( isSpawnPoint ? describeSpawnPoint( spawnPointHere ) : ( isTransition ? 'Transition to ' & transitionHere.targetModule & ' / ' & transitionHere.targetMap : 'x' & col & ', y' & row ) )#"
 							wire:click="paintTile(#col#, #row#)"
-						>#( isPlayerSpawn ? '⚔' : ( isOpponentSpawn ? '☠' : ( isTransition ? '🌀' : '' ) ) )#</div>
+						>#( isPlayerSpawn ? '⚔' : ( isSpawnPoint ? '☠' : ( isTransition ? '🌀' : '' ) ) )#</div>
 					</bx:loop>
 				</bx:loop>
 			</div>

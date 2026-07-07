@@ -145,13 +145,22 @@ class singleton {
 	 *  links, persisted as `adventure_map_pois` rows with poi_type
 	 *  "transition". Replaces every existing transition POI on this map
 	 *  (other POI types, e.g. "encounter", are left untouched).
+	 * @spawnPoints Array of `{x, y, countMode, count, countMin, countMax,
+	 *  monsterMode, monsterName}` — opponent spawn markers, persisted as
+	 *  `adventure_map_pois` rows with poi_type "spawn". Replaces every
+	 *  existing spawn POI on this map. countMode is "fixed" (use `count`)
+	 *  or "random" (use `countMin`/`countMax`); monsterMode is "random"
+	 *  (level-appropriate draw, see CombatService.randomMonstersForLevel())
+	 *  or "specific" (use `monsterName`, see CombatService.monsterByName()).
+	 *  See default.bx's _enterMap()/_buildInitialRoster() for how these are
+	 *  consumed at map-entry time.
 	 * @isEntry If true, marks this map as its module's entry point (see
 	 *  getEntryMapSlug()) — clearing the flag on every other map in the
 	 *  module first, so only one map per module is ever the entry. Leaving
 	 *  this false does NOT clear an existing entry map; it just leaves this
 	 *  map as a non-entry (transition-only-reachable) one.
 	 */
-	function saveEditorMap( moduleSlug, moduleName, moduleDescription, mapSlug, mapName, width, height, chunkSize, grid, playerSpawn, opponentSpawn, transitions = [], isEntry = false ) {
+	function saveEditorMap( moduleSlug, moduleName, moduleDescription, mapSlug, mapName, width, height, chunkSize, grid, playerSpawn, opponentSpawn, transitions = [], spawnPoints = [], isEntry = false ) {
 		var moduleId = _upsertModule( arguments.moduleSlug, arguments.moduleName, arguments.moduleDescription );
 		var mapId = _upsertMap(
 			moduleId, arguments.mapSlug, arguments.mapName, arguments.width, arguments.height,
@@ -205,6 +214,25 @@ class singleton {
 				{
 					"mapId": mapId, "x": t.x, "y": t.y,
 					"payload": JSONSerialize( { "targetModule": t.targetModule, "targetMap": t.targetMap } )
+				},
+				{ datasource: "gameserver" }
+			);
+		}
+
+		queryExecute(
+			"DELETE FROM adventure_map_pois WHERE map_id = :mapId AND poi_type = 'spawn'",
+			{ "mapId": mapId },
+			{ datasource: "gameserver" }
+		);
+		for ( var s in arguments.spawnPoints ) {
+			queryExecute(
+				"INSERT INTO adventure_map_pois (map_id, x, y, poi_type, payload) VALUES (:mapId, :x, :y, 'spawn', :payload)",
+				{
+					"mapId": mapId, "x": s.x, "y": s.y,
+					"payload": JSONSerialize( {
+						"countMode": s.countMode, "count": s.count, "countMin": s.countMin, "countMax": s.countMax,
+						"monsterMode": s.monsterMode, "monsterName": s.monsterName
+					} )
 				},
 				{ datasource: "gameserver" }
 			);
@@ -357,6 +385,25 @@ class singleton {
 			} );
 		}
 
+		var spawnPoints = [];
+		var spawnRows = queryExecute(
+			"SELECT x, y, payload FROM adventure_map_pois WHERE map_id = :mapId AND poi_type = 'spawn'",
+			{ "mapId": rows.id[ 1 ] },
+			{ datasource: "gameserver" }
+		);
+		for ( var i = 1; i <= spawnRows.recordCount; i++ ) {
+			var payload = len( spawnRows.payload[ i ] ) ? JSONDeserialize( spawnRows.payload[ i ] ) : {};
+			arrayAppend( spawnPoints, {
+				"x": spawnRows.x[ i ], "y": spawnRows.y[ i ],
+				"countMode": payload.keyExists( "countMode" ) ? payload.countMode : "fixed",
+				"count": payload.keyExists( "count" ) ? payload.count : 1,
+				"countMin": payload.keyExists( "countMin" ) ? payload.countMin : 1,
+				"countMax": payload.keyExists( "countMax" ) ? payload.countMax : 1,
+				"monsterMode": payload.keyExists( "monsterMode" ) ? payload.monsterMode : "random",
+				"monsterName": payload.keyExists( "monsterName" ) ? payload.monsterName : ""
+			} );
+		}
+
 		return {
 			"moduleSlug": rows.moduleSlug[ 1 ],
 			"moduleName": rows.moduleName[ 1 ],
@@ -370,6 +417,7 @@ class singleton {
 			"playerSpawn": { "x": rows.player_spawn_x[ 1 ], "y": rows.player_spawn_y[ 1 ] },
 			"opponentSpawn": { "x": rows.opponent_spawn_x[ 1 ], "y": rows.opponent_spawn_y[ 1 ] },
 			"transitions": transitions,
+			"spawnPoints": spawnPoints,
 			"isEntry": rows.is_entry[ 1 ] == 1
 		};
 	}

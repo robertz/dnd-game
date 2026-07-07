@@ -148,22 +148,7 @@ class extends="cbwire.models.Component" {
 		}
 		variables.data.player.position = { "x": variables.data.grid.playerSpawn.x, "y": variables.data.grid.playerSpawn.y };
 
-		var mobCount = randRange( MIN_MOB_COUNT, MAX_MOB_COUNT );
-		var mobs = combatService.randomMonstersForLevel( variables.data.player.level, mobCount );
-		var opponents = [];
-		var takenPositions = [ variables.data.player.position ];
-
-		var spawnPoint = variables.data.grid.opponentSpawn;
-		var mobPositions = combatService.randomOpenTilesNear( variables.data.grid, spawnPoint, MOB_SCATTER_RADIUS, mobs.len(), takenPositions );
-
-		for ( var i = 1; i <= mobs.len(); i++ ) {
-			var mob = mobs[ i ];
-			mob.position = ( i <= mobPositions.len() ) ? mobPositions[ i ] : { "x": spawnPoint.x, "y": spawnPoint.y };
-			mob.mobIndex = i;
-			arrayAppend( takenPositions, mob.position );
-			arrayAppend( opponents, mob );
-		}
-
+		var opponents = _buildInitialRoster();
 		variables.data.opponents = opponents;
 		variables.data.selectedOpponentIndex = 1;
 		variables.data.opponent = opponents[ 1 ];
@@ -175,6 +160,102 @@ class extends="cbwire.models.Component" {
 		variables.data.autoBattling = false;
 		combatService.startNewRound( variables.data );
 		variables.data.player.inCombat = false;
+	}
+
+	/**
+	 * Builds this map's initial mob roster from its "spawn" POIs (see
+	 * MapService.bx's saveEditorMap()/getModuleMap() and the Map Editor's
+	 * spawn point configuration) — each spawn point independently resolves
+	 * its own monster count (fixed or a random range) and monster choice
+	 * (a level-appropriate random draw, or a specific named monster),
+	 * then scatters its mobs around its own (x, y) rather than one shared
+	 * point. Falls back to the old single-opponentSpawn/random-count/
+	 * random-monster behavior for maps authored before spawn points existed
+	 * (zero "spawn" POIs) — see MOB_SCATTER_RADIUS/MIN_MOB_COUNT/MAX_MOB_COUNT.
+	 */
+	private function _buildInitialRoster() {
+		var player = variables.data.player;
+		var spawnPois = [];
+		for ( var poi in variables.data.grid.pois ) {
+			if ( poi.type == "spawn" ) {
+				arrayAppend( spawnPois, poi );
+			}
+		}
+
+		if ( spawnPois.len() == 0 ) {
+			var spawnPoint = variables.data.grid.opponentSpawn;
+			var mobs = combatService.randomMonstersForLevel( player.level, randRange( MIN_MOB_COUNT, MAX_MOB_COUNT ) );
+			return _scatterMobs( mobs, spawnPoint, [ player.position ] );
+		}
+
+		var opponents = [];
+		var takenPositions = [ player.position ];
+		for ( var poi in spawnPois ) {
+			var mobs = _resolveSpawnMonsters( poi.payload, player.level );
+			var scattered = _scatterMobs( mobs, { "x": poi.x, "y": poi.y }, takenPositions );
+			for ( var mob in scattered ) {
+				arrayAppend( takenPositions, mob.position );
+				arrayAppend( opponents, mob );
+			}
+		}
+		if ( opponents.len() == 0 ) {
+			// every spawn point resolved to zero mobs (e.g. a bad count
+			// config) — fall back to a single random mob so combat still starts.
+			return _scatterMobs( combatService.randomMonstersForLevel( player.level, 1 ), { "x": spawnPois[ 1 ].x, "y": spawnPois[ 1 ].y }, takenPositions );
+		}
+		for ( var i = 1; i <= opponents.len(); i++ ) {
+			opponents[ i ].mobIndex = i;
+		}
+		return opponents;
+	}
+
+	/**
+	 * Resolves one spawn POI's payload into an array of monster structs —
+	 * `countMode` "fixed" uses `count`, "random" rolls between `countMin`
+	 * and `countMax`; `monsterMode` "specific" spawns `count` copies of
+	 * `monsterName` (see CombatService.monsterByName()), "random" draws
+	 * that many level-appropriate monsters independently (see
+	 * CombatService.randomMonstersForLevel()).
+	 */
+	private function _resolveSpawnMonsters( payload, level ) {
+		var count = ( arguments.payload.countMode == "random" )
+			? randRange( arguments.payload.countMin, arguments.payload.countMax )
+			: arguments.payload.count;
+		if ( count < 1 ) {
+			return [];
+		}
+		if ( arguments.payload.monsterMode == "specific" && len( arguments.payload.monsterName ) ) {
+			var template = combatService.monsterByName( arguments.payload.monsterName );
+			var mobs = [];
+			for ( var i = 1; i <= count; i++ ) {
+				arrayAppend( mobs, duplicate( template ) );
+			}
+			return mobs;
+		}
+		return combatService.randomMonstersForLevel( arguments.level, count );
+	}
+
+	/**
+	 * Scatters `mobs` across open tiles near `center` (see
+	 * CombatService.randomOpenTilesNear()), assigning each a position —
+	 * shared by _buildInitialRoster()'s per-spawn-point scattering and its
+	 * legacy single-opponentSpawn fallback. Does NOT assign mobIndex —
+	 * callers combining multiple spawn points renumber once at the end so
+	 * indices stay unique/sequential across the whole roster.
+	 */
+	private function _scatterMobs( mobs, center, takenPositions ) {
+		if ( arguments.mobs.len() == 0 ) {
+			return [];
+		}
+		var positions = combatService.randomOpenTilesNear( variables.data.grid, arguments.center, MOB_SCATTER_RADIUS, arguments.mobs.len(), arguments.takenPositions );
+		var scattered = [];
+		for ( var i = 1; i <= arguments.mobs.len(); i++ ) {
+			var mob = arguments.mobs[ i ];
+			mob.position = ( i <= positions.len() ) ? positions[ i ] : { "x": arguments.center.x, "y": arguments.center.y };
+			mob.mobIndex = i;
+			arrayAppend( scattered, mob );
+		}
+		return scattered;
 	}
 
 	/**
@@ -376,16 +457,30 @@ class extends="cbwire.models.Component" {
 	 * them instead of always showing the full roster. Defeated opponents are
 	 * left visible regardless (no longer a hidden threat, and the "Destroyed"
 	 * status is worth keeping on screen).
+	 *
+	 * hasLineOfSight() alone is an unbounded wall-occlusion check (fine for
+	 * in-combat ranged attacks, which have their own weapon-range limits) —
+	 * without also requiring the opponent be within the rendered viewport,
+	 * a mob spawned near a distant spawn point could roll initiative and
+	 * appear "in combat" while sitting well outside the visible grid, with
+	 * no tile to click/attack. That check must use viewportBounds()'s exact
+	 * clamped window rather than a naive VIEWPORT_RADIUS distance from the
+	 * player — near a map edge the window shifts (not shrinks) to stay a
+	 * full-size box, so an on-screen tile can be farther than
+	 * VIEWPORT_RADIUS straight-line squares from the player.
 	 */
 	private function _updateCombatState() {
 		if ( variables.data.gameOver ) {
 			return;
 		}
 		var player = variables.data.player;
+		var bounds = viewportBounds();
 		var nowInCombat = false;
 		for ( var opp in variables.data.opponents ) {
+			var withinViewport = opp.position.x >= bounds.minCol && opp.position.x <= bounds.maxCol
+				&& opp.position.y >= bounds.minRow && opp.position.y <= bounds.maxRow;
 			opp.visible = ( opp.hitPoints <= 0 )
-				|| combatService.hasLineOfSight( variables.data.grid, opp.position, player.position );
+				|| ( withinViewport && combatService.hasLineOfSight( variables.data.grid, opp.position, player.position ) );
 			if ( opp.hitPoints > 0 && opp.visible ) {
 				nowInCombat = true;
 			}

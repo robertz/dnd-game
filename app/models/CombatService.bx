@@ -2315,6 +2315,14 @@ class singleton {
 		if ( !structKeyExists( player, "characterId" ) ) {
 			return; // no saved character record to credit (e.g. a test double)
 		}
+		var existing = queryExecute(
+			"SELECT id FROM characters WHERE id = :characterId",
+			{ "characterId": player.characterId },
+			{ datasource: "gameserver" }
+		);
+		if ( existing.recordCount == 0 ) {
+			return; // characterId doesn't reference a real row (e.g. a test double)
+		}
 
 		var gold = randRange( max( 1, int( arguments.defender.xp / 10 ) ), max( 2, int( arguments.defender.xp / 3 ) ) );
 		queryExecute(
@@ -3100,6 +3108,24 @@ class singleton {
 			throw( type = "MonsterHasNoAttacks", message = "Monster '#arguments.name#' has no parseable weapon attacks." );
 		}
 		return _buildMonsterStruct( rows, 1, inventory );
+	}
+
+	/**
+	 * Every seeded monster's name (+ CR, for display), alphabetically — for
+	 * populating a "pick a specific monster" dropdown (see the Map Editor's
+	 * spawn point configuration) rather than only ever drawing a random
+	 * level-appropriate mob via randomMonstersForLevel().
+	 */
+	function listAllMonsterNames() {
+		var rows = queryExecute(
+			"SELECT name, cr FROM monsters ORDER BY name",
+			{}, { datasource: "gameserver" }
+		);
+		var names = [];
+		for ( var i = 1; i <= rows.recordCount; i++ ) {
+			arrayAppend( names, { "name": rows.name[ i ], "cr": rows.cr[ i ] } );
+		}
+		return names;
 	}
 
 	/**

@@ -309,9 +309,9 @@
 			aspect-ratio: 1;
 			width: clamp(16px, 2.6vw, 34px);
 			background-color: rgb(46, 36, 22);
-			background-image:
-				linear-gradient( 135deg, rgba(255,255,255,0.06) 0%, transparent 55% ),
-				linear-gradient( 315deg, rgba(0,0,0,0.20) 0%, transparent 55% );
+			background-image: url(includes/images/tiles/floor-0x72.png);
+			background-size: cover;
+			image-rendering: pixelated;
 			display: flex;
 			align-items: center;
 			justify-content: center;
@@ -326,7 +326,9 @@
 		}
 
 		.tile-wall:hover, .tile-torch:hover, .tile-pillar:hover, .tile-water:hover,
-		.tile-forest:hover, .tile-mountain:hover {
+		.tile-forest:hover, .tile-mountain:hover, .tile-banner:hover,
+		.tile-wall-corner-tl:hover, .tile-wall-corner-tr:hover, .tile-wall-corner-bl:hover, .tile-wall-corner-br:hover,
+		.tile-wall-top:hover, .tile-wall-bottom:hover, .tile-wall-edge-l:hover, .tile-wall-edge-r:hover {
 			filter: none;
 		}
 
@@ -352,108 +354,140 @@
 		}
 
 		.tile-wall {
-			background-color: rgb(14, 11, 7);
-			background-image:
-				linear-gradient( 135deg, rgba(255,255,255,0.07) 0%, transparent 50% ),
-				linear-gradient( 315deg, rgba(0,0,0,0.35) 0%, transparent 50% );
+			background-image: url(includes/images/tiles/wall-0x72.png);
+			background-size: cover;
+			image-rendering: pixelated;
 			box-shadow: inset 1px 1px 0 rgba(255,255,255,0.06), inset -1px -1px 0 rgba(0,0,0,0.5);
 			cursor: default;
 		}
 
-		.tile-torch::before,
-		.tile-pillar::before,
-		.tile-door::before,
-		.tile-spikes::before,
-		.tile-chest::before,
-		.tile-water::before,
-		.tile-forest::before,
-		.tile-mountain::before {
-			position: absolute;
-			inset: 0;
-			display: flex;
-			align-items: center;
-			justify-content: center;
-			font-size: 0.78em;
-			line-height: 1;
-			pointer-events: none;
+		/* Wall-autotile pieces — picked per-cell by MapService.bx's
+		   wallAutotileClass() based on neighboring tiles, so a plain wall
+		   (no torch/pillar/banner decoration) renders with real corners and
+		   edges instead of one repeated tile. See LICENSE-kenney-tinydungeon.txt. */
+		.tile-wall-corner-tl, .tile-wall-corner-tr, .tile-wall-corner-bl, .tile-wall-corner-br,
+		.tile-wall-top, .tile-wall-bottom, .tile-wall-edge-l, .tile-wall-edge-r {
+			background-size: cover;
+			image-rendering: pixelated;
+			box-shadow: inset 1px 1px 0 rgba(255,255,255,0.06), inset -1px -1px 0 rgba(0,0,0,0.5);
+			cursor: default;
 		}
+		.tile-wall-corner-tl { background-image: url(includes/images/tiles/wall-corner-tl-kenney.png); }
+		.tile-wall-corner-tr { background-image: url(includes/images/tiles/wall-corner-tr-kenney.png); }
+		.tile-wall-corner-bl { background-image: url(includes/images/tiles/wall-corner-bl-kenney.png); }
+		.tile-wall-corner-br { background-image: url(includes/images/tiles/wall-corner-br-kenney.png); }
+		.tile-wall-top       { background-image: url(includes/images/tiles/wall-top-kenney.png); }
+		.tile-wall-bottom    { background-image: url(includes/images/tiles/wall-bottom-kenney.png); }
+		.tile-wall-edge-l    { background-image: url(includes/images/tiles/wall-edge-l-kenney.png); }
+		.tile-wall-edge-r    { background-image: url(includes/images/tiles/wall-edge-r-kenney.png); }
 
 		.tile-torch {
-			background-color: rgb(14, 11, 7);
-			background-image:
-				linear-gradient( 135deg, rgba(255,255,255,0.07) 0%, transparent 50% ),
-				linear-gradient( 315deg, rgba(0,0,0,0.35) 0%, transparent 50% );
+			background-image: url(includes/images/tiles/torch-0x72.png);
+			background-size: cover;
+			image-rendering: pixelated;
 			box-shadow: inset 1px 1px 0 rgba(255,255,255,0.06), inset -1px -1px 0 rgba(0,0,0,0.5);
 			cursor: default;
 		}
-		.tile-torch::before  { content: "\1F525"; } /* fire */
-		.tile-pillar::before { content: "\1FAA8"; } /* rock */
-		.tile-door::before   { content: "\1F6AA"; } /* door */
-		.tile-spikes::before { content: "\26A0";   } /* warning */
-		.tile-chest::before  { content: "\1F4B0"; } /* money bag */
 
 		.tile-pillar {
-			background-color: rgb(14, 11, 7);
-			background-image:
-				linear-gradient( 135deg, rgba(255,255,255,0.07) 0%, transparent 50% ),
-				linear-gradient( 315deg, rgba(0,0,0,0.35) 0%, transparent 50% );
+			background-image: url(includes/images/tiles/pillar-0x72.png);
+			background-size: cover;
+			image-rendering: pixelated;
 			box-shadow: inset 1px 1px 0 rgba(255,255,255,0.06), inset -1px -1px 0 rgba(0,0,0,0.5);
 			cursor: default;
 		}
 
-		/* Outdoor terrain — grass/road are walkable floor variants; water,
-		   forest and mountain are impassable, styled like tile-wall with
-		   their own icon overlay (same convention as tile-torch/tile-pillar). */
+		.tile-door {
+			background-image: url(includes/images/tiles/door-0x72.png);
+			background-size: cover;
+			image-rendering: pixelated;
+		}
+
+		.tile-spikes {
+			background-image: url(includes/images/tiles/spikes-0x72.png);
+			background-size: cover;
+			image-rendering: pixelated;
+		}
+
+		.tile-chest {
+			background-image: url(includes/images/tiles/chest-0x72.png);
+			background-size: cover;
+			image-rendering: pixelated;
+		}
+
+		.tile-rubble {
+			background-image: url(includes/images/tiles/rubble-0x72.png);
+			background-size: cover;
+			image-rendering: pixelated;
+		}
+
+		.tile-crystal {
+			background-image: url(includes/images/tiles/crystal-0x72.png);
+			background-size: cover;
+			image-rendering: pixelated;
+		}
+
+		.tile-banner {
+			background-image: url(includes/images/tiles/banner-0x72.png);
+			background-size: cover;
+			image-rendering: pixelated;
+			box-shadow: inset 1px 1px 0 rgba(255,255,255,0.06), inset -1px -1px 0 rgba(0,0,0,0.5);
+			cursor: default;
+		}
+
+		/* Outdoor terrain — grass/road/sand are walkable floor variants;
+		   water, forest and mountain are impassable, styled like tile-wall. */
+		.tile-sand {
+			background-image: url(includes/images/tiles/sand-kenney.png);
+			background-size: cover;
+			image-rendering: pixelated;
+		}
 		.tile-grass {
-			background-color: rgb(45, 66, 30);
-			background-image:
-				linear-gradient( 135deg, rgba(255,255,255,0.06) 0%, transparent 55% ),
-				linear-gradient( 315deg, rgba(0,0,0,0.20) 0%, transparent 55% );
+			background-image: url(includes/images/tiles/grass-kenney.png);
+			background-size: cover;
+			image-rendering: pixelated;
 		}
 
 		.tile-road {
-			background-color: rgb(84, 70, 48);
-			background-image:
-				linear-gradient( 135deg, rgba(255,255,255,0.08) 0%, transparent 55% ),
-				linear-gradient( 315deg, rgba(0,0,0,0.18) 0%, transparent 55% );
+			background-image: url(includes/images/tiles/road-kenney.png);
+			background-size: cover;
+			image-rendering: pixelated;
 		}
 
 		.tile-water {
-			background-color: rgb(20, 45, 60);
-			background-image:
-				linear-gradient( 135deg, rgba(255,255,255,0.10) 0%, transparent 50% ),
-				linear-gradient( 315deg, rgba(0,0,0,0.30) 0%, transparent 50% );
+			background-image: url(includes/images/tiles/water-kenney.png);
+			background-size: cover;
+			image-rendering: pixelated;
 			box-shadow: inset 1px 1px 0 rgba(255,255,255,0.08), inset -1px -1px 0 rgba(0,0,0,0.5);
 			cursor: default;
 		}
-		.tile-water::before { content: "\1F30A"; } /* water wave */
 
 		.tile-forest {
-			background-color: rgb(20, 38, 20);
-			background-image:
-				linear-gradient( 135deg, rgba(255,255,255,0.07) 0%, transparent 50% ),
-				linear-gradient( 315deg, rgba(0,0,0,0.35) 0%, transparent 50% );
+			background-image: url(includes/images/tiles/forest-kenney.png);
+			background-size: cover;
+			image-rendering: pixelated;
 			box-shadow: inset 1px 1px 0 rgba(255,255,255,0.06), inset -1px -1px 0 rgba(0,0,0,0.5);
 			cursor: default;
 		}
-		.tile-forest::before { content: "\1F332"; } /* evergreen tree */
 
 		.tile-mountain {
-			background-color: rgb(48, 44, 40);
-			background-image:
-				linear-gradient( 135deg, rgba(255,255,255,0.08) 0%, transparent 50% ),
-				linear-gradient( 315deg, rgba(0,0,0,0.35) 0%, transparent 50% );
+			background-image: url(includes/images/tiles/mountain-kenney.png);
+			background-size: cover;
+			image-rendering: pixelated;
 			box-shadow: inset 1px 1px 0 rgba(255,255,255,0.06), inset -1px -1px 0 rgba(0,0,0,0.5);
 			cursor: default;
 		}
-		.tile-mountain::before { content: "\26F0"; } /* mountain */
 
 		.tile-reachable {
 			box-shadow: inset 0 0 0 1px rgba(185, 146, 47, 0.6);
-			background-image:
-				linear-gradient( rgba(185, 146, 47, 0.25), rgba(185, 146, 47, 0.25) ),
-				linear-gradient( 135deg, rgba(255,255,255,0.06) 0%, transparent 55% ),
-				linear-gradient( 315deg, rgba(0,0,0,0.20) 0%, transparent 55% );
+		}
+
+		.tile-reachable::after {
+			content: "";
+			position: absolute;
+			inset: 0;
+			background-color: rgba(185, 146, 47, 0.25);
+			pointer-events: none;
 		}
 
 		.tile-attackable {

@@ -532,7 +532,7 @@ class extends="cbwire.models.Component" {
 	function opponentPositionIndex() {
 		var index = {};
 		for ( var opp in variables.data.opponents ) {
-			if ( opp.hitPoints > 0 ) {
+			if ( opp.hitPoints > 0 && opp.visible ) {
 				index[ opp.position.x & "," & opp.position.y ] = opp;
 			}
 		}
@@ -609,6 +609,17 @@ class extends="cbwire.models.Component" {
 	 * request — this used to run a fresh BFS (combatService.pathDistance())
 	 * per tile, 225 full graph searches on every render.
 	 */
+	/**
+	 * Thin wrapper so default.bxm can call this bare, the same way it calls
+	 * tileReachable()/_opponentAt() — a CBWIRE template's scope only sees
+	 * this component's own methods, not injected properties like
+	 * mapService, so the template can't reach mapService.wallAutotileClass()
+	 * directly.
+	 */
+	function wallAutotileClass( x, y ) {
+		return mapService.wallAutotileClass( variables.data.grid, arguments.x, arguments.y );
+	}
+
 	function tileReachable( x, y ) {
 		if (
 			variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" ||

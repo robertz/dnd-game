@@ -14,3 +14,8 @@ public GitHub mirror that vendors the same CC0 asset as game art:
 https://github.com/yujqiao/DungeonRush/blob/master/res/drawable/0x72_DungeonTilesetII_v1_3.png
 (that repository's own code is GPLv3, but the CC0 terms above are what govern
 this specific asset, independent of the license of whatever project embeds it).
+
+banner-0x72.png, rubble-0x72.png and crystal-0x72.png are additional single
+16x16 tiles cropped from the same full sheet (public/includes/images/tiles/
+0x72/dungeon_tileset_ii.png, no margin, 16px stride), at tile grid coordinates
+(col,row): banner (1,2), rubble (2,4), crystal (4,11).

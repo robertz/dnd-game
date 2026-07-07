@@ -92,7 +92,8 @@
 					<bx:loop from="#viewport.minCol#" to="#viewport.maxCol#" index="col">
 						<bx:set isWall = ( grid.tiles[ row ][ col ] == "wall" )>
 						<bx:set decoration = grid.decorations[ row ][ col ]>
-						<bx:set baseTileClass = len( decoration ) ? ( ' tile-' & decoration ) : ( isWall ? ' tile-wall' : '' )>
+						<bx:set autotileClass = ( isWall && !len( decoration ) ) ? wallAutotileClass( col, row ) : "">
+						<bx:set baseTileClass = len( decoration ) ? ( ' tile-' & decoration ) : ( len( autotileClass ) ? ( ' tile-' & autotileClass ) : ( isWall ? ' tile-wall' : '' ) )>
 						<bx:set isPlayerTile = ( player.position.x == col && player.position.y == row )>
 						<bx:set tileKey = col & "," & row>
 						<bx:set tileOpponent = opponentIndex.keyExists( tileKey ) ? opponentIndex[ tileKey ] : "">

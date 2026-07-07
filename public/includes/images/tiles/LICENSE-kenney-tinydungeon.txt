@@ -1,0 +1,26 @@
+Kenney Tiny Dungeon (1.0) by Kenney Vleugels (www.kenney.nl), released under
+CC0 1.0 Universal (public domain) —
+"This content is free to use in personal, educational and commercial
+projects. Support us by crediting Kenney or www.kenney.nl (not mandatory)."
+Original source: https://kenney.nl/assets/tiny-dungeon
+--------------------------------------------------
+CC0 1.0 Universal (CC0 1.0)
+Public Domain
+https://creativecommons.org/publicdomain/zero/1.0/
+--------------------------------------------------
+wall-corner-tl-kenney.png, wall-corner-tr-kenney.png, wall-corner-bl-kenney.png,
+wall-corner-br-kenney.png, wall-top-kenney.png, wall-bottom-kenney.png,
+wall-edge-l-kenney.png and wall-edge-r-kenney.png are the 8 tiles of this
+pack's wall-frame autotile set, cropped from the assembled tilemap
+(kenney_tinydungeon/Tilemap/tilemap.png, tile stride 17px = 16px tile + 1px
+margin), at tile grid coordinates (col,row): corner-tl (1,0), top (2,0),
+corner-tr (3,0), edge-l (1,1), edge-r (3,1), corner-bl (1,2), bottom (2,2),
+corner-br (3,2).
+
+MapService.bx's wallAutotileClass() picks between these 8 pieces per-cell at
+render time based on which of the cell's 4 orthogonal + 4 diagonal neighbors
+are floor vs. wall, so rectangular rooms get real corners/edges instead of a
+single repeated wall tile. A wall cell whose neighbors don't match one of
+these 8 outer-boundary shapes (i.e. it's buried inside solid wall, or a
+T-junction/cross this small frame set has no piece for) falls back to the
+plain wall-0x72.png tile.

@@ -17,7 +17,9 @@
  *   `#` wall (plain)         `.` floor (plain)
  *   `^` wall + torch         `O` wall + pillar (still blocks movement/sight)
  *   `D` floor + door         `x` floor + spikes (hazard flavor only, no trap logic yet)
- *   `c` floor + chest
+ *   `c` floor + chest        `b` floor + rubble (cosmetic only)
+ *   `n` wall + banner (still blocks movement/sight)
+ *   `y` floor + crystal (cosmetic only)
  */
 class singleton {
 
@@ -31,6 +33,9 @@ class singleton {
 		"D": { "tile": "floor", "decoration": "door" },
 		"x": { "tile": "floor", "decoration": "spikes" },
 		"c": { "tile": "floor", "decoration": "chest" },
+		"b": { "tile": "floor", "decoration": "rubble" },
+		"n": { "tile": "wall", "decoration": "banner" },
+		"y": { "tile": "floor", "decoration": "crystal" },
 		// Outdoor terrain, used by database-backed adventure module maps
 		// (see getModuleMap/getModuleMapViewport below) alongside the
 		// dungeon symbols above.
@@ -38,7 +43,8 @@ class singleton {
 		"r": { "tile": "floor", "decoration": "road" },
 		"t": { "tile": "wall", "decoration": "forest" },
 		"m": { "tile": "wall", "decoration": "mountain" },
-		"w": { "tile": "wall", "decoration": "water" }
+		"w": { "tile": "wall", "decoration": "water" },
+		"s": { "tile": "floor", "decoration": "sand" }
 	};
 
 	// Cache of fully-decoded static level geometry (tiles/decorations/
@@ -127,6 +133,98 @@ class singleton {
 	 */
 	function tileLegend() {
 		return TILE_LEGEND;
+	}
+
+	/**
+	 * Picks which of the 8 wall-autotile pieces (see
+	 * LICENSE-kenney-tinydungeon.txt) a plain wall cell — one with no
+	 * torch/pillar/banner decoration — should render as, so a room's outer
+	 * boundary gets real corners/edges instead of one repeated wall tile.
+	 * Decorated walls never call this; default.bxm/mapEditor.bxm only fall
+	 * back to it when `decoration` is empty. Shared by wallAutotileClass()
+	 * (decoded {tiles} grids) and wallAutotileClassForSymbols() (the map
+	 * editor's raw ASCII-symbol grid) via the `isWallAt` callback, since
+	 * "is this neighboring cell a wall" is the only thing that differs
+	 * between those two grid shapes.
+	 *
+	 * Classic 8-neighbor blob-autotile check: a cell is an outer *corner*
+	 * when its two orthogonal neighbors on one side are still wall but the
+	 * diagonal between them opens onto floor (e.g. E and S are wall but SE
+	 * is floor — floor is peeking in from the corner, not from a straight
+	 * side). Failing that, it's a straight *edge* when exactly one direct
+	 * orthogonal neighbor is floor. Anything else (fully walled in, or a
+	 * T-junction/cross this small frame set has no piece for) returns ""
+	 * so the caller falls back to the plain wall-0x72 tile.
+	 */
+	private function _wallAutotileClass( x, y, isWallAt ) {
+		var n = arguments.isWallAt( arguments.x, arguments.y - 1 );
+		var s = arguments.isWallAt( arguments.x, arguments.y + 1 );
+		var e = arguments.isWallAt( arguments.x + 1, arguments.y );
+		var w = arguments.isWallAt( arguments.x - 1, arguments.y );
+		var ne = arguments.isWallAt( arguments.x + 1, arguments.y - 1 );
+		var nw = arguments.isWallAt( arguments.x - 1, arguments.y - 1 );
+		var se = arguments.isWallAt( arguments.x + 1, arguments.y + 1 );
+		var sw = arguments.isWallAt( arguments.x - 1, arguments.y + 1 );
+
+		if ( e && s && !se ) return "wall-corner-tl";
+		if ( w && s && !sw ) return "wall-corner-tr";
+		if ( e && n && !ne ) return "wall-corner-bl";
+		if ( w && n && !nw ) return "wall-corner-br";
+		if ( !s ) return "wall-top";
+		if ( !n ) return "wall-bottom";
+		if ( !e ) return "wall-edge-l";
+		if ( !w ) return "wall-edge-r";
+		return "";
+	}
+
+	/**
+	 * _wallAutotileClass() for a decoded {width, height, tiles, ...} grid
+	 * (see _parseAsciiLevel()'s doc comment) — `tiles` is `[row][col]`,
+	 * 1-based. Used by default.bxm (the actual dungeon/adventure grid).
+	 *
+	 * @grid The decoded grid struct.
+	 * @x Column (1-based).
+	 * @y Row (1-based).
+	 */
+	function wallAutotileClass( grid, x, y ) {
+		var g = arguments.grid;
+		if ( g.tiles[ arguments.y ][ arguments.x ] != "wall" ) {
+			return "";
+		}
+		var isWallAt = function( cx, cy ) {
+			if ( cx < 1 || cy < 1 || cx > g.width || cy > g.height ) {
+				return true;
+			}
+			return g.tiles[ cy ][ cx ] == "wall";
+		};
+		return _wallAutotileClass( arguments.x, arguments.y, isWallAt );
+	}
+
+	/**
+	 * _wallAutotileClass() for the map editor's raw ASCII-symbol grid
+	 * (`[row][col]` of single-character TILE_LEGEND symbols, 1-based) —
+	 * used before a map has ever been saved/parsed into a decoded grid.
+	 *
+	 * @grid The raw symbol grid.
+	 * @width Grid width.
+	 * @height Grid height.
+	 * @x Column (1-based).
+	 * @y Row (1-based).
+	 */
+	function wallAutotileClassForSymbols( grid, width, height, x, y ) {
+		var g = arguments.grid;
+		var w = arguments.width;
+		var h = arguments.height;
+		var legend = TILE_LEGEND;
+		var isWallAt = function( cx, cy ) {
+			if ( cx < 1 || cy < 1 || cx > w || cy > h ) {
+				return true;
+			}
+			var sym = g[ cy ][ cx ];
+			var meaning = legend.keyExists( sym ) ? legend[ sym ] : legend[ "." ];
+			return meaning.tile == "wall";
+		};
+		return _wallAutotileClass( arguments.x, arguments.y, isWallAt );
 	}
 
 	/**

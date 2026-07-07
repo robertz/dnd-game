@@ -1,0 +1,19 @@
+Kenney Roguelike/RPG Pack by Kenney Vleugels (www.kenney.nl), released under
+CC0 1.0 Universal (public domain) —
+"You may use these graphics in personal and commercial projects. Credit
+(Kenney or www.kenney.nl) would be nice but is not mandatory."
+Original source: https://kenney.nl/assets/roguelike-rpg-pack
+--------------------------------------------------
+CC0 1.0 Universal (CC0 1.0)
+Public Domain
+https://creativecommons.org/publicdomain/zero/1.0/
+--------------------------------------------------
+grass-kenney.png, road-kenney.png, water-kenney.png, mountain-kenney.png and
+sand-kenney.png are single 16x16 tiles cropped from the full pack spritesheet
+(kenney/roguelikeSheet_transparent.png, tile stride 17px = 16px tile + 1px
+margin), at tile grid coordinates (col,row): grass (9,25), road (12,25),
+water (15,25), mountain (20,12), sand (7,26).
+
+forest-kenney.png is the grass tile (9,25) composited with the pine-tree
+sprite at (16,9), so it reads as a solid impassable tile like the others
+rather than a transparent sprite floating over nothing.

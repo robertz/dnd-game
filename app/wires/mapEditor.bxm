@@ -183,7 +183,8 @@
 						<bx:set isSpawnPoint = !structIsEmpty( spawnPointHere )>
 						<bx:set transitionHere = transitionAt( col, row )>
 						<bx:set isTransition = !structIsEmpty( transitionHere )>
-						<bx:set cellClass = tileClasses.keyExists( symbol ) ? tileClasses[ symbol ] : ''>
+						<bx:set autotileClass = ( symbol == "##" ) ? wallAutotileClass( col, row ) : "">
+						<bx:set cellClass = len( autotileClass ) ? ( 'tile-' & autotileClass ) : ( tileClasses.keyExists( symbol ) ? tileClasses[ symbol ] : '' )>
 						<div
 							class="tile#( len( cellClass ) ? ' ' & cellClass : '' )##( isPlayerSpawn ? ' tile-player' : ( isSpawnPoint ? ' tile-opponent' : ( isTransition ? ' tile-transition' : '' ) ) )#"
 							title="#( isSpawnPoint ? describeSpawnPoint( spawnPointHere ) : ( isTransition ? 'Transition to ' & transitionHere.targetModule & ' / ' & transitionHere.targetMap : 'x' & col & ', y' & row ) )#"

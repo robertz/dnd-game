@@ -212,6 +212,19 @@ class extends="cbwire.models.Component" {
 	}
 
 	/**
+	 * Thin wrapper so mapEditor.bxm can call this bare, the same way it
+	 * calls spawnPointAt()/transitionAt() — a CBWIRE template's scope only
+	 * sees this component's own methods, not injected properties like
+	 * mapService, so the template can't reach
+	 * mapService.wallAutotileClassForSymbols() directly.
+	 */
+	function wallAutotileClass( x, y ) {
+		return mapService.wallAutotileClassForSymbols(
+			variables.data.grid, variables.data.width, variables.data.height, arguments.x, arguments.y
+		);
+	}
+
+	/**
 	 * Returns the spawn point placed at (x, y), or an empty struct if
 	 * none — used by the template to mark spawn point tiles.
 	 */
@@ -427,11 +440,15 @@ class extends="cbwire.models.Component" {
 			{ "symbol": "D", "label": "Door" },
 			{ "symbol": "x", "label": "Spikes" },
 			{ "symbol": "c", "label": "Chest" },
+			{ "symbol": "b", "label": "Rubble" },
+			{ "symbol": "n", "label": "Banner" },
+			{ "symbol": "y", "label": "Crystal" },
 			{ "symbol": "g", "label": "Grass" },
 			{ "symbol": "r", "label": "Road" },
 			{ "symbol": "t", "label": "Forest" },
 			{ "symbol": "m", "label": "Mountain" },
-			{ "symbol": "w", "label": "Water" }
+			{ "symbol": "w", "label": "Water" },
+			{ "symbol": "s", "label": "Sand" }
 		];
 		var palette = [];
 		for ( var entry in order ) {

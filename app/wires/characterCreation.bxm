@@ -52,6 +52,14 @@
 					>#opt#</div>
 				</bx:loop>
 			</div>
+				<bx:if len( selectedSpecies )>
+					<div class="stat-card creation-detail">
+						<h3 class="fantasy-heading">#selectedSpecies#</h3>
+						<p class="stat-subtitle">#speciesDetails[ selectedSpecies ].size# — Speed #speciesDetails[ selectedSpecies ].speed#</p>
+						<p>#speciesDetails[ selectedSpecies ].traits#</p>
+					</div>
+				</bx:if>
+
 			<p class="stat-subtitle">Choose a Background</p>
 			<div class="creation-grid">
 				<bx:loop array="#backgroundOptions#" index="opt">
@@ -61,6 +69,17 @@
 					>#opt#</div>
 				</bx:loop>
 			</div>
+				<bx:if len( selectedBackground )>
+					<div class="stat-card creation-detail">
+						<h3 class="fantasy-heading">#selectedBackground#</h3>
+						<ul class="stat-list">
+							<li><strong>Ability Scores</strong> #backgroundDetails[ selectedBackground ].abilityScores#</li>
+							<li><strong>Feat</strong> #backgroundDetails[ selectedBackground ].feat#</li>
+							<li><strong>Skills</strong> #backgroundDetails[ selectedBackground ].skills#</li>
+							<li><strong>Tool</strong> #backgroundDetails[ selectedBackground ].tool#</li>
+						</ul>
+					</div>
+				</bx:if>
 		</bx:if>
 
 		<bx:if step == 3>

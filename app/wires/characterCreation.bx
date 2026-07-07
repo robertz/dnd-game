@@ -29,8 +29,28 @@ class extends="cbwire.models.Component" {
 
 		"speciesOptions": [ "Dragonborn", "Dwarf", "Elf", "Gnome", "Goliath", "Halfling", "Human", "Orc", "Tiefling" ],
 		"selectedSpecies": "",
+		// SRD "Character Origins" species summaries — size/speed plus a short
+		// digest of each species' special traits, for the Origin step's detail panel.
+		"speciesDetails": {
+			"Dragonborn": { "size": "Medium", "speed": "30 ft", "traits": "Draconic Ancestry (choose a dragon type), Breath Weapon (Dex save, 1d10+ damage of that type), Damage Resistance to that type, Darkvision 60 ft, Draconic Flight at level 5." },
+			"Dwarf": { "size": "Medium", "speed": "30 ft", "traits": "Darkvision 120 ft, Dwarven Resilience (Resistance to Poison damage, Advantage vs. Poisoned), Dwarven Toughness (+1 HP max per level), Stonecunning (Tremorsense 60 ft as a Bonus Action)." },
+			"Elf": { "size": "Medium", "speed": "30 ft", "traits": "Darkvision 60 ft, Elven Lineage (Drow/High Elf/Wood Elf grants a cantrip and bonus spells), Fey Ancestry (Advantage vs. Charmed), Keen Senses (a skill proficiency), Trance (4-hour rest)." },
+			"Gnome": { "size": "Small", "speed": "30 ft", "traits": "Darkvision 60 ft, Gnomish Cunning (Advantage on Int/Wis/Cha saves), Gnomish Lineage (Forest or Rock Gnome grants cantrips and a minor supernatural ability)." },
+			"Goliath": { "size": "Medium", "speed": "35 ft", "traits": "Giant Ancestry (choose a Giant boon usable a few times per Long Rest), Large Form at level 5, Powerful Build (Advantage vs. Grappled, counts as one size larger for carrying capacity)." },
+			"Halfling": { "size": "Small", "speed": "30 ft", "traits": "Brave (Advantage vs. Frightened), Halfling Nimbleness (move through larger creatures' spaces), Luck (reroll a natural 1), Naturally Stealthy (Hide behind a larger creature)." },
+			"Human": { "size": "Medium or Small", "speed": "30 ft", "traits": "Resourceful (Heroic Inspiration after a Long Rest), Skillful (one extra skill proficiency), Versatile (a free Origin feat)." },
+			"Orc": { "size": "Medium", "speed": "30 ft", "traits": "Adrenaline Rush (Dash as a Bonus Action, gain Temporary HP), Darkvision 120 ft, Relentless Endurance (drop to 1 HP instead of 0, once per Long Rest)." },
+			"Tiefling": { "size": "Medium or Small", "speed": "30 ft", "traits": "Darkvision 60 ft, Fiendish Legacy (Abyssal/Chthonic/Infernal grants a cantrip, Resistance, and bonus spells), Otherworldly Presence (Thaumaturgy cantrip)." }
+		},
 		"backgroundOptions": [ "Acolyte", "Criminal", "Sage", "Soldier" ],
 		"selectedBackground": "",
+		// SRD "Character Origins" background summaries for the Origin step's detail panel.
+		"backgroundDetails": {
+			"Acolyte": { "abilityScores": "Intelligence, Wisdom, Charisma", "feat": "Magic Initiate (Cleric)", "skills": "Insight, Religion", "tool": "Calligrapher's Supplies" },
+			"Criminal": { "abilityScores": "Dexterity, Constitution, Intelligence", "feat": "Alert", "skills": "Sleight of Hand, Stealth", "tool": "Thieves' Tools" },
+			"Sage": { "abilityScores": "Constitution, Intelligence, Wisdom", "feat": "Magic Initiate (Wizard)", "skills": "Arcana, History", "tool": "Calligrapher's Supplies" },
+			"Soldier": { "abilityScores": "Strength, Dexterity, Constitution", "feat": "Savage Attacker", "skills": "Athletics, Intimidation", "tool": "Gaming Set (choice)" }
+		},
 
 		// Standard Array (Ability Scores step): each value is assigned to
 		// exactly one ability, in STR/DEX/CON/INT/WIS/CHA order as clicked.

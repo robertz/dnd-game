@@ -1053,6 +1053,9 @@
 				<a href="/character/sheet" wire:navigate class="#( currentEvent == "character.sheet" ? "site-nav-active" : "" )#">Character Sheet</a>
 				<a href="/adventure" wire:navigate class="#( ( currentEvent == "combat.index" || currentEvent == "adventure.index" ) ? "site-nav-active" : "" )#">Adventure</a>
 			</bx:if>
+			<!--- Dev tool, not player-facing content — MapEditor.bx has no
+			      session/character guard, so this link is always shown. --->
+			<a href="/mapEditor" wire:navigate class="#( currentEvent == "mapEditor.index" ? "site-nav-active" : "" )#">Map Editor</a>
 		</nav>
 	</header>
 	<!---Container And Views --->

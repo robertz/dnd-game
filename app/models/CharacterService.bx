@@ -273,7 +273,7 @@ class singleton {
 		var row = queryExecute(
 			"SELECT c.id, c.name, c.species, c.background, c.alignment, c.level,
 			        c.str, c.dex, c.con, c.int_score, c.wis, c.cha,
-			        c.proficiency_bonus, c.armor_class, c.max_hit_points, c.speed,
+			        c.proficiency_bonus, c.armor_class, c.max_hit_points, c.speed, c.gold,
 			        c.experience_points, c.known_cantrip, c.known_spell,
 			        cl.name AS className, cl.hit_die, cl.saving_throw_proficiencies
 			 FROM characters c JOIN classes cl ON cl.id = c.class_id
@@ -310,6 +310,7 @@ class singleton {
 			"armorClass": row.armor_class[ 1 ],
 			"maxHitPoints": row.max_hit_points[ 1 ],
 			"speed": row.speed[ 1 ],
+			"gold": row.gold[ 1 ],
 			"experiencePoints": row.experience_points[ 1 ],
 			"savingThrowProficiencies": listToArray( row.saving_throw_proficiencies[ 1 ], " and ", false, true ),
 			"knownCantripName": len( row.known_cantrip[ 1 ] ) ? row.known_cantrip[ 1 ] : "",
@@ -400,6 +401,234 @@ class singleton {
 			} );
 		}
 		return result;
+	}
+
+	/**
+	 * Returns every SRD armor (and shields), for the add-armor picker.
+	 */
+	function listArmors() {
+		var rows = queryExecute(
+			"SELECT id, name, armor_type, base_ac, max_dex_bonus, strength_requirement, stealth_disadvantage
+			 FROM armors ORDER BY FIELD( armor_type, 'light', 'medium', 'heavy', 'shield' ), base_ac",
+			{}, { datasource: "gameserver" }
+		);
+		var result = [];
+		for ( var row in rows ) {
+			result.append( {
+				"id": row.id, "name": row.name, "armorType": row.armor_type,
+				"baseAc": row.base_ac, "maxDexBonus": row.max_dex_bonus,
+				"strengthRequirement": row.strength_requirement, "stealthDisadvantage": row.stealth_disadvantage
+			} );
+		}
+		return result;
+	}
+
+	/**
+	 * Returns the character's armor inventory as an array of structs.
+	 */
+	function getArmorInventory( characterId ) {
+		var rows = queryExecute(
+			"SELECT ca.id, ca.equipped, a.name AS armorName, a.armor_type, a.base_ac, a.max_dex_bonus,
+			        a.strength_requirement, a.stealth_disadvantage
+			 FROM character_armor ca
+			 JOIN armors a ON a.id = ca.armor_id
+			 WHERE ca.character_id = :characterId
+			 ORDER BY ca.equipped DESC, a.name",
+			{ "characterId": arguments.characterId }, { datasource: "gameserver" }
+		);
+		var result = [];
+		for ( var row in rows ) {
+			result.append( {
+				"id": row.id, "armorName": row.armorName, "armorType": row.armor_type,
+				"baseAc": row.base_ac, "maxDexBonus": row.max_dex_bonus,
+				"strengthRequirement": row.strength_requirement, "stealthDisadvantage": row.stealth_disadvantage,
+				"equipped": row.equipped
+			} );
+		}
+		return result;
+	}
+
+	/**
+	 * Adds an armor to a character's inventory, unequipped. INSERT IGNORE
+	 * silently skips if the character already owns that armor.
+	 */
+	function addArmorToInventory( characterId, armorId ) {
+		queryExecute(
+			"INSERT IGNORE INTO character_armor (character_id, armor_id, equipped) VALUES (:characterId, :armorId, 0)",
+			{ "characterId": arguments.characterId, "armorId": arguments.armorId },
+			{ datasource: "gameserver" }
+		);
+	}
+
+	/**
+	 * Removes an armor from inventory and recalculates AC (in case it was
+	 * equipped).
+	 */
+	function removeArmor( characterId, inventoryId ) {
+		queryExecute(
+			"DELETE FROM character_armor WHERE id = :id",
+			{ "id": arguments.inventoryId },
+			{ datasource: "gameserver" }
+		);
+		_recalculateArmorClass( arguments.characterId );
+	}
+
+	/**
+	 * Equips or unequips an armor slot. Body armor (light/medium/heavy) and
+	 * shields are independent slots: equipping a new body armor unequips
+	 * any other equipped body armor, and equipping a shield unequips any
+	 * other equipped shield — but a shield and a body armor can both be
+	 * equipped at once. Always recalculates and persists AC afterward.
+	 */
+	function setArmorEquipped( characterId, inventoryId, equip ) {
+		if ( arguments.equip ) {
+			var target = queryExecute(
+				"SELECT a.armor_type FROM character_armor ca JOIN armors a ON a.id = ca.armor_id WHERE ca.id = :id",
+				{ "id": arguments.inventoryId }, { datasource: "gameserver" }
+			);
+			if ( target.recordCount == 0 ) {
+				return;
+			}
+			var isShield = ( target.armor_type[ 1 ] == "shield" );
+			queryExecute(
+				"UPDATE character_armor ca
+				 INNER JOIN armors a ON a.id = ca.armor_id
+				 SET ca.equipped = 0
+				 WHERE ca.character_id = :characterId AND #( isShield ? "a.armor_type = 'shield'" : "a.armor_type != 'shield'" )#",
+				{ "characterId": arguments.characterId },
+				{ datasource: "gameserver" }
+			);
+		}
+		queryExecute(
+			"UPDATE character_armor SET equipped = :equipped WHERE id = :id",
+			{ "equipped": arguments.equip ? 1 : 0, "id": arguments.inventoryId },
+			{ datasource: "gameserver" }
+		);
+		_recalculateArmorClass( arguments.characterId );
+	}
+
+	/**
+	 * Recomputes and persists a character's AC from their currently
+	 * equipped armor: light armor adds the full Dex modifier, medium caps
+	 * it at +2, heavy ignores it entirely; wearing no body armor falls
+	 * back to the unarmored 10 + Dex mod baseline. A shield adds its flat
+	 * bonus on top regardless of body armor.
+	 */
+	private function _recalculateArmorClass( characterId ) {
+		var charRow = queryExecute(
+			"SELECT dex FROM characters WHERE id = :characterId",
+			{ "characterId": arguments.characterId }, { datasource: "gameserver" }
+		);
+		if ( charRow.recordCount == 0 ) {
+			return;
+		}
+		var dexMod = combatService.abilityModifier( charRow.dex[ 1 ] );
+
+		var equippedRows = queryExecute(
+			"SELECT a.armor_type, a.base_ac, a.max_dex_bonus
+			 FROM character_armor ca JOIN armors a ON a.id = ca.armor_id
+			 WHERE ca.character_id = :characterId AND ca.equipped = 1",
+			{ "characterId": arguments.characterId }, { datasource: "gameserver" }
+		);
+
+		var armorClass = 10 + dexMod;
+		var shieldBonus = 0;
+		for ( var i = 1; i <= equippedRows.recordCount; i++ ) {
+			if ( equippedRows.armor_type[ i ] == "shield" ) {
+				shieldBonus = equippedRows.base_ac[ i ];
+			} else {
+				var cappedDex = isNull( equippedRows.max_dex_bonus[ i ] ) ? dexMod : min( dexMod, equippedRows.max_dex_bonus[ i ] );
+				armorClass = equippedRows.base_ac[ i ] + cappedDex;
+			}
+		}
+		armorClass += shieldBonus;
+
+		queryExecute(
+			"UPDATE characters SET armor_class = :armorClass WHERE id = :characterId",
+			{ "armorClass": armorClass, "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+	}
+
+	/**
+	 * Returns every general (non-weapon, non-armor) item, for the add-item picker.
+	 */
+	function listItems() {
+		var rows = queryExecute(
+			"SELECT id, name, item_type, description FROM items ORDER BY item_type, name",
+			{}, { datasource: "gameserver" }
+		);
+		var result = [];
+		for ( var row in rows ) {
+			result.append( { "id": row.id, "name": row.name, "itemType": row.item_type, "description": row.description } );
+		}
+		return result;
+	}
+
+	/**
+	 * Returns the character's general item inventory as an array of structs.
+	 */
+	function getItemInventory( characterId ) {
+		var rows = queryExecute(
+			"SELECT ci.id, ci.quantity, i.name AS itemName, i.item_type, i.description
+			 FROM character_items ci JOIN items i ON i.id = ci.item_id
+			 WHERE ci.character_id = :characterId
+			 ORDER BY i.item_type, i.name",
+			{ "characterId": arguments.characterId }, { datasource: "gameserver" }
+		);
+		var result = [];
+		for ( var row in rows ) {
+			result.append( { "id": row.id, "itemName": row.itemName, "itemType": row.item_type, "description": row.description, "quantity": row.quantity } );
+		}
+		return result;
+	}
+
+	/**
+	 * Adds `quantity` of an item to a character's inventory, stacking onto
+	 * an existing row of the same item rather than duplicating it.
+	 */
+	function addItemToInventory( characterId, itemId, quantity = 1 ) {
+		queryExecute(
+			"INSERT INTO character_items (character_id, item_id, quantity)
+			 VALUES (:characterId, :itemId, :quantity)
+			 ON DUPLICATE KEY UPDATE quantity = quantity + VALUES(quantity)",
+			{ "characterId": arguments.characterId, "itemId": arguments.itemId, "quantity": arguments.quantity },
+			{ datasource: "gameserver" }
+		);
+	}
+
+	/**
+	 * Looks up an item by name (e.g. from a loot POI's payload) and adds it
+	 * to a character's inventory — a no-op if the name doesn't match a
+	 * seeded item.
+	 */
+	function addItemByName( characterId, itemName, quantity = 1 ) {
+		var row = queryExecute(
+			"SELECT id FROM items WHERE name = :name",
+			{ "name": arguments.itemName }, { datasource: "gameserver" }
+		);
+		if ( row.recordCount == 0 ) {
+			return;
+		}
+		addItemToInventory( arguments.characterId, row.id[ 1 ], arguments.quantity );
+	}
+
+	/**
+	 * Removes an item stack from inventory entirely.
+	 */
+	function removeItem( inventoryId ) {
+		queryExecute( "DELETE FROM character_items WHERE id = :id", { "id": arguments.inventoryId }, { datasource: "gameserver" } );
+	}
+
+	/**
+	 * Adjusts a character's gold by `delta` (negative to spend), floored at 0.
+	 */
+	function adjustGold( characterId, delta ) {
+		queryExecute(
+			"UPDATE characters SET gold = GREATEST( 0, gold + :delta ) WHERE id = :characterId",
+			{ "delta": arguments.delta, "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
 	}
 
 	/**

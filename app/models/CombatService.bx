@@ -2494,6 +2494,7 @@ class singleton {
 			// Flooring to 1 would hide that signal and leave them stuck.
 			"hitPoints": max( 0, row.hit_points[ 1 ] ),
 			"maxHitPoints": row.max_hit_points[ 1 ],
+			"gold": row.gold[ 1 ],
 			// Die size (e.g. 8 for a d8) used when spending Hit Dice on a short rest.
 			"hitDieSize": int( reReplace( row.hit_die[ 1 ], "[^0-9]*(\d+).*", "\1" ) ),
 			"hitDiceMax": row.level[ 1 ],

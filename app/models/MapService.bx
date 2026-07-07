@@ -66,8 +66,11 @@ class singleton {
 	}
 
 	/**
-	 * Lists the maps belonging to one adventure module, for the map picker
-	 * step of the module-select screen.
+	 * Lists the maps belonging to one adventure module — used by the map
+	 * editor's "load an existing map" picker. Not used by the player-facing
+	 * module-select screen, which only ever enters a module's designated
+	 * entry map (see getEntryMapSlug()); other maps are reached in-game via
+	 * transitions.
 	 *
 	 * @moduleSlug Adventure module slug.
 	 */
@@ -81,6 +84,300 @@ class singleton {
 			{ "moduleSlug": arguments.moduleSlug },
 			{ datasource: "gameserver" }
 		);
+	}
+
+	/**
+	 * Returns the slug of a module's designated entry map (adventure_maps.
+	 * is_entry) — the one the module/map picker (moduleSelect.bx) sends the
+	 * player straight into. Falls back to the module's first-created map
+	 * (lowest id) if none is explicitly flagged, so a module never has zero
+	 * viable entry points.
+	 *
+	 * @moduleSlug Adventure module slug.
+	 */
+	function getEntryMapSlug( moduleSlug ) {
+		var rows = queryExecute(
+			"SELECT m.slug
+			 FROM adventure_maps m
+			 INNER JOIN adventure_modules am ON am.id = m.module_id
+			 WHERE am.slug = :moduleSlug
+			 ORDER BY m.is_entry DESC, m.id ASC
+			 LIMIT 1",
+			{ "moduleSlug": arguments.moduleSlug },
+			{ datasource: "gameserver" }
+		);
+		if ( rows.recordCount == 0 ) {
+			throw( type = "MapNotFound", message = "Module '#arguments.moduleSlug#' has no maps." );
+		}
+		return rows.slug[ 1 ];
+	}
+
+	/**
+	 * Exposes TILE_LEGEND (symbol -> {tile, decoration}) so callers like the
+	 * map editor (mapEditor.bx) can build a brush palette and a per-map
+	 * tile_legend JSON column from the same source of truth
+	 * _parseAsciiLevel() uses, instead of duplicating the symbol list.
+	 */
+	function tileLegend() {
+		return TILE_LEGEND;
+	}
+
+	/**
+	 * Creates or updates an adventure module and one of its maps from the
+	 * map editor: upserts the module and map metadata (matched by slug),
+	 * then replaces the map's chunks wholesale by RLE-encoding `grid` —
+	 * simpler and safer than diffing/patching existing chunk rows, since
+	 * the editor always has the full authored grid in memory anyway.
+	 *
+	 * @grid A `height` x `width` array of single-character TILE_LEGEND
+	 *  symbols, row-major, 1-based like every other grid in this app.
+	 * @playerSpawn `{x, y}` — should land on a floor tile (not validated
+	 *  here; the editor is expected to check before calling this).
+	 * @opponentSpawn `{x, y}` — same caveat as playerSpawn.
+	 * @transitions Array of `{x, y, targetModule, targetMap}` — map-to-map
+	 *  links, persisted as `adventure_map_pois` rows with poi_type
+	 *  "transition". Replaces every existing transition POI on this map
+	 *  (other POI types, e.g. "encounter", are left untouched).
+	 * @isEntry If true, marks this map as its module's entry point (see
+	 *  getEntryMapSlug()) — clearing the flag on every other map in the
+	 *  module first, so only one map per module is ever the entry. Leaving
+	 *  this false does NOT clear an existing entry map; it just leaves this
+	 *  map as a non-entry (transition-only-reachable) one.
+	 */
+	function saveEditorMap( moduleSlug, moduleName, moduleDescription, mapSlug, mapName, width, height, chunkSize, grid, playerSpawn, opponentSpawn, transitions = [], isEntry = false ) {
+		var moduleId = _upsertModule( arguments.moduleSlug, arguments.moduleName, arguments.moduleDescription );
+		var mapId = _upsertMap(
+			moduleId, arguments.mapSlug, arguments.mapName, arguments.width, arguments.height,
+			arguments.chunkSize, arguments.playerSpawn, arguments.opponentSpawn
+		);
+
+		if ( arguments.isEntry ) {
+			queryExecute( "UPDATE adventure_maps SET is_entry = 0 WHERE module_id = :moduleId", { "moduleId": moduleId }, { datasource: "gameserver" } );
+			queryExecute( "UPDATE adventure_maps SET is_entry = 1 WHERE id = :mapId", { "mapId": mapId }, { datasource: "gameserver" } );
+		}
+
+		queryExecute( "DELETE FROM adventure_map_chunks WHERE map_id = :mapId", { "mapId": mapId }, { datasource: "gameserver" } );
+
+		var chunksX = ceiling( arguments.width / arguments.chunkSize );
+		var chunksY = ceiling( arguments.height / arguments.chunkSize );
+		for ( var cy = 0; cy < chunksY; cy++ ) {
+			for ( var cx = 0; cx < chunksX; cx++ ) {
+				var rowStart = cy * arguments.chunkSize + 1;
+				var rowEnd = min( arguments.height, rowStart + arguments.chunkSize - 1 );
+				var colStart = cx * arguments.chunkSize + 1;
+				var colEnd = min( arguments.width, colStart + arguments.chunkSize - 1 );
+				var lines = [];
+				for ( var y = rowStart; y <= rowEnd; y++ ) {
+					var rowText = "";
+					for ( var x = colStart; x <= colEnd; x++ ) {
+						rowText &= arguments.grid[ y ][ x ];
+					}
+					arrayAppend( lines, _encodeRLE( rowText ) );
+				}
+				queryExecute(
+					"INSERT INTO adventure_map_chunks (map_id, chunk_x, chunk_y, row_data) VALUES (:mapId, :chunkX, :chunkY, :rowData)",
+					{ "mapId": mapId, "chunkX": cx, "chunkY": cy, "rowData": arrayToList( lines, char( 10 ) ) },
+					{ datasource: "gameserver" }
+				);
+			}
+		}
+
+		queryExecute(
+			"DELETE FROM adventure_map_pois WHERE map_id = :mapId AND poi_type = 'transition'",
+			{ "mapId": mapId },
+			{ datasource: "gameserver" }
+		);
+		for ( var t in arguments.transitions ) {
+			queryExecute(
+				"INSERT INTO adventure_map_pois (map_id, x, y, poi_type, payload) VALUES (:mapId, :x, :y, 'transition', :payload)",
+				{
+					"mapId": mapId, "x": t.x, "y": t.y,
+					"payload": JSONSerialize( { "targetModule": t.targetModule, "targetMap": t.targetMap } )
+				},
+				{ datasource: "gameserver" }
+			);
+		}
+
+		return { "moduleSlug": arguments.moduleSlug, "mapSlug": arguments.mapSlug };
+	}
+
+	/**
+	 * Inserts a new adventure module, or updates name/description if the
+	 * slug already exists. Returns the module's id either way.
+	 */
+	private function _upsertModule( slug, name, description ) {
+		var existing = queryExecute(
+			"SELECT id FROM adventure_modules WHERE slug = :slug",
+			{ "slug": arguments.slug },
+			{ datasource: "gameserver" }
+		);
+		if ( existing.recordCount ) {
+			queryExecute(
+				"UPDATE adventure_modules SET name = :name, description = :description WHERE id = :id",
+				{ "name": arguments.name, "description": arguments.description, "id": existing.id[ 1 ] },
+				{ datasource: "gameserver" }
+			);
+			return existing.id[ 1 ];
+		}
+		queryExecute(
+			"INSERT INTO adventure_modules (slug, name, description) VALUES (:slug, :name, :description)",
+			{ "slug": arguments.slug, "name": arguments.name, "description": arguments.description },
+			{ datasource: "gameserver" }
+		);
+		var inserted = queryExecute(
+			"SELECT id FROM adventure_modules WHERE slug = :slug",
+			{ "slug": arguments.slug },
+			{ datasource: "gameserver" }
+		);
+		return inserted.id[ 1 ];
+	}
+
+	/**
+	 * Inserts a new adventure map under `moduleId`, or updates its metadata
+	 * if a map with `mapSlug` already exists in that module. The
+	 * tile_legend column is always written as this class's own TILE_LEGEND,
+	 * JSON-encoded — the editor only ever produces symbols from that fixed
+	 * palette. Returns the map's id either way.
+	 */
+	private function _upsertMap( moduleId, mapSlug, mapName, width, height, chunkSize, playerSpawn, opponentSpawn ) {
+		var legendJSON = JSONSerialize( TILE_LEGEND );
+		var existing = queryExecute(
+			"SELECT id FROM adventure_maps WHERE module_id = :moduleId AND slug = :slug",
+			{ "moduleId": arguments.moduleId, "slug": arguments.mapSlug },
+			{ datasource: "gameserver" }
+		);
+		if ( existing.recordCount ) {
+			queryExecute(
+				"UPDATE adventure_maps
+				 SET name = :name, width = :width, height = :height, chunk_size = :chunkSize, tile_legend = :legend,
+				     player_spawn_x = :psx, player_spawn_y = :psy, opponent_spawn_x = :osx, opponent_spawn_y = :osy
+				 WHERE id = :id",
+				{
+					"name": arguments.mapName, "width": arguments.width, "height": arguments.height,
+					"chunkSize": arguments.chunkSize, "legend": legendJSON,
+					"psx": arguments.playerSpawn.x, "psy": arguments.playerSpawn.y,
+					"osx": arguments.opponentSpawn.x, "osy": arguments.opponentSpawn.y,
+					"id": existing.id[ 1 ]
+				},
+				{ datasource: "gameserver" }
+			);
+			return existing.id[ 1 ];
+		}
+		queryExecute(
+			"INSERT INTO adventure_maps
+			    (module_id, slug, name, width, height, chunk_size, tile_legend, player_spawn_x, player_spawn_y, opponent_spawn_x, opponent_spawn_y)
+			 VALUES (:moduleId, :slug, :name, :width, :height, :chunkSize, :legend, :psx, :psy, :osx, :osy)",
+			{
+				"moduleId": arguments.moduleId, "slug": arguments.mapSlug, "name": arguments.mapName,
+				"width": arguments.width, "height": arguments.height, "chunkSize": arguments.chunkSize,
+				"legend": legendJSON, "psx": arguments.playerSpawn.x, "psy": arguments.playerSpawn.y,
+				"osx": arguments.opponentSpawn.x, "osy": arguments.opponentSpawn.y
+			},
+			{ datasource: "gameserver" }
+		);
+		var inserted = queryExecute(
+			"SELECT id FROM adventure_maps WHERE module_id = :moduleId AND slug = :slug",
+			{ "moduleId": arguments.moduleId, "slug": arguments.mapSlug },
+			{ datasource: "gameserver" }
+		);
+		return inserted.id[ 1 ];
+	}
+
+	/**
+	 * Loads a previously saved adventure map back into the map editor's raw
+	 * symbol-grid representation — unlike getModuleMap(), which decodes
+	 * into the {tiles, decorations} shape combat plays against, this keeps
+	 * the original TILE_LEGEND symbols so mapEditor.bx can let you keep
+	 * painting where you left off.
+	 *
+	 * @moduleSlug Adventure module slug.
+	 * @mapSlug Map slug within that module.
+	 */
+	function loadEditorMap( moduleSlug, mapSlug ) {
+		var rows = queryExecute(
+			"SELECT am.slug AS moduleSlug, am.name AS moduleName, am.description AS moduleDescription,
+			        m.id, m.slug AS mapSlug, m.name AS mapName, m.width, m.height, m.chunk_size, m.is_entry,
+			        m.player_spawn_x, m.player_spawn_y, m.opponent_spawn_x, m.opponent_spawn_y
+			 FROM adventure_maps m
+			 INNER JOIN adventure_modules am ON am.id = m.module_id
+			 WHERE am.slug = :moduleSlug AND m.slug = :mapSlug",
+			{ "moduleSlug": arguments.moduleSlug, "mapSlug": arguments.mapSlug },
+			{ datasource: "gameserver" }
+		);
+		if ( rows.recordCount == 0 ) {
+			throw( type = "MapNotFound", message = "No map '#arguments.mapSlug#' in module '#arguments.moduleSlug#'." );
+		}
+
+		var width = rows.width[ 1 ];
+		var height = rows.height[ 1 ];
+		var chunkSize = rows.chunk_size[ 1 ];
+		var grid = _buildSymbolGrid( width, height );
+
+		var chunkRows = queryExecute(
+			"SELECT chunk_x, chunk_y, row_data FROM adventure_map_chunks WHERE map_id = :mapId",
+			{ "mapId": rows.id[ 1 ] },
+			{ datasource: "gameserver" }
+		);
+		for ( var i = 1; i <= chunkRows.recordCount; i++ ) {
+			var lines = listToArray( chunkRows.row_data[ i ], char( 10 ) );
+			var offsetY = chunkRows.chunk_y[ i ] * chunkSize;
+			var offsetX = chunkRows.chunk_x[ i ] * chunkSize;
+			for ( var ly = 1; ly <= lines.len(); ly++ ) {
+				var expanded = _decodeRLE( lines[ ly ] );
+				for ( var lx = 1; lx <= len( expanded ); lx++ ) {
+					grid[ offsetY + ly ][ offsetX + lx ] = mid( expanded, lx, 1 );
+				}
+			}
+		}
+
+		var transitions = [];
+		var poiRows = queryExecute(
+			"SELECT x, y, payload FROM adventure_map_pois WHERE map_id = :mapId AND poi_type = 'transition'",
+			{ "mapId": rows.id[ 1 ] },
+			{ datasource: "gameserver" }
+		);
+		for ( var i = 1; i <= poiRows.recordCount; i++ ) {
+			var payload = len( poiRows.payload[ i ] ) ? JSONDeserialize( poiRows.payload[ i ] ) : {};
+			arrayAppend( transitions, {
+				"x": poiRows.x[ i ], "y": poiRows.y[ i ],
+				"targetModule": payload.keyExists( "targetModule" ) ? payload.targetModule : "",
+				"targetMap": payload.keyExists( "targetMap" ) ? payload.targetMap : ""
+			} );
+		}
+
+		return {
+			"moduleSlug": rows.moduleSlug[ 1 ],
+			"moduleName": rows.moduleName[ 1 ],
+			"moduleDescription": rows.moduleDescription[ 1 ],
+			"mapSlug": rows.mapSlug[ 1 ],
+			"mapName": rows.mapName[ 1 ],
+			"width": width,
+			"height": height,
+			"chunkSize": chunkSize,
+			"grid": grid,
+			"playerSpawn": { "x": rows.player_spawn_x[ 1 ], "y": rows.player_spawn_y[ 1 ] },
+			"opponentSpawn": { "x": rows.opponent_spawn_x[ 1 ], "y": rows.opponent_spawn_y[ 1 ] },
+			"transitions": transitions,
+			"isEntry": rows.is_entry[ 1 ] == 1
+		};
+	}
+
+	/**
+	 * Builds a width x height grid filled with the default floor symbol —
+	 * used by loadEditorMap() as the backing store before chunk data is
+	 * blitted in (guards against a map whose chunks don't fully cover its
+	 * declared dimensions).
+	 */
+	private function _buildSymbolGrid( width, height ) {
+		var grid = [];
+		for ( var y = 1; y <= arguments.height; y++ ) {
+			var row = [];
+			for ( var x = 1; x <= arguments.width; x++ ) {
+				arrayAppend( row, "." );
+			}
+			arrayAppend( grid, row );
+		}
+		return grid;
 	}
 
 	/**
@@ -119,8 +416,48 @@ class singleton {
 			"tiles": tiles,
 			"decorations": decorations,
 			"playerSpawn": { "x": mapRow.player_spawn_x[ 1 ], "y": mapRow.player_spawn_y[ 1 ] },
-			"opponentSpawn": { "x": mapRow.opponent_spawn_x[ 1 ], "y": mapRow.opponent_spawn_y[ 1 ] }
+			"opponentSpawn": { "x": mapRow.opponent_spawn_x[ 1 ], "y": mapRow.opponent_spawn_y[ 1 ] },
+			"pois": _loadPois( mapRow.id[ 1 ] )
 		};
+	}
+
+	/**
+	 * Permanently deletes every POI at (x, y) on a map — used when a loot
+	 * POI is collected (default.bx's _checkLoot()) so it isn't offered
+	 * again on a future visit to the map.
+	 */
+	function deletePoiAt( moduleSlug, mapSlug, x, y ) {
+		var mapRow = _getMapRow( arguments.moduleSlug, arguments.mapSlug );
+		queryExecute(
+			"DELETE FROM adventure_map_pois WHERE map_id = :mapId AND x = :x AND y = :y",
+			{ "mapId": mapRow.id[ 1 ], "x": arguments.x, "y": arguments.y },
+			{ datasource: "gameserver" }
+		);
+	}
+
+	/**
+	 * Loads every POI (encounter/loot/NPC/map-transition trigger) attached
+	 * to a map, with `payload` already JSON-deserialized into a struct —
+	 * e.g. default.bx's map-transition check reads
+	 * `poi.payload.targetModule`/`poi.payload.targetMap` directly rather
+	 * than re-parsing JSON on every move.
+	 */
+	private function _loadPois( mapId ) {
+		var rows = queryExecute(
+			"SELECT x, y, poi_type, payload FROM adventure_map_pois WHERE map_id = :mapId",
+			{ "mapId": arguments.mapId },
+			{ datasource: "gameserver" }
+		);
+		var pois = [];
+		for ( var i = 1; i <= rows.recordCount; i++ ) {
+			arrayAppend( pois, {
+				"x": rows.x[ i ],
+				"y": rows.y[ i ],
+				"type": rows.poi_type[ i ],
+				"payload": len( rows.payload[ i ] ) ? JSONDeserialize( rows.payload[ i ] ) : {}
+			} );
+		}
+		return pois;
 	}
 
 	/**
@@ -514,7 +851,13 @@ class singleton {
 			"tiles": tiles,
 			"decorations": decorations,
 			"playerSpawn": { "x": arguments.playerSpawn.x, "y": arguments.playerSpawn.y },
-			"opponentSpawn": { "x": arguments.opponentSpawn.x, "y": arguments.opponentSpawn.y }
+			"opponentSpawn": { "x": arguments.opponentSpawn.x, "y": arguments.opponentSpawn.y },
+			// Hand-authored ASCII levels have no map-to-map transitions —
+			// kept as an empty array (not simply absent) so every grid,
+			// hardcoded or database-backed, has the same shape and
+			// default.bx's _checkMapTransition() never has to check whether
+			// the key exists.
+			"pois": []
 		};
 	}
 

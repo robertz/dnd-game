@@ -1,0 +1,352 @@
+class extends="cbwire.models.Component" {
+
+	/**
+	 * Visual map authoring tool: paint a grid of terrain symbols (from
+	 * MapService's TILE_LEGEND), place the player/opponent spawn points,
+	 * then save the result as an adventure module map via
+	 * MapService.saveEditorMap() — the same RLE-chunked storage
+	 * getModuleMap() reads at play time.
+	 *
+	 * This is a dev tool, not player-facing content — no session/character
+	 * guard, reached directly at /mapeditor.
+	 */
+	property name="mapService" inject="MapService";
+
+	// Grids larger than this get slow to paint/render as plain DOM tiles
+	// (no viewport clipping here, unlike the combat grid — the editor needs
+	// to see the whole map at once to paint it). Pan/zoom or a canvas-based
+	// renderer would be the next step if larger maps are needed.
+	MAX_DIMENSION = 60;
+
+	data = {
+		"width": 20,
+		"height": 15,
+		"chunkSize": 32,
+		"moduleSlug": "",
+		"moduleName": "",
+		"moduleDescription": "",
+		"mapSlug": "",
+		"mapName": "",
+		// If true, this map is its module's entry point — the one the
+		// module/map picker (moduleSelect.bx) sends the player straight
+		// into. See MapService.bx's getEntryMapSlug()/saveEditorMap().
+		"isEntryMap": false,
+		"grid": [],
+		"playerSpawn": {},
+		"opponentSpawn": {},
+		// Map-to-map links: {x, y, targetModule, targetMap}. Persisted as
+		// adventure_map_pois rows with poi_type "transition" — see
+		// MapService.bx's saveEditorMap()/loadEditorMap() and default.bx's
+		// _checkMapTransition().
+		"transitions": [],
+		"transitionTargetModule": "",
+		"transitionTargetMap": "",
+		"brush": ".",
+		// "paint" | "player" | "opponent" | "transition" — which thing
+		// clicking a tile does.
+		"placeMode": "paint",
+		"palette": [],
+		// symbol -> CSS class, so the template can class each rendered tile
+		// without needing to call back into MapService per-cell.
+		"tileClasses": {},
+		// {value: "moduleSlug::mapSlug", label} options for the "load an
+		// existing map" dropdown — rebuilt after every save so a newly
+		// created map appears in the list without a page reload.
+		"existingMaps": [],
+		"selectedExisting": "",
+		"saveMessage": "",
+		"saveError": ""
+	}
+
+	function onMount( event, rc, prc, params ) {
+		variables.data.palette = _buildPalette();
+		variables.data.tileClasses = {};
+		for ( var entry in variables.data.palette ) {
+			variables.data.tileClasses[ entry.symbol ] = entry.cssClass;
+		}
+		variables.data.grid = _buildEmptyGrid( variables.data.width, variables.data.height );
+		variables.data.existingMaps = _buildExistingMapOptions();
+	}
+
+	/**
+	 * Rebuilds the grid at the size currently in variables.data.width/height
+	 * (bound live to the size inputs via wire:model), wiping any painted
+	 * tiles and spawn points — simplest correct behavior for v1 rather than
+	 * trying to preserve/resize existing paint.
+	 */
+	function newGrid() {
+		var w = int( val( variables.data.width ) );
+		var h = int( val( variables.data.height ) );
+		if ( w < 1 || h < 1 || w > MAX_DIMENSION || h > MAX_DIMENSION ) {
+			variables.data.saveError = "Width and height must be between 1 and #MAX_DIMENSION#.";
+			return;
+		}
+		variables.data.width = w;
+		variables.data.height = h;
+		variables.data.grid = _buildEmptyGrid( w, h );
+		variables.data.playerSpawn = {};
+		variables.data.opponentSpawn = {};
+		variables.data.transitions = [];
+		variables.data.isEntryMap = false;
+		variables.data.saveError = "";
+		variables.data.saveMessage = "";
+	}
+
+	/**
+	 * Flips whether this map is its module's entry point (see
+	 * saveEditorMap()'s isEntry doc comment) — only takes effect once
+	 * Save Map is clicked.
+	 */
+	function toggleEntryMap() {
+		variables.data.isEntryMap = !variables.data.isEntryMap;
+	}
+
+	/**
+	 * Selects a terrain symbol as the active brush and switches back to
+	 * paint mode (in case a spawn-placement mode was active).
+	 */
+	function selectBrush( symbol ) {
+		variables.data.brush = arguments.symbol;
+		variables.data.placeMode = "paint";
+	}
+
+	/**
+	 * Switches what clicking a tile does: paint the current brush, place
+	 * the player/opponent spawn marker, or place a map-transition link.
+	 */
+	function setPlaceMode( mode ) {
+		if ( listFindNoCase( "paint,player,opponent,transition", arguments.mode ) ) {
+			variables.data.placeMode = arguments.mode;
+		}
+	}
+
+	/**
+	 * Handles a click on tile (x, y): paints the current brush there, sets
+	 * whichever spawn point is being placed, or places/replaces a
+	 * transition link to transitionTargetModule/transitionTargetMap —
+	 * depending on placeMode.
+	 */
+	function paintTile( x, y ) {
+		var px = int( val( arguments.x ) );
+		var py = int( val( arguments.y ) );
+		if ( px < 1 || px > variables.data.width || py < 1 || py > variables.data.height ) {
+			return;
+		}
+		if ( variables.data.placeMode == "player" ) {
+			variables.data.playerSpawn = { "x": px, "y": py };
+		} else if ( variables.data.placeMode == "opponent" ) {
+			variables.data.opponentSpawn = { "x": px, "y": py };
+		} else if ( variables.data.placeMode == "transition" ) {
+			_placeTransition( px, py );
+		} else {
+			variables.data.grid[ py ][ px ] = variables.data.brush;
+		}
+	}
+
+	/**
+	 * Adds (or replaces, if one's already there) a transition link at
+	 * (x, y) pointing at the module/map currently entered in
+	 * transitionTargetModule/transitionTargetMap.
+	 */
+	private function _placeTransition( x, y ) {
+		if ( !len( variables.data.transitionTargetModule ) || !len( variables.data.transitionTargetMap ) ) {
+			variables.data.saveError = "Enter a target module slug and map slug before placing a transition.";
+			return;
+		}
+		var transitions = [];
+		for ( var t in variables.data.transitions ) {
+			if ( t.x != arguments.x || t.y != arguments.y ) {
+				arrayAppend( transitions, t );
+			}
+		}
+		arrayAppend( transitions, {
+			"x": arguments.x, "y": arguments.y,
+			"targetModule": variables.data.transitionTargetModule,
+			"targetMap": variables.data.transitionTargetMap
+		} );
+		variables.data.transitions = transitions;
+		variables.data.saveError = "";
+	}
+
+	/**
+	 * Removes a placed transition by its position in the transitions array.
+	 */
+	function removeTransition( index ) {
+		var i = int( val( arguments.index ) );
+		if ( i >= 1 && i <= variables.data.transitions.len() ) {
+			arrayDeleteAt( variables.data.transitions, i );
+		}
+	}
+
+	/**
+	 * Returns the transition placed at (x, y), or an empty struct if
+	 * none — used by the template to mark transition tiles.
+	 */
+	function transitionAt( x, y ) {
+		for ( var t in variables.data.transitions ) {
+			if ( t.x == arguments.x && t.y == arguments.y ) {
+				return t;
+			}
+		}
+		return {};
+	}
+
+	/**
+	 * Validates the authored map and saves it via
+	 * MapService.saveEditorMap(). Both spawn points must be set and must
+	 * land on a floor tile — an unwalkable spawn point crashes mob
+	 * placement at play time (findOpenTileNear()'s BFS finds nothing to
+	 * scatter around), so this is checked up front instead of discovered
+	 * later in combat.
+	 */
+	function saveMap() {
+		variables.data.saveError = "";
+		variables.data.saveMessage = "";
+
+		if ( !len( variables.data.moduleSlug ) || !len( variables.data.moduleName ) ) {
+			variables.data.saveError = "Module slug and name are required.";
+			return;
+		}
+		if ( !len( variables.data.mapSlug ) || !len( variables.data.mapName ) ) {
+			variables.data.saveError = "Map slug and name are required.";
+			return;
+		}
+		if ( structIsEmpty( variables.data.playerSpawn ) || structIsEmpty( variables.data.opponentSpawn ) ) {
+			variables.data.saveError = "Place both a player spawn and an opponent spawn before saving.";
+			return;
+		}
+
+		var legend = mapService.tileLegend();
+		if ( !_isFloor( legend, variables.data.playerSpawn ) || !_isFloor( legend, variables.data.opponentSpawn ) ) {
+			variables.data.saveError = "Both spawn points must be on a floor tile (not a wall/water/forest/mountain tile).";
+			return;
+		}
+
+		mapService.saveEditorMap(
+			moduleSlug = variables.data.moduleSlug,
+			moduleName = variables.data.moduleName,
+			moduleDescription = variables.data.moduleDescription,
+			mapSlug = variables.data.mapSlug,
+			mapName = variables.data.mapName,
+			width = variables.data.width,
+			height = variables.data.height,
+			chunkSize = variables.data.chunkSize,
+			grid = variables.data.grid,
+			playerSpawn = variables.data.playerSpawn,
+			opponentSpawn = variables.data.opponentSpawn,
+			transitions = variables.data.transitions,
+			isEntry = variables.data.isEntryMap
+		);
+		variables.data.saveMessage = "Saved '#variables.data.mapName#' to module '#variables.data.moduleName#'#( variables.data.isEntryMap ? ' as its entry map' : '' )# (/adventure will list it now).";
+		variables.data.existingMaps = _buildExistingMapOptions();
+	}
+
+	/**
+	 * Loads the map picked in the "load an existing map" dropdown back into
+	 * the editor's raw symbol grid via MapService.loadEditorMap(), so you
+	 * can keep painting where you left off instead of only ever starting
+	 * from a blank grid.
+	 */
+	function loadExisting() {
+		variables.data.saveError = "";
+		variables.data.saveMessage = "";
+		if ( !len( variables.data.selectedExisting ) ) {
+			return;
+		}
+		var parts = listToArray( variables.data.selectedExisting, "::" );
+		if ( parts.len() != 2 ) {
+			return;
+		}
+		var loaded = mapService.loadEditorMap( parts[ 1 ], parts[ 2 ] );
+		variables.data.moduleSlug = loaded.moduleSlug;
+		variables.data.moduleName = loaded.moduleName;
+		variables.data.moduleDescription = loaded.moduleDescription;
+		variables.data.mapSlug = loaded.mapSlug;
+		variables.data.mapName = loaded.mapName;
+		variables.data.width = loaded.width;
+		variables.data.height = loaded.height;
+		variables.data.chunkSize = loaded.chunkSize;
+		variables.data.grid = loaded.grid;
+		variables.data.playerSpawn = loaded.playerSpawn;
+		variables.data.opponentSpawn = loaded.opponentSpawn;
+		variables.data.transitions = loaded.transitions;
+		variables.data.isEntryMap = loaded.isEntry;
+		variables.data.placeMode = "paint";
+		variables.data.saveMessage = "Loaded '#loaded.mapName#' — edit and Save Map to update it.";
+	}
+
+	/**
+	 * True if `point` lands on a floor tile per `legend`.
+	 */
+	private function _isFloor( legend, point ) {
+		var symbol = variables.data.grid[ arguments.point.y ][ arguments.point.x ];
+		return arguments.legend.keyExists( symbol ) && arguments.legend[ symbol ].tile == "floor";
+	}
+
+	/**
+	 * Builds {value: "moduleSlug::mapSlug", label} options for the "load an
+	 * existing map" dropdown, across every installed module/map.
+	 */
+	private function _buildExistingMapOptions() {
+		var options = [];
+		var moduleRows = mapService.listModules();
+		for ( var i = 1; i <= moduleRows.recordCount; i++ ) {
+			var mapRows = mapService.listMapsForModule( moduleRows.slug[ i ] );
+			for ( var j = 1; j <= mapRows.recordCount; j++ ) {
+				arrayAppend( options, {
+					"value": moduleRows.slug[ i ] & "::" & mapRows.slug[ j ],
+					"label": moduleRows.name[ i ] & " / " & mapRows.name[ j ]
+				} );
+			}
+		}
+		return options;
+	}
+
+	/**
+	 * Builds the brush palette from MapService's TILE_LEGEND — the same
+	 * source of truth the ASCII dungeon parser and the saved tile_legend
+	 * column both use — with a fixed display order and human-readable
+	 * labels, and a precomputed CSS class matching default.bxm's tile
+	 * rendering (`tile-<decoration>`, or `tile-wall` for a plain wall).
+	 */
+	private function _buildPalette() {
+		var legend = mapService.tileLegend();
+		var order = [
+			{ "symbol": ".", "label": "Floor" },
+			{ "symbol": "##", "label": "Wall" },
+			{ "symbol": "^", "label": "Torch" },
+			{ "symbol": "O", "label": "Pillar" },
+			{ "symbol": "D", "label": "Door" },
+			{ "symbol": "x", "label": "Spikes" },
+			{ "symbol": "c", "label": "Chest" },
+			{ "symbol": "g", "label": "Grass" },
+			{ "symbol": "r", "label": "Road" },
+			{ "symbol": "t", "label": "Forest" },
+			{ "symbol": "m", "label": "Mountain" },
+			{ "symbol": "w", "label": "Water" }
+		];
+		var palette = [];
+		for ( var entry in order ) {
+			var meaning = legend[ entry.symbol ];
+			var cssClass = len( meaning.decoration ) ? ( "tile-" & meaning.decoration ) : ( meaning.tile == "wall" ? "tile-wall" : "" );
+			arrayAppend( palette, { "symbol": entry.symbol, "label": entry.label, "cssClass": cssClass } );
+		}
+		return palette;
+	}
+
+	/**
+	 * Builds a width x height grid filled with the default floor symbol.
+	 */
+	private function _buildEmptyGrid( width, height ) {
+		var grid = [];
+		for ( var y = 1; y <= arguments.height; y++ ) {
+			var row = [];
+			for ( var x = 1; x <= arguments.width; x++ ) {
+				arrayAppend( row, "." );
+			}
+			arrayAppend( grid, row );
+		}
+		return grid;
+	}
+
+}

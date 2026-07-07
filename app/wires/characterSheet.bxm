@@ -41,6 +41,10 @@
 					<span class="core-stat-label">Proficiency</span>
 					<span class="core-stat-value">+#character.proficiencyBonus#</span>
 				</div>
+				<div class="core-stat-box">
+					<span class="core-stat-label">Gold</span>
+					<span class="core-stat-value">#character.gold#</span>
+				</div>
 			</div>
 
 			<div class="parchment-panel" style="margin-bottom: 1rem;">
@@ -71,6 +75,14 @@
 					class="sheet-tab#( tab == 'weapons' ? ' sheet-tab-active' : '' )#"
 					wire:click="setTab('weapons')"
 				>Weapons</button>
+				<button type="button"
+					class="sheet-tab#( tab == 'armor' ? ' sheet-tab-active' : '' )#"
+					wire:click="setTab('armor')"
+				>Armor</button>
+				<button type="button"
+					class="sheet-tab#( tab == 'items' ? ' sheet-tab-active' : '' )#"
+					wire:click="setTab('items')"
+				>Items</button>
 				<bx:if cantripOptions.len() || spellOptions.len()>
 					<button type="button"
 						class="sheet-tab#( tab == 'spells' ? ' sheet-tab-active' : '' )#"
@@ -141,6 +153,99 @@
 							</select>
 						</label>
 						<button type="button" class="btn btn-attack" wire:click="addWeapon()">Add</button>
+					</div>
+				</div>
+			</bx:if>
+
+			<bx:if tab == 'armor'>
+				<div class="sheet-tab-panel">
+					<bx:if armorInventory.len()>
+						<bx:loop array="#armorInventory#" index="armorItem">
+							<div class="inventory-row">
+								<span class="inventory-name">
+									#armorItem.armorName#
+									<bx:if armorItem.equipped>
+										<span class="feature-chip" style="font-size: 0.7rem; padding: 0.1rem 0.45rem;">equipped</span>
+									</bx:if>
+								</span>
+								<span class="inventory-stat">
+									#uCase( left( armorItem.armorType, 1 ) )##mid( armorItem.armorType, 2, len( armorItem.armorType ) )#
+									<bx:if armorItem.armorType == 'shield'>
+										(+#armorItem.baseAc# AC)
+									<bx:else>
+										(AC #armorItem.baseAc##( isNull( armorItem.maxDexBonus ) ? ' + Dex' : ( armorItem.maxDexBonus == 0 ? '' : ' + Dex (max +' & armorItem.maxDexBonus & ')' ) )#)
+									</bx:if>
+								</span>
+								<bx:if armorItem.stealthDisadvantage>
+									<span class="inventory-stat" style="color: var(--blood);">Stealth Disadvantage</span>
+								</bx:if>
+								<button type="button"
+									class="btn"
+									style="padding: 0.15rem 0.5rem; font-size: 0.75rem;"
+									wire:click="toggleArmorEquip(#armorItem.id#)"
+								>#( armorItem.equipped ? 'Unequip' : 'Equip' )#</button>
+								<button type="button"
+									class="btn"
+									style="padding: 0.15rem 0.5rem; font-size: 0.75rem; border-color: var(--blood); color: var(--blood);"
+									wire:click="removeArmor(#armorItem.id#)"
+								>Remove</button>
+							</div>
+						</bx:loop>
+					<bx:else>
+						<p class="stat-subtitle">No armor in inventory.</p>
+					</bx:if>
+
+					<div class="add-weapon-form">
+						<label class="stat-subtitle">
+							Add armor
+							<select class="creation-input" wire:model="addArmorId" style="margin: 0.3rem 0 0; max-width: 280px;">
+								<bx:loop array="#availableArmors#" index="availableArmor">
+									<option value="#availableArmor.id#" #( addArmorId == availableArmor.id ? 'selected' : '' )#>
+										#availableArmor.name# (AC #availableArmor.baseAc#)
+									</option>
+								</bx:loop>
+							</select>
+						</label>
+						<button type="button" class="btn btn-attack" wire:click="addArmor()">Add</button>
+					</div>
+				</div>
+			</bx:if>
+
+			<bx:if tab == 'items'>
+				<div class="sheet-tab-panel">
+					<bx:if itemInventory.len()>
+						<bx:loop array="#itemInventory#" index="ownedItem">
+							<div class="inventory-row">
+								<span class="inventory-name">#ownedItem.itemName# &times;#ownedItem.quantity#</span>
+								<span class="inventory-stat">#ownedItem.itemType#</span>
+								<span class="inventory-stat">#ownedItem.description#</span>
+								<button type="button"
+									class="btn"
+									style="padding: 0.15rem 0.5rem; font-size: 0.75rem; border-color: var(--blood); color: var(--blood);"
+									wire:click="removeItem(#ownedItem.id#)"
+								>Remove</button>
+							</div>
+						</bx:loop>
+					<bx:else>
+						<p class="stat-subtitle">No items in inventory.</p>
+					</bx:if>
+
+					<div class="add-weapon-form">
+						<label class="stat-subtitle">
+							Add item
+							<select class="creation-input" wire:model="addItemId" style="margin: 0.3rem 0 0; max-width: 280px;">
+								<bx:loop array="#availableItems#" index="availableItem">
+									<option value="#availableItem.id#" #( addItemId == availableItem.id ? 'selected' : '' )#>
+										#availableItem.name# (#availableItem.itemType#)
+									</option>
+								</bx:loop>
+							</select>
+						</label>
+						<label class="stat-subtitle">
+							Qty
+							<input type="number" class="creation-input" wire:model="addItemQuantity" min="1" style="margin: 0.3rem 0 0; max-width: 80px;">
+						</label>
+						<button type="button" class="btn btn-attack" wire:click="addItem()">Add</button>
 					</div>
 				</div>
 			</bx:if>

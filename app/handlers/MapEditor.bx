@@ -1,0 +1,11 @@
+class extends="coldbox.system.EventHandler" {
+
+	/**
+	 * Map authoring tool — a dev tool, not player-facing content, so no
+	 * session/character guard here (unlike Combat.bx/Adventure.bx).
+	 */
+	function index( event, rc, prc ){
+		event.setView( "mapEditor/index" );
+	}
+
+}

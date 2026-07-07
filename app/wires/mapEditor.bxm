@@ -1,0 +1,154 @@
+<bx:output>
+<div class="encounter">
+	<div class="encounter-main">
+		<h1 class="fantasy-heading">Map Editor</h1>
+
+		<div class="parchment-panel editor-panel">
+			<h2 class="fantasy-heading">Load Existing Map</h2>
+			<bx:if existingMaps.len() == 0>
+				<p class="encounter-intro">No saved maps yet — build one below and save it.</p>
+			<bx:else>
+				<div class="creation-scores">
+					<label>Map
+						<select class="creation-input" wire:model="selectedExisting">
+							<option value="">— choose a map —</option>
+							<bx:loop array="#existingMaps#" index="option">
+								<option value="#option.value#">#option.label#</option>
+							</bx:loop>
+						</select>
+					</label>
+				</div>
+				<div class="turn-actions">
+					<button type="button" class="btn" wire:click="loadExisting()">Load</button>
+				</div>
+			</bx:if>
+		</div>
+
+		<div class="parchment-panel editor-panel">
+			<h2 class="fantasy-heading">Module &amp; Map</h2>
+			<div class="creation-scores">
+				<label>Module slug
+					<input type="text" class="creation-input" wire:model="moduleSlug" placeholder="e.g. lost-mines">
+				</label>
+				<label>Module name
+					<input type="text" class="creation-input" wire:model="moduleName" placeholder="e.g. Lost Mines of the Trade Road">
+				</label>
+				<label>Module description
+					<input type="text" class="creation-input" wire:model="moduleDescription">
+				</label>
+			</div>
+			<div class="creation-scores">
+				<label>Map slug
+					<input type="text" class="creation-input" wire:model="mapSlug" placeholder="e.g. trade-road">
+				</label>
+				<label>Map name
+					<input type="text" class="creation-input" wire:model="mapName">
+				</label>
+			</div>
+			<div class="turn-actions">
+				<button type="button" class="btn#( isEntryMap ? ' btn-auto-battle' : '' )#" wire:click="toggleEntryMap()">#( isEntryMap ? '✓ Entry Map for Module' : 'Set as Entry Map' )#</button>
+			</div>
+			<p class="encounter-intro">The module/map picker only ever enters a module's entry map — every other map is reached in-game via a transition.</p>
+		</div>
+
+		<div class="parchment-panel editor-panel">
+			<h2 class="fantasy-heading">Grid Size</h2>
+			<div class="creation-scores">
+				<label>Width
+					<input type="number" class="creation-input" wire:model="width" min="1" max="60">
+				</label>
+				<label>Height
+					<input type="number" class="creation-input" wire:model="height" min="1" max="60">
+				</label>
+				<label>Chunk size
+					<input type="number" class="creation-input" wire:model="chunkSize" min="1" max="60">
+				</label>
+			</div>
+			<div class="turn-actions">
+				<button type="button" class="btn" wire:click="newGrid()">New Grid (clears painting)</button>
+			</div>
+		</div>
+
+		<div class="parchment-panel editor-panel">
+			<h2 class="fantasy-heading">Brush</h2>
+			<div class="palette-row">
+				<bx:loop array="#palette#" index="swatch">
+					<div
+						class="tile palette-swatch#( len( swatch.cssClass ) ? ' ' & swatch.cssClass : '' )##( placeMode == 'paint' && brush == swatch.symbol ? ' palette-swatch-selected' : '' )#"
+						title="#swatch.label#"
+						wire:click="selectBrush('#swatch.symbol#')"
+					></div>
+				</bx:loop>
+			</div>
+			<div class="turn-actions">
+				<button type="button" class="btn#( placeMode == 'player' ? ' btn-auto-battle' : '' )#" wire:click="setPlaceMode('player')">Place Player Spawn</button>
+				<button type="button" class="btn#( placeMode == 'opponent' ? ' btn-auto-battle' : '' )#" wire:click="setPlaceMode('opponent')">Place Opponent Spawn</button>
+			</div>
+			<p class="encounter-intro">
+				Mode: #( placeMode == 'paint' ? 'Painting terrain' : ( placeMode == 'player' ? 'Click a tile to set the player spawn' : ( placeMode == 'opponent' ? 'Click a tile to set the opponent spawn' : 'Click a tile to place a transition' ) ) )#
+				<bx:if !structIsEmpty( playerSpawn )> · Player spawn: (#playerSpawn.x#, #playerSpawn.y#)</bx:if>
+				<bx:if !structIsEmpty( opponentSpawn )> · Opponent spawn: (#opponentSpawn.x#, #opponentSpawn.y#)</bx:if>
+			</p>
+		</div>
+
+		<div class="parchment-panel editor-panel">
+			<h2 class="fantasy-heading">Map Transitions</h2>
+			<p class="encounter-intro">Links a tile on this map to the playerSpawn of another map — the player steps on it while exploring (not mid-combat) and is taken there.</p>
+			<div class="creation-scores">
+				<label>Target module slug
+					<input type="text" class="creation-input" wire:model="transitionTargetModule" placeholder="e.g. lost-mines">
+				</label>
+				<label>Target map slug
+					<input type="text" class="creation-input" wire:model="transitionTargetMap" placeholder="e.g. trade-road">
+				</label>
+			</div>
+			<div class="turn-actions">
+				<button type="button" class="btn#( placeMode == 'transition' ? ' btn-auto-battle' : '' )#" wire:click="setPlaceMode('transition')">Place Transition</button>
+			</div>
+			<bx:if transitions.len() gt 0>
+				<ul class="attack-list">
+					<bx:loop from="1" to="#transitions.len()#" index="transitionIndex">
+						<bx:set transition = transitions[ transitionIndex ]>
+						<li>
+							(#transition.x#, #transition.y#) &rarr; #transition.targetModule# / #transition.targetMap#
+							<button type="button" class="btn btn-end-turn" wire:click="removeTransition(#transitionIndex#)">Remove</button>
+						</li>
+					</bx:loop>
+				</ul>
+			</bx:if>
+		</div>
+
+		<div class="editor-grid-wrap">
+			<div class="battle-grid" style="grid-template-columns: repeat(#width#, 1fr);">
+				<bx:loop from="1" to="#height#" index="row">
+					<bx:loop from="1" to="#width#" index="col">
+						<bx:set symbol = grid[ row ][ col ]>
+						<bx:set isPlayerSpawn = ( !structIsEmpty( playerSpawn ) && playerSpawn.x == col && playerSpawn.y == row )>
+						<bx:set isOpponentSpawn = ( !structIsEmpty( opponentSpawn ) && opponentSpawn.x == col && opponentSpawn.y == row )>
+						<bx:set transitionHere = transitionAt( col, row )>
+						<bx:set isTransition = !structIsEmpty( transitionHere )>
+						<bx:set cellClass = tileClasses.keyExists( symbol ) ? tileClasses[ symbol ] : ''>
+						<div
+							class="tile#( len( cellClass ) ? ' ' & cellClass : '' )##( isPlayerSpawn ? ' tile-player' : ( isOpponentSpawn ? ' tile-opponent' : ( isTransition ? ' tile-transition' : '' ) ) )#"
+							title="#( isTransition ? 'Transition to ' & transitionHere.targetModule & ' / ' & transitionHere.targetMap : 'x' & col & ', y' & row )#"
+							wire:click="paintTile(#col#, #row#)"
+						>#( isPlayerSpawn ? '⚔' : ( isOpponentSpawn ? '☠' : ( isTransition ? '🌀' : '' ) ) )#</div>
+					</bx:loop>
+				</bx:loop>
+			</div>
+		</div>
+
+		<div class="parchment-panel editor-panel">
+			<bx:if len( saveError )>
+				<p class="encounter-banner encounter-banner-defeat">#saveError#</p>
+			</bx:if>
+			<bx:if len( saveMessage )>
+				<p class="encounter-banner encounter-banner-victory">#saveMessage#</p>
+			</bx:if>
+			<div class="turn-actions">
+				<button type="button" class="btn btn-attack" wire:click="saveMap()">Save Map</button>
+			</div>
+		</div>
+	</div>
+</div>
+</bx:output>

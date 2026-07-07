@@ -9,6 +9,7 @@ class extends="cbwire.models.Component" {
 	 */
 	property name="combatService" inject="CombatService";
 	property name="mapService" inject="MapService";
+	property name="characterService" inject="CharacterService";
 
 	// How far (in squares) the visible viewport extends from the player in
 	// each direction — a 15x15 window, regardless of how large the level's
@@ -115,8 +116,23 @@ class extends="cbwire.models.Component" {
 		if ( variables.data.player.hitPoints <= 0 ) {
 			combatService.longRest( variables.data.player );
 		}
-		if ( structKeyExists( rc, "module" ) && structKeyExists( rc, "map" ) ) {
-			variables.data.grid = mapService.getModuleMap( rc.module, rc.map );
+		_enterMap( rc );
+		variables.data.log.prepend( "You enter the dungeon. Move toward the enemies to begin combat." );
+		_updateCombatState();
+	}
+
+	/**
+	 * Loads the current map (see onMount()'s doc comment for the
+	 * rc/session resolution order), places the player at its playerSpawn,
+	 * and spawns a fresh mob roster scattered around its opponentSpawn —
+	 * the part of entering a level shared between the very first mount and
+	 * a mid-play map transition (_checkMapTransition()), which does NOT
+	 * reload the character (HP/inventory/position carry over — only the
+	 * map and its opponents are new).
+	 */
+	private function _enterMap( rc ) {
+		if ( structKeyExists( arguments.rc, "module" ) && structKeyExists( arguments.rc, "map" ) ) {
+			variables.data.grid = mapService.getModuleMap( arguments.rc.module, arguments.rc.map );
 		} else if ( structKeyExists( session, "adventureModule" ) && len( session.adventureModule ) ) {
 			variables.data.grid = mapService.getModuleMap( session.adventureModule, session.adventureMap );
 		} else {
@@ -144,10 +160,91 @@ class extends="cbwire.models.Component" {
 		variables.data.selectedOpponentIndex = 1;
 		variables.data.opponent = opponents[ 1 ];
 
+		variables.data.gameOver = false;
+		variables.data.outcome = "";
+		variables.data.initiativeRolled = false;
+		variables.data.stateSaved = false;
+		variables.data.autoBattling = false;
 		combatService.startNewRound( variables.data );
 		variables.data.player.inCombat = false;
-		variables.data.log.prepend( "You enter the dungeon. Move toward the enemies to begin combat." );
-		_updateCombatState();
+	}
+
+	/**
+	 * If the player's last move landed on a "transition" POI for the
+	 * current map (see MapService.bx's saveEditorMap()/getModuleMap()) and
+	 * they aren't in combat — a mid-fight map switch would strand the
+	 * opponents mid-encounter, so transitions are exploration-only —
+	 * switches session.adventureModule/adventureMap to the linked map and
+	 * re-enters it via _enterMap(), keeping the player's HP/inventory.
+	 */
+	/**
+	 * If the player's last move landed on a "loot" POI (see MapService.bx's
+	 * getModuleMap()/deletePoiAt()) and they aren't in combat, grants its
+	 * gold/items to the character and permanently removes the POI — both
+	 * from this session's in-memory grid.pois (so it can't be collected
+	 * twice in the same visit) and from the DB (so it's gone on a future
+	 * visit too). A loot payload looks like
+	 * `{"gold": 10, "items": [{"name": "Potion of Healing", "quantity": 1}]}`
+	 * — both keys optional.
+	 */
+	private function _checkLoot() {
+		if ( variables.data.gameOver || ( structKeyExists( variables.data.player, "inCombat" ) && variables.data.player.inCombat ) ) {
+			return;
+		}
+		var remaining = [];
+		var collected = false;
+		for ( var poi in variables.data.grid.pois ) {
+			if ( !collected && poi.type == "loot" && poi.x == variables.data.player.position.x && poi.y == variables.data.player.position.y ) {
+				collected = true;
+				_grantLoot( poi.payload );
+				mapService.deletePoiAt( session.adventureModule, session.adventureMap, poi.x, poi.y );
+			} else {
+				arrayAppend( remaining, poi );
+			}
+		}
+		if ( collected ) {
+			variables.data.grid.pois = remaining;
+		}
+	}
+
+	/**
+	 * Awards a loot payload's gold/items to the player and logs what was found.
+	 */
+	private function _grantLoot( payload ) {
+		var player = variables.data.player;
+		var messages = [];
+
+		if ( structKeyExists( arguments.payload, "gold" ) && arguments.payload.gold > 0 ) {
+			characterService.adjustGold( player.characterId, arguments.payload.gold );
+			player.gold = ( structKeyExists( player, "gold" ) ? player.gold : 0 ) + arguments.payload.gold;
+			arrayAppend( messages, "#arguments.payload.gold# gold" );
+		}
+		if ( structKeyExists( arguments.payload, "items" ) ) {
+			for ( var lootItem in arguments.payload.items ) {
+				var quantity = structKeyExists( lootItem, "quantity" ) ? lootItem.quantity : 1;
+				characterService.addItemByName( player.characterId, lootItem.name, quantity );
+				arrayAppend( messages, "#quantity#x #lootItem.name#" );
+			}
+		}
+		if ( messages.len() ) {
+			variables.data.log.prepend( "#player.name# finds: #arrayToList( messages, ", " )#." );
+		}
+	}
+
+	private function _checkMapTransition() {
+		if ( variables.data.gameOver || ( structKeyExists( variables.data.player, "inCombat" ) && variables.data.player.inCombat ) ) {
+			return;
+		}
+		for ( var poi in variables.data.grid.pois ) {
+			if ( poi.type == "transition" && poi.x == variables.data.player.position.x && poi.y == variables.data.player.position.y ) {
+				session.adventureModule = poi.payload.targetModule;
+				session.adventureMap = poi.payload.targetMap;
+				_enterMap( {} );
+				variables.data.log.prepend( "#variables.data.player.name# travels to a new area." );
+				_updateCombatState();
+				return;
+			}
+		}
 	}
 
 	/**
@@ -443,6 +540,8 @@ class extends="cbwire.models.Component" {
 		variables.data.log.prepend( "#player.name# moves to (#arguments.x#, #arguments.y#)." );
 		combatService.checkOpportunityAttacks( variables.data, player, true, startPosition );
 		_updateCombatState();
+		_checkLoot();
+		_checkMapTransition();
 	}
 
 	/**

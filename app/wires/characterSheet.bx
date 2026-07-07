@@ -7,6 +7,13 @@ class extends="cbwire.models.Component" {
 		"character":            {},
 		"inventory":            [],
 		"availableWeapons":     [],
+		"armorInventory":       [],
+		"availableArmors":      [],
+		"addArmorId":           "",
+		"itemInventory":        [],
+		"availableItems":       [],
+		"addItemId":            "",
+		"addItemQuantity":      1,
 		"cantripOptions":       [],
 		"spellOptions":         [],
 		"selectedCantripName":  "",
@@ -30,9 +37,19 @@ class extends="cbwire.models.Component" {
 		variables.data.character        = characterService.getCharacterSheet( charId );
 		variables.data.inventory        = characterService.getInventory( charId );
 		variables.data.availableWeapons = characterService.listWeapons();
+		variables.data.armorInventory   = characterService.getArmorInventory( charId );
+		variables.data.availableArmors  = characterService.listArmors();
+		variables.data.itemInventory    = characterService.getItemInventory( charId );
+		variables.data.availableItems   = characterService.listItems();
 
 		if ( variables.data.availableWeapons.len() ) {
 			variables.data.addWeaponId = variables.data.availableWeapons[ 1 ].id;
+		}
+		if ( variables.data.availableArmors.len() ) {
+			variables.data.addArmorId = variables.data.availableArmors[ 1 ].id;
+		}
+		if ( variables.data.availableItems.len() ) {
+			variables.data.addItemId = variables.data.availableItems[ 1 ].id;
 		}
 
 		var className = variables.data.character.className;
@@ -83,6 +100,50 @@ class extends="cbwire.models.Component" {
 		characterService.removeWeapon( arguments.inventoryId );
 		variables.data.inventory = characterService.getInventory( session.charid );
 		variables.data.message   = "Weapon removed.";
+	}
+
+	function toggleArmorEquip( inventoryId ) {
+		var currentEquipped = false;
+		for ( var armorItem in variables.data.armorInventory ) {
+			if ( armorItem.id == arguments.inventoryId ) {
+				currentEquipped = armorItem.equipped;
+				break;
+			}
+		}
+		characterService.setArmorEquipped( session.charid, arguments.inventoryId, !currentEquipped );
+		variables.data.armorInventory = characterService.getArmorInventory( session.charid );
+		variables.data.character      = characterService.getCharacterSheet( session.charid );
+	}
+
+	function addArmor() {
+		if ( !len( variables.data.addArmorId ) ) {
+			return;
+		}
+		characterService.addArmorToInventory( session.charid, variables.data.addArmorId );
+		variables.data.armorInventory = characterService.getArmorInventory( session.charid );
+		variables.data.message        = "Armor added.";
+	}
+
+	function removeArmor( inventoryId ) {
+		characterService.removeArmor( session.charid, arguments.inventoryId );
+		variables.data.armorInventory = characterService.getArmorInventory( session.charid );
+		variables.data.character      = characterService.getCharacterSheet( session.charid );
+		variables.data.message        = "Armor removed.";
+	}
+
+	function addItem() {
+		if ( !len( variables.data.addItemId ) ) {
+			return;
+		}
+		characterService.addItemToInventory( session.charid, variables.data.addItemId, variables.data.addItemQuantity );
+		variables.data.itemInventory = characterService.getItemInventory( session.charid );
+		variables.data.message      = "Item added.";
+	}
+
+	function removeItem( inventoryId ) {
+		characterService.removeItem( arguments.inventoryId );
+		variables.data.itemInventory = characterService.getItemInventory( session.charid );
+		variables.data.message      = "Item removed.";
 	}
 
 	function selectCantrip( name ) {

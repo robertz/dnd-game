@@ -95,3 +95,9 @@ INSERT INTO adventure_map_chunks (map_id, chunk_x, chunk_y, row_data) VALUES (
 INSERT INTO adventure_map_pois (map_id, x, y, poi_type, payload) VALUES (
     @map_id, 50, 50, 'encounter', '{"encounterId":"bandit_ambush"}'
 );
+
+-- POI: a small cache of loot near the player's spawn — picked up by
+-- default.bx's _checkLoot() when the player walks onto (12, 10).
+INSERT INTO adventure_map_pois (map_id, x, y, poi_type, payload) VALUES (
+    @map_id, 12, 10, 'loot', '{"gold": 15, "items": [{"name": "Potion of Healing", "quantity": 1}]}'
+);

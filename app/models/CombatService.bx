@@ -359,12 +359,12 @@ class singleton {
 		}
 
 		// A once-per-encounter save-based special attack (e.g. a dragon
-		// wyrmling's breath weapon, parsed from a "_[Ability] Saving Throw:_"
-		// stat block entry — see _parseMonsterSpecialAttack()) takes priority
-		// over a mundane weapon attack, same as a real dragon opening with its
-		// breath. Simplified from "Recharge 5-6" to "once per encounter" —
-		// same simplification this app's own Dragonborn Breath Weapon already
-		// uses — rather than tracking a per-turn recharge die.
+		// wyrmling's breath weapon — see _parseStructuredSpecialAttack())
+		// takes priority over a mundane weapon attack, same as a real dragon
+		// opening with its breath. Simplified from "Recharge 5-6" to "once
+		// per encounter" — same simplification this app's own Dragonborn
+		// Breath Weapon already uses — rather than tracking a per-turn
+		// recharge die.
 		if (
 			structKeyExists( arguments.opponent, "specialAttack" ) && !isNull( arguments.opponent.specialAttack ) &&
 			!( structKeyExists( arguments.opponent, "usedSpecialAttack" ) && arguments.opponent.usedSpecialAttack ) &&
@@ -394,10 +394,9 @@ class singleton {
 	}
 
 	/**
-	 * Pack Tactics (parsed as `opponent.hasPackTactics` from a monster's
-	 * traits_text — see _buildMonsterStruct()): Advantage on an attack roll
-	 * against `target` if another living ally is within 5 ft. (1 square) of
-	 * that target.
+	 * Pack Tactics (`opponent.hasPackTactics` — see _buildMonsterStruct()):
+	 * Advantage on an attack roll against `target` if another living ally is
+	 * within 5 ft. (1 square) of that target.
 	 */
 	private function _hasPackTacticsAdvantage( state, opponent, target ) {
 		if ( !structKeyExists( arguments.opponent, "hasPackTactics" ) || !arguments.opponent.hasPackTactics ) {
@@ -416,7 +415,7 @@ class singleton {
 
 	/**
 	 * Fires a monster's parsed save-based special attack (see
-	 * _parseMonsterSpecialAttack()) at the player once per encounter —
+	 * _parseStructuredSpecialAttack()) at the player once per encounter —
 	 * half damage on a success, full on a failure, same shape as the
 	 * player's own (hardcoded) Dragonborn Breath Weapon.
 	 */
@@ -1118,9 +1117,9 @@ class singleton {
 		var inspirationNote = usedInspiration ? " (Heroic Inspiration reroll)" : "";
 		var coverNote = ( arguments.coverBonus > 0 ) ? " (+#arguments.coverBonus# Cover)" : "";
 		// A monster's ranged attack drawn from a Spellcasting/Innate
-		// Spellcasting trait (see _parseMonsterAttacks()) reads as a cast, not
-		// a mundane weapon swing — cosmetic only, the attack roll/damage math
-		// underneath is unchanged.
+		// Spellcasting trait (see _buildMonsterStruct()'s isSpell flagging)
+		// reads as a cast, not a mundane weapon swing — cosmetic only, the
+		// attack roll/damage math underneath is unchanged.
 		var actionPhrase = ( structKeyExists( arguments.weapon, "isSpell" ) && arguments.weapon.isSpell )
 			? "#arguments.attacker.name# casts #arguments.weapon.name# at #arguments.defender.name#"
 			: "#arguments.attacker.name# attacks #arguments.defender.name# with #arguments.weapon.name#";
@@ -2780,58 +2779,6 @@ class singleton {
 		return trim( cleaned );
 	}
 
-	/**
-	 * Parses a monsters.actions_text cell's weapon-style attacks
-	 * ("**_Scimitar._** _Melee Attack Roll:_ +3, reach 5 ft. _Hit:_ 4 (1d6 +
-	 * 1) Slashing damage.") into this app's weapon-shaped inventory items.
-	 * Multiattack summary lines and Spellcasting blocks are handled
-	 * separately (see _parseMultiattackCount() and _hasSpellcastingTrait());
-	 * neither matches this attack-roll shape, so they're naturally skipped
-	 * here. Any secondary "plus X (YdZ) Type damage" clause is also ignored —
-	 * this engine's weapons carry exactly one damage type/dice. A "Melee or
-	 * Ranged" thrown-weapon entry (e.g. Javelin) is treated as melee only,
-	 * and only the first melee / first ranged attack found is kept —
-	 * equippedWeapon() only tracks one weapon per category.
-	 */
-	private function _parseMonsterAttacks( actionsText ) {
-		var attacks = [];
-		if ( isNull( arguments.actionsText ) || !len( arguments.actionsText ) ) {
-			return attacks;
-		}
-		var pattern = "\*\*_([^_]+)_\*\* _(Melee(?: or Ranged)?|Ranged) Attack Roll:_ \+(\d+), (?:reach ([0-9/]+) ft\.(?: or range [0-9/]+ ft\.)?|range ([0-9/]+) ft\.) _Hit:_ \d+ \((\d+)d(\d+)(?: \+ (\d+))?\) (\w+) damage";
-		var text = arguments.actionsText;
-		var startPos = 1;
-
-		while ( true ) {
-			var m = reFind( pattern, text, startPos, true );
-			if ( !structKeyExists( m, "len" ) || m.len.len() < 10 || m.len[ 1 ] == 0 ) {
-				break;
-			}
-			var category = ( left( mid( text, m.pos[ 3 ], m.len[ 3 ] ), 5 ) == "Melee" ) ? "melee" : "ranged";
-			if ( !_hasWeaponCategory( attacks, category ) ) {
-				var item = {
-					"name": reReplace( mid( text, m.pos[ 2 ], m.len[ 2 ] ), "\.$", "" ),
-					"category": category,
-					"damageDice": "#mid( text, m.pos[ 7 ], m.len[ 7 ] )#d#mid( text, m.pos[ 8 ], m.len[ 8 ] )#",
-					"damageType": mid( text, m.pos[ 10 ], m.len[ 10 ] ),
-					"attackBonus": int( mid( text, m.pos[ 4 ], m.len[ 4 ] ) ),
-					"damageBonus": ( m.len[ 9 ] > 0 ) ? int( mid( text, m.pos[ 9 ], m.len[ 9 ] ) ) : 0,
-					"equipped": true
-				};
-				if ( category == "ranged" && m.len[ 6 ] > 0 ) {
-					var rangeParts = listToArray( mid( text, m.pos[ 6 ], m.len[ 6 ] ), "/" );
-					var normalFeet = val( rangeParts[ 1 ] );
-					var longFeet   = ( rangeParts.len() >= 2 ) ? val( rangeParts[ 2 ] ) : normalFeet;
-					item.normalRange = int( normalFeet / 5 );
-					item.longRange   = int( longFeet / 5 );
-				}
-				arrayAppend( attacks, item );
-			}
-			startPos = m.pos[ 1 ] + m.len[ 1 ];
-		}
-		return attacks;
-	}
-
 	private function _hasWeaponCategory( items, category ) {
 		for ( var it in arguments.items ) {
 			if ( it.category == arguments.category ) {
@@ -2842,25 +2789,85 @@ class singleton {
 	}
 
 	/**
-	 * Reads a "**_Multiattack._** The X makes N attacks..." summary line for
-	 * its attack count (one-four; anything higher, or no Multiattack line at
-	 * all, defaults to 1). Converted to this app's existing
-	 * attacksPerTurn()/features-array convention (the same "Extra Attack"/
-	 * "Two Extra Attacks" strings the player's Fighter features use) by
-	 * _multiattackFeatures(), so monster Multiattack rides the exact same
-	 * mechanism rather than a separate one.
+	 * Builds this app's weapon-shaped inventory items from a monster's
+	 * actions_json array (see migration 008_structured_monster_data.sql) —
+	 * every field (category, damageType, range, etc.) is already precomputed
+	 * at import/conversion time (see resources/database/seeds/
+	 * generate_monster_seed.py and convert_legacy_monsters.py), so this is a
+	 * pure struct-shape read, no text parsing. Non-attack entries (category
+	 * "") are naturally skipped, and only the first melee / first ranged
+	 * attack found is kept — equippedWeapon() only tracks one weapon per
+	 * category.
 	 */
-	private function _parseMultiattackCount( actionsText ) {
-		if ( isNull( arguments.actionsText ) || !len( arguments.actionsText ) ) {
-			return 1;
+	private function _parseStructuredActions( actions ) {
+		var attacks = [];
+		for ( var action in arguments.actions ) {
+			if ( !len( action.category ) || _hasWeaponCategory( attacks, action.category ) ) {
+				continue;
+			}
+			var item = {
+				"name": action.name,
+				"category": action.category,
+				"damageDice": action.damageDice,
+				"damageType": action.damageType,
+				"attackBonus": action.attackBonus,
+				"damageBonus": action.damageBonus,
+				"equipped": true
+			};
+			if ( action.category == "ranged" ) {
+				item.normalRange = action.normalRange;
+				item.longRange = action.longRange;
+			}
+			arrayAppend( attacks, item );
 		}
-		var m = reFind( "\*\*_Multiattack\._\*\*[^.]*?\bmakes\s+(one|two|three|four)\b", arguments.actionsText, 1, true );
-		if ( !structKeyExists( m, "len" ) || m.len.len() < 2 || m.len[ 2 ] == 0 ) {
-			return 1;
+		return attacks;
+	}
+
+	/**
+	 * Finds a monster's first damage-dealing save action (saveDC > 0 and a
+	 * precomputed damageDice, but no attackBonus) among its actions_json
+	 * entries — the JSON counterpart to a monster's "**_Acid Breath (Recharge
+	 * 5-6)._**" style special attack. Only ever searches `actions`, not
+	 * `special_abilities` — a monster's special_abilities can include
+	 * damage-dealing traits that aren't something it can proactively use on
+	 * its turn (e.g. a "Death Burst"/"Death Throes" explode-on-death effect),
+	 * which would be wrong to fire as an active attack.
+	 */
+	private function _parseStructuredSpecialAttack( actions ) {
+		for ( var action in arguments.actions ) {
+			if ( len( action.damageDice ) && action.attackBonus == 0 && action.saveDC > 0 ) {
+				var diceParts = listToArray( action.damageDice, "d" );
+				return {
+					"name": action.name,
+					"saveAbility": action.saveAbility,
+					"saveAbilityLabel": action.saveAbilityLabel,
+					"saveDC": action.saveDC,
+					"rangeSquares": action.rangeSquares,
+					"diceCount": int( diceParts[ 1 ] ),
+					"diceSides": int( diceParts[ 2 ] ),
+					"damageBonus": action.damageBonus,
+					"damageType": action.damageType
+				};
+			}
 		}
-		var numbers = { "one": 1, "two": 2, "three": 3, "four": 4 };
-		var word = lCase( mid( arguments.actionsText, m.pos[ 2 ], m.len[ 2 ] ) );
-		return numbers.keyExists( word ) ? numbers[ word ] : 1;
+		return javaCast( "null", 0 );
+	}
+
+	/**
+	 * Converts a monster's precomputed Multiattack entry (multiattackCount,
+	 * see generate_monster_seed.py/convert_legacy_monsters.py) into this
+	 * app's attacksPerTurn()/features-array convention (the same "Extra
+	 * Attack"/"Two Extra Attacks" strings the player's Fighter features
+	 * use), so monster Multiattack rides the exact same mechanism rather
+	 * than a separate one.
+	 */
+	private function _structuredMultiattackCount( actions ) {
+		for ( var action in arguments.actions ) {
+			if ( action.multiattackCount > 0 ) {
+				return action.multiattackCount;
+			}
+		}
+		return 1;
 	}
 
 	private function _multiattackFeatures( count ) {
@@ -2875,85 +2882,33 @@ class singleton {
 	}
 
 	/**
-	 * Parses a monster's first save-based damage action ("**_Acid Breath
-	 * (Recharge 5-6)._** _Dexterity Saving Throw:_ DC 11, each creature in a
-	 * 15-foot-long, 5-foot-wide Line. _Failure:_ 22 (5d8) Acid damage.
-	 * _Success:_ Half damage.") into a struct _useMonsterSpecialAttack() can
-	 * fire at the player — the save-roll counterpart to _parseMonsterAttacks()'s
-	 * attack-roll weapons. Ignores condition-only failures with no damage
-	 * dice (e.g. a Sleep Breath) since there's nothing to deal; returns null
-	 * if the monster has no damage-dealing save action at all. The target
-	 * area's first foot measurement becomes rangeSquares (feet / 5) — a
-	 * reach approximation, not real cone/line-shape modeling, matching this
-	 * app's existing "no AoE shapes" simplification for the player's spells.
+	 * Case-insensitive "does this structured actions/special_abilities array
+	 * have an entry whose name contains X" check — e.g. "Spellcasting" also
+	 * matches "Innate Spellcasting", "Pack Tactics" matches a suffixed
+	 * "Pack Tactics (Recharge 5-6)".
 	 */
-	private function _parseMonsterSpecialAttack( actionsText ) {
-		if ( isNull( arguments.actionsText ) || !len( arguments.actionsText ) ) {
-			return javaCast( "null", 0 );
+	private function _hasStructuredTraitByName( entries, traitName ) {
+		for ( var entry in arguments.entries ) {
+			if ( findNoCase( arguments.traitName, entry.name ) > 0 ) {
+				return true;
+			}
 		}
-		var pattern = "\*\*_([^_]+)_\*\* _(\w+) Saving Throw:_ DC (\d+), ([^.]*)\. _Failure:_ \d+ \((\d+)d(\d+)(?: \+ (\d+))?\) (\w+) damage";
-		var text = arguments.actionsText;
-		var m = reFind( pattern, text, 1, true );
-		if ( !structKeyExists( m, "len" ) || m.len.len() < 9 || m.len[ 1 ] == 0 ) {
-			return javaCast( "null", 0 );
-		}
-
-		var rawName = mid( text, m.pos[ 2 ], m.len[ 2 ] );
-		var name = trim( reReplace( reReplace( rawName, "\s*\(Recharge[^)]*\)", "", "one" ), "\.$", "" ) );
-		var abilityLabel = mid( text, m.pos[ 3 ], m.len[ 3 ] );
-		var targetDesc = mid( text, m.pos[ 5 ], m.len[ 5 ] );
-
-		var feetMatch = reFind( "(\d+)", targetDesc, 1, true );
-		var rangeFeet = ( structKeyExists( feetMatch, "len" ) && feetMatch.len.len() >= 2 && feetMatch.len[ 2 ] > 0 )
-			? val( mid( targetDesc, feetMatch.pos[ 2 ], feetMatch.len[ 2 ] ) )
-			: 30;
-
-		return {
-			"name": name,
-			"saveAbility": lCase( left( abilityLabel, 3 ) ),
-			"saveAbilityLabel": abilityLabel,
-			"saveDC": int( mid( text, m.pos[ 4 ], m.len[ 4 ] ) ),
-			"rangeSquares": max( 1, int( rangeFeet / 5 ) ),
-			"diceCount": int( mid( text, m.pos[ 6 ], m.len[ 6 ] ) ),
-			"diceSides": int( mid( text, m.pos[ 7 ], m.len[ 7 ] ) ),
-			"damageBonus": ( m.len[ 8 ] > 0 ) ? int( mid( text, m.pos[ 8 ], m.len[ 8 ] ) ) : 0,
-			"damageType": mid( text, m.pos[ 9 ], m.len[ 9 ] )
-		};
+		return false;
 	}
 
 	/**
-	 * True if actions_text has a Spellcasting/Innate Spellcasting trait
-	 * block — used only to flavor a monster's already-parsed ranged attack
-	 * as a cast ("X casts Y at Z") rather than a mundane weapon swing (see
-	 * resolveAttack()'s isSpell check), not to model the underlying spell
-	 * list itself (those are almost always non-combat utility spells like
-	 * Light/Thaumaturgy that this engine has no mechanic for anyway).
+	 * A monster's flat per-turn heal (see _runOneOpponentTurn()) — the
+	 * precomputed healAmount field on whichever special_abilities entry is
+	 * named "Regeneration" (see generate_monster_seed.py/
+	 * convert_legacy_monsters.py), 0 if it has none.
 	 */
-	private function _hasSpellcastingTrait( actionsText ) {
-		return !isNull( arguments.actionsText ) && findNoCase( "Spellcasting", arguments.actionsText ) > 0;
-	}
-
-	/**
-	 * traits_text booleans/values this app models mechanically. Pack Tactics
-	 * (Advantage when an ally is adjacent to the target — see
-	 * _hasPackTacticsAdvantage()) and Regeneration (a flat per-turn heal —
-	 * see _runOneOpponentTurn()) are common and simply stated enough to
-	 * parse reliably; everything else in traits_text (Magic Resistance, Keen
-	 * Senses, Amphibious, etc.) isn't modeled.
-	 */
-	private function _hasPackTacticsTrait( traitsText ) {
-		return !isNull( arguments.traitsText ) && findNoCase( "**_Pack Tactics", arguments.traitsText ) > 0;
-	}
-
-	private function _parseRegenerationAmount( traitsText ) {
-		if ( isNull( arguments.traitsText ) || !len( arguments.traitsText ) ) {
-			return 0;
+	private function _structuredRegenerationAmount( specialAbilities ) {
+		for ( var ability in arguments.specialAbilities ) {
+			if ( findNoCase( "Regeneration", ability.name ) > 0 ) {
+				return ability.healAmount;
+			}
 		}
-		var m = reFind( "\*\*_Regeneration\._\*\*[^.]*?regains\s+(\d+)\s+Hit Points", arguments.traitsText, 1, true );
-		if ( !structKeyExists( m, "len" ) || m.len.len() < 2 || m.len[ 2 ] == 0 ) {
-			return 0;
-		}
-		return int( mid( arguments.traitsText, m.pos[ 2 ], m.len[ 2 ] ) );
+		return 0;
 	}
 
 	/**
@@ -2970,14 +2925,20 @@ class singleton {
 
 	private function _buildMonsterStruct( rows, i, inventory ) {
 		var immunities = _parseMonsterImmunities( rows.immunities[ arguments.i ] );
-		var actionsText = rows.actions_text[ arguments.i ];
-		var traitsText = rows.traits_text[ arguments.i ];
+		var actionsJsonText = rows.actions_json[ arguments.i ];
+		var structuredActions = JSONDeserialize( actionsJsonText );
+		var abilitiesJsonText = rows.special_abilities_json[ arguments.i ];
+		var structuredAbilities = ( !isNull( abilitiesJsonText ) && len( abilitiesJsonText ) )
+			? JSONDeserialize( abilitiesJsonText )
+			: [];
 
 		// A monster's ranged attack (if any) reads as a cast rather than a
-		// mundane weapon swing when its stat block has a Spellcasting trait —
-		// see resolveAttack()'s isSpell check and _hasSpellcastingTrait()'s doc
-		// comment for why this is flavor-only, not real spell modeling.
-		if ( _hasSpellcastingTrait( actionsText ) ) {
+		// mundane weapon swing when its stat block has a Spellcasting trait
+		// (see resolveAttack()'s isSpell check) — flavor-only, not real spell
+		// modeling (a monster's spell list is almost always non-combat
+		// utility spells like Light/Thaumaturgy this engine has no mechanic
+		// for anyway).
+		if ( _hasStructuredTraitByName( structuredActions, "Spellcasting" ) ) {
 			for ( var item in arguments.inventory ) {
 				if ( item.category == "ranged" ) {
 					item.isSpell = true;
@@ -3012,21 +2973,21 @@ class singleton {
 			},
 			"inventory": arguments.inventory,
 			// Extra Attack/Two Extra Attacks entries derived from the stat
-			// block's own Multiattack line (see _parseMultiattackCount()) —
-			// read by the existing attacksPerTurn(), same mechanism the
-			// player's Fighter features already use.
-			"features": _multiattackFeatures( _parseMultiattackCount( actionsText ) ),
+			// block's own precomputed Multiattack count — read by the
+			// existing attacksPerTurn(), same mechanism the player's
+			// Fighter features already use.
+			"features": _multiattackFeatures( _structuredMultiattackCount( structuredActions ) ),
 			"vulnerabilities": _parseMonsterDamageList( rows.vulnerabilities[ arguments.i ] ),
 			"resistances": _parseMonsterDamageList( rows.resistances[ arguments.i ] ),
 			"immunities": immunities.damage,
 			"conditionImmunities": immunities.conditions,
-			"hasPackTactics": _hasPackTacticsTrait( traitsText ),
-			"regenerationPerTurn": _parseRegenerationAmount( traitsText ),
+			"hasPackTactics": _hasStructuredTraitByName( structuredAbilities, "Pack Tactics" ),
+			"regenerationPerTurn": _structuredRegenerationAmount( structuredAbilities ),
 			"usedSpecialAttack": false,
 			"encounterIntro": "#rows.name[ arguments.i ]# blocks your path. Roll for initiative!"
 		};
 
-		var special = _parseMonsterSpecialAttack( actionsText );
+		var special = _parseStructuredSpecialAttack( structuredActions );
 		if ( !isNull( special ) ) {
 			monster.specialAttack = special;
 		}
@@ -3035,18 +2996,34 @@ class singleton {
 	}
 
 	/**
+	 * Builds a monster row's weapon-shaped inventory from its structured
+	 * actions_json (see migration 008_structured_monster_data.sql — every
+	 * seeded monster has this populated; see generate_monster_seed.py/
+	 * convert_legacy_monsters.py).
+	 */
+	private function _resolveMonsterInventory( rows, i ) {
+		var actionsJsonText = rows.actions_json[ arguments.i ];
+		if ( isNull( actionsJsonText ) || !len( actionsJsonText ) ) {
+			return [];
+		}
+		return _parseStructuredActions( JSONDeserialize( actionsJsonText ) );
+	}
+
+	/**
 	 * Queries every seeded monster within `level`'s CR band (see
-	 * _levelAppropriateCRRange()) that has at least one parseable weapon
-	 * attack — a small handful of the 235 seeded monsters (spellcasters like
-	 * the Djinni, non-combatants like an Awakened Shrub) have none and are
-	 * skipped, since a mob that can never attack isn't a usable candidate.
+	 * _levelAppropriateCRRange()) that has at least one weapon attack — a
+	 * small handful of the seeded monsters (true non-combatants like an
+	 * Awakened Shrub, or a Frog/Sea Horse with no actions at all) have none
+	 * and are skipped, since a mob that can never attack isn't a usable
+	 * candidate.
 	 */
 	private function _monsterCandidatesForLevel( level ) {
 		var range = _levelAppropriateCRRange( arguments.level );
 		var rows = queryExecute(
 			"SELECT name, creature_type, armor_class, hit_points, speed, str, dex, con, int_score, wis, cha,
 			        str_save, dex_save, con_save, int_save, wis_save, cha_save,
-			        vulnerabilities, resistances, immunities, cr, xp, actions_text, traits_text
+			        vulnerabilities, resistances, immunities, cr, xp,
+			        actions_json, special_abilities_json
 			 FROM monsters WHERE cr IS NOT NULL",
 			{}, { datasource: "gameserver" }
 		);
@@ -3056,7 +3033,7 @@ class singleton {
 			if ( crValue < range.min || crValue > range.max ) {
 				continue;
 			}
-			var inventory = _parseMonsterAttacks( rows.actions_text[ i ] );
+			var inventory = _resolveMonsterInventory( rows, i );
 			if ( inventory.len() == 0 ) {
 				continue;
 			}
@@ -3095,7 +3072,8 @@ class singleton {
 		var rows = queryExecute(
 			"SELECT name, creature_type, armor_class, hit_points, speed, str, dex, con, int_score, wis, cha,
 			        str_save, dex_save, con_save, int_save, wis_save, cha_save,
-			        vulnerabilities, resistances, immunities, xp, actions_text, traits_text
+			        vulnerabilities, resistances, immunities, xp,
+			        actions_json, special_abilities_json
 			 FROM monsters WHERE name = :name",
 			{ "name": arguments.name },
 			{ datasource: "gameserver" }
@@ -3103,7 +3081,7 @@ class singleton {
 		if ( rows.recordCount == 0 ) {
 			throw( type = "MonsterNotFound", message = "No seeded monster named '#arguments.name#'." );
 		}
-		var inventory = _parseMonsterAttacks( rows.actions_text[ 1 ] );
+		var inventory = _resolveMonsterInventory( rows, 1 );
 		if ( inventory.len() == 0 ) {
 			throw( type = "MonsterHasNoAttacks", message = "Monster '#arguments.name#' has no parseable weapon attacks." );
 		}

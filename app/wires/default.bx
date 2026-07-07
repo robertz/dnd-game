@@ -131,14 +131,18 @@ class extends="cbwire.models.Component" {
 
 	/**
 	 * Loads the current map (see onMount()'s doc comment for the
-	 * rc/session resolution order), places the player at its playerSpawn,
-	 * and spawns a fresh mob roster scattered around its opponentSpawn —
-	 * the part of entering a level shared between the very first mount and
-	 * a mid-play map transition (_checkMapTransition()), which does NOT
-	 * reload the character (HP/inventory/position carry over — only the
-	 * map and its opponents are new).
+	 * rc/session resolution order), places the player at its playerSpawn
+	 * (or at `spawnOverride`, if given — see _checkMapTransition()'s doc
+	 * comment), and spawns a fresh mob roster scattered around its
+	 * opponentSpawn — the part of entering a level shared between the very
+	 * first mount and a mid-play map transition (_checkMapTransition()),
+	 * which does NOT reload the character (HP/inventory/position carry
+	 * over — only the map and its opponents are new).
+	 *
+	 * @spawnOverride Optional `{x, y}` to land the player on instead of the
+	 *  target map's authored playerSpawn.
 	 */
-	private function _enterMap( rc ) {
+	private function _enterMap( rc, spawnOverride = {} ) {
 		if ( structKeyExists( arguments.rc, "module" ) && structKeyExists( arguments.rc, "map" ) ) {
 			variables.data.grid = mapService.getModuleMap( arguments.rc.module, arguments.rc.map );
 		} else if ( structKeyExists( session, "adventureModule" ) && len( session.adventureModule ) ) {
@@ -146,7 +150,9 @@ class extends="cbwire.models.Component" {
 		} else {
 			variables.data.grid = mapService.getLevel( "grandDungeon" );
 		}
-		variables.data.player.position = { "x": variables.data.grid.playerSpawn.x, "y": variables.data.grid.playerSpawn.y };
+		variables.data.player.position = ( structKeyExists( arguments.spawnOverride, "x" ) && structKeyExists( arguments.spawnOverride, "y" ) )
+			? { "x": arguments.spawnOverride.x, "y": arguments.spawnOverride.y }
+			: { "x": variables.data.grid.playerSpawn.x, "y": variables.data.grid.playerSpawn.y };
 
 		var opponents = _buildInitialRoster();
 		variables.data.opponents = opponents;
@@ -265,6 +271,13 @@ class extends="cbwire.models.Component" {
 	 * opponents mid-encounter, so transitions are exploration-only —
 	 * switches session.adventureModule/adventureMap to the linked map and
 	 * re-enters it via _enterMap(), keeping the player's HP/inventory.
+	 *
+	 * A transition's payload normally only carries targetModule/targetMap,
+	 * in which case the player lands on the target map's one fixed
+	 * playerSpawn (its authored entrance). An optional targetX/targetY pair
+	 * overrides that — used e.g. by a "travel back down" transition so the
+	 * player returns to the previous level's own exit tile instead of
+	 * walking all the way back from that level's entrance.
 	 */
 	/**
 	 * If the player's last move landed on a "loot" POI (see MapService.bx's
@@ -434,7 +447,10 @@ class extends="cbwire.models.Component" {
 			if ( poi.type == "transition" && poi.x == variables.data.player.position.x && poi.y == variables.data.player.position.y ) {
 				session.adventureModule = poi.payload.targetModule;
 				session.adventureMap = poi.payload.targetMap;
-				_enterMap( {} );
+				var spawnOverride = ( structKeyExists( poi.payload, "targetX" ) && structKeyExists( poi.payload, "targetY" ) )
+					? { "x": poi.payload.targetX, "y": poi.payload.targetY }
+					: {};
+				_enterMap( {}, spawnOverride );
 				variables.data.log.prepend( "#variables.data.player.name# travels to a new area." );
 				_updateCombatState();
 				return;

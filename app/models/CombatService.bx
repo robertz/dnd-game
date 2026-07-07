@@ -2058,6 +2058,7 @@ class singleton {
 		if ( !structKeyExists( arguments.defender, "xpAwarded" ) || !arguments.defender.xpAwarded ) {
 			arguments.defender.xpAwarded = true;
 			awardExperience( arguments.state, arguments.defender.xp );
+			_grantMonsterLoot( arguments.state, arguments.defender );
 		}
 
 		if ( _allOpponentsDefeated( arguments.state ) ) {
@@ -2293,6 +2294,75 @@ class singleton {
 				{ datasource: "gameserver" }
 			);
 		}
+	}
+
+	/**
+	 * Rolls a defeated monster's gold (and a small chance of a Potion of
+	 * Healing) and persists it immediately — same "write straight to the DB
+	 * from here, no CharacterService dependency" approach awardExperience()
+	 * already uses for XP, and the same in-memory `state.player.gold`/
+	 * `state.items` mirroring default.bx's loot-POI grant does, so the
+	 * character sheet/HUD reflect it within this same request without a
+	 * full reload.
+	 *
+	 * Gold scales off the monster's own `xp` (already a CR proxy — see
+	 * _levelAppropriateCRRange()) rather than a separate treasure table per
+	 * monster: roughly xp/10 to xp/3, e.g. 2-8 gold for a Bandit (25 XP) up
+	 * to 45-150 for a CR 2 dragon wyrmling (450 XP).
+	 */
+	private function _grantMonsterLoot( state, defender ) {
+		var player = arguments.state.player;
+		if ( !structKeyExists( player, "characterId" ) ) {
+			return; // no saved character record to credit (e.g. a test double)
+		}
+
+		var gold = randRange( max( 1, int( arguments.defender.xp / 10 ) ), max( 2, int( arguments.defender.xp / 3 ) ) );
+		queryExecute(
+			"UPDATE characters SET gold = gold + :gold WHERE id = :characterId",
+			{ "gold": gold, "characterId": player.characterId },
+			{ datasource: "gameserver" }
+		);
+		player.gold = ( structKeyExists( player, "gold" ) ? player.gold : 0 ) + gold;
+		var messages = [ "#gold# gold" ];
+
+		// 15% chance of a Potion of Healing — the one seeded item with a
+		// coded effect (see consumableEffects()); other seeded items are
+		// flavor/treasure, not worth rolling for here.
+		if ( randRange( 1, 100 ) <= 15 ) {
+			var itemRow = queryExecute(
+				"SELECT id FROM items WHERE name = 'Potion of Healing'",
+				{}, { datasource: "gameserver" }
+			);
+			if ( itemRow.recordCount > 0 ) {
+				queryExecute(
+					"INSERT INTO character_items (character_id, item_id, quantity)
+					 VALUES (:characterId, :itemId, 1)
+					 ON DUPLICATE KEY UPDATE quantity = quantity + 1",
+					{ "characterId": player.characterId, "itemId": itemRow.id[ 1 ] },
+					{ datasource: "gameserver" }
+				);
+				if ( structKeyExists( arguments.state, "items" ) ) {
+					var itemRows = queryExecute(
+						"SELECT ci.id, ci.quantity, i.name AS itemName, i.item_type, i.description
+						 FROM character_items ci JOIN items i ON i.id = ci.item_id
+						 WHERE ci.character_id = :characterId
+						 ORDER BY i.item_type, i.name",
+						{ "characterId": player.characterId }, { datasource: "gameserver" }
+					);
+					var refreshedItems = [];
+					for ( var inventoryRow in itemRows ) {
+						arrayAppend( refreshedItems, {
+							"id": inventoryRow.id, "itemName": inventoryRow.itemName, "itemType": inventoryRow.item_type,
+							"description": inventoryRow.description, "quantity": inventoryRow.quantity
+						} );
+					}
+					arguments.state.items = refreshedItems;
+				}
+				arrayAppend( messages, "a Potion of Healing" );
+			}
+		}
+
+		arguments.state.log.prepend( "#arguments.defender.name# drops #arrayToList( messages, " and " )#." );
 	}
 
 	/**

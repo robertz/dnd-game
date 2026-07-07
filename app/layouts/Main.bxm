@@ -900,7 +900,9 @@
 			border-radius: 20px;
 			padding: 0.2rem 0.65rem;
 			font-size: 0.8rem;
-			color: var(--parchment);
+			/* Sits on the light parchment panel, not a dark card — a light
+			   fill (like this chip's) needs dark ink text, not --parchment. */
+			color: var(--ink);
 			transition: background var(--speed) var(--ease);
 		}
 
@@ -920,7 +922,10 @@
 			font-family: "Cinzel Decorative", serif;
 			font-size: 0.78rem;
 			background: transparent;
-			color: var(--parchment);
+			/* Inactive tabs sit directly on the light parchment panel, not a
+			   dark card like most other --parchment text does — dark ink
+			   keeps them legible instead of light-on-light. */
+			color: var(--ink);
 			border: 1px solid var(--gold);
 			border-bottom: none;
 			border-radius: var(--radius-sm) var(--radius-sm) 0 0;
@@ -930,7 +935,7 @@
 			transition: background var(--speed) var(--ease), color var(--speed) var(--ease);
 		}
 
-		.sheet-tab:hover { background: rgba(185, 146, 47, 0.15); }
+		.sheet-tab:hover { background: rgba(185, 146, 47, 0.25); }
 
 		.sheet-tab-active {
 			background: var(--gold);

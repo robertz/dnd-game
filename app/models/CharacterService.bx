@@ -478,7 +478,10 @@ class singleton {
 	 * shields are independent slots: equipping a new body armor unequips
 	 * any other equipped body armor, and equipping a shield unequips any
 	 * other equipped shield — but a shield and a body armor can both be
-	 * equipped at once. Always recalculates and persists AC afterward.
+	 * equipped at once. Equipping a shield also unequips a Two-Handed melee
+	 * weapon (see _unequipTwoHandedMelee()) — a shield needs a free hand,
+	 * per the "Shields" rule, and a Two-Handed weapon leaves none. Always
+	 * recalculates and persists AC afterward.
 	 */
 	function setArmorEquipped( characterId, inventoryId, equip ) {
 		if ( arguments.equip ) {
@@ -498,6 +501,9 @@ class singleton {
 				{ "characterId": arguments.characterId },
 				{ datasource: "gameserver" }
 			);
+			if ( isShield ) {
+				_unequipTwoHandedMelee( arguments.characterId );
+			}
 		}
 		queryExecute(
 			"UPDATE character_armor SET equipped = :equipped WHERE id = :id",
@@ -505,6 +511,26 @@ class singleton {
 			{ datasource: "gameserver" }
 		);
 		_recalculateArmorClass( arguments.characterId );
+	}
+
+	/**
+	 * Unequips this character's currently equipped melee weapon if it's
+	 * Two-Handed — called when equipping a shield, since a shield needs a
+	 * free hand. The mirror direction (equipping a Two-Handed weapon
+	 * unequips a shield) lives inline in setEquipped(), since that one
+	 * only ever has a single shield row to clear rather than needing this
+	 * same weapon-scanning query.
+	 */
+	private function _unequipTwoHandedMelee( characterId ) {
+		queryExecute(
+			"UPDATE character_inventory ci
+			 INNER JOIN weapons w ON w.id = ci.weapon_id
+			 SET ci.equipped = 0
+			 WHERE ci.character_id = :characterId AND ci.category = 'melee' AND ci.equipped = 1
+			   AND w.properties LIKE '%Two-Handed%'",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
 	}
 
 	/**
@@ -650,9 +676,34 @@ class singleton {
 	}
 
 	/**
-	 * Sets the equipped flag on a character_inventory row.
+	 * Sets the equipped flag on a character_inventory row. Equipping a
+	 * Two-Handed melee weapon also unequips any equipped shield (a shield
+	 * needs a free hand, per the "Shields" rule) — the mirror image of
+	 * setArmorEquipped()'s shield-vs-Two-Handed-weapon check.
 	 */
 	function setEquipped( inventoryId, equip ) {
+		if ( arguments.equip ) {
+			var target = queryExecute(
+				"SELECT ci.character_id, ci.category, w.properties
+				 FROM character_inventory ci JOIN weapons w ON w.id = ci.weapon_id
+				 WHERE ci.id = :id",
+				{ "id": arguments.inventoryId }, { datasource: "gameserver" }
+			);
+			if (
+				target.recordCount > 0 && target.category[ 1 ] == "melee" &&
+				findNoCase( "Two-Handed", target.properties[ 1 ] )
+			) {
+				queryExecute(
+					"UPDATE character_armor ca
+					 INNER JOIN armors a ON a.id = ca.armor_id
+					 SET ca.equipped = 0
+					 WHERE ca.character_id = :characterId AND a.armor_type = 'shield'",
+					{ "characterId": target.character_id[ 1 ] },
+					{ datasource: "gameserver" }
+				);
+				_recalculateArmorClass( target.character_id[ 1 ] );
+			}
+		}
 		queryExecute(
 			"UPDATE character_inventory SET equipped = :equipped WHERE id = :id",
 			{ "id": arguments.inventoryId, "equipped": arguments.equip ? 1 : 0 },

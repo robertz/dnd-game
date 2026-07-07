@@ -207,7 +207,7 @@ CREATE TABLE characters (
     experience_points  INT UNSIGNED NOT NULL DEFAULT 0,
     created_at         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    CONSTRAINT fk_characters_class FOREIGN KEY (class_id) REFERENCES classes (id),
+    CONSTRAINT fk_characters_class FOREIGN KEY (class_id) REFERENCES classes (id) ON DELETE CASCADE,
     CONSTRAINT fk_characters_subclass FOREIGN KEY (subclass_id) REFERENCES subclasses (id) ON DELETE SET NULL,
     INDEX idx_characters_class (class_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

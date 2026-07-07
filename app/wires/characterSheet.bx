@@ -75,7 +75,12 @@ class extends="cbwire.models.Component" {
 			}
 		}
 		characterService.setEquipped( arguments.inventoryId, !currentEquipped );
-		variables.data.inventory = characterService.getInventory( session.charid );
+		variables.data.inventory      = characterService.getInventory( session.charid );
+		// Equipping a Two-Handed weapon may have auto-unequipped a shield
+		// (see CharacterService.setEquipped()) — refresh those too so the
+		// sheet doesn't show a stale equipped shield/AC.
+		variables.data.armorInventory = characterService.getArmorInventory( session.charid );
+		variables.data.character      = characterService.getCharacterSheet( session.charid );
 	}
 
 	function setCategory( inventoryId, category ) {

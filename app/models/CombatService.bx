@@ -263,11 +263,14 @@ class singleton {
 	 * Simple enemy AI for one opponent's turn: closes the distance greedily
 	 * (1 square per step, up to its Speed). If the opponent knows any spells
 	 * (the same knownCantrip/knownLeveledSpell fields loadCharacter() assigns
-	 * the player — nothing grants these to monsters yet except the Priest
-	 * Acolyte, so this is otherwise latent capability), it prefers
-	 * self-healing when bloodied, then a damage spell with a clear line to
-	 * the player, before falling back to melee/ranged weapons; if it still
-	 * can't reach melee this turn, it falls back to a ranged weapon if in range.
+	 * the player — nothing currently grants these to a DB-loaded monster; a
+	 * Spellcasting-trait monster's ranged attack is instead just flavored as
+	 * a "cast" in the log, see resolveAttack()'s isSpell check, so this
+	 * branch is still latent capability for now), it prefers self-healing
+	 * when bloodied, then a damage spell with a clear line to the player,
+	 * before falling back to a special/breath attack or melee/ranged
+	 * weapons; if it still can't reach melee this turn, it falls back to a
+	 * ranged weapon if in range.
 	 *
 	 * Does nothing at all — no movement, no attack — until the opponent has
 	 * actually perceived the player (a clear line of sight to them, via
@@ -793,9 +796,11 @@ class singleton {
 	 * (or a small data struct, e.g. `{"source": "..."}` for Frightened),
 	 * created lazily so nothing needs it initialized up front. Only these
 	 * four conditions have mechanical effects wired up elsewhere in this file
-	 * (resolveAttack, rollSavingThrow, moveToward); others can be tracked here
-	 * too but won't do anything yet — same "latent capability" pattern this
-	 * file already uses for monster spellcasting.
+	 * (resolveAttack, rollSavingThrow, moveToward); others can still be
+	 * tracked here, and addCondition() below honors a combatant's
+	 * conditionImmunities for any condition name (not just these four) even
+	 * though most have no other mechanical effect yet — same "latent
+	 * capability" pattern this file already uses for monster spellcasting.
 	 */
 	function hasCondition( combatant, name ) {
 		return structKeyExists( arguments.combatant, "conditions" ) && structKeyExists( arguments.combatant.conditions, arguments.name );
@@ -2567,8 +2572,7 @@ class singleton {
 	 * at or above it, and the top of the band matters more than the bottom
 	 * (a CR right at the target, times up to 3 of them, is already a hard
 	 * fight solo). Capped at level/4 (so a level 1-4 character never faces
-	 * anything above CR 1/4-ish, matching this app's original hand-picked
-	 * Skeleton/Priest Acolyte), down to a quarter of that for variety.
+	 * anything above CR 1/4-ish), down to a quarter of that for variety.
 	 */
 	private function _levelAppropriateCRRange( level ) {
 		var target = max( 0.125, arguments.level / 4 );
@@ -2653,14 +2657,14 @@ class singleton {
 	 * Parses a monsters.actions_text cell's weapon-style attacks
 	 * ("**_Scimitar._** _Melee Attack Roll:_ +3, reach 5 ft. _Hit:_ 4 (1d6 +
 	 * 1) Slashing damage.") into this app's weapon-shaped inventory items.
-	 * Ignores Multiattack summary lines and Spellcasting blocks (neither
-	 * matches this shape) and any secondary "plus X (YdZ) Type damage"
-	 * clause — this engine's weapons carry exactly one damage type/dice,
-	 * the same simplification already used for the hand-authored Priest
-	 * Acolyte's Mace. A "Melee or Ranged" thrown-weapon entry (e.g. Javelin)
-	 * is treated as melee only, and only the first melee / first ranged
-	 * attack found is kept — equippedWeapon() only tracks one weapon per
-	 * category, same limitation the old hardcoded templates had.
+	 * Multiattack summary lines and Spellcasting blocks are handled
+	 * separately (see _parseMultiattackCount() and _hasSpellcastingTrait());
+	 * neither matches this attack-roll shape, so they're naturally skipped
+	 * here. Any secondary "plus X (YdZ) Type damage" clause is also ignored —
+	 * this engine's weapons carry exactly one damage type/dice. A "Melee or
+	 * Ranged" thrown-weapon entry (e.g. Javelin) is treated as melee only,
+	 * and only the first melee / first ranged attack found is kept —
+	 * equippedWeapon() only tracks one weapon per category.
 	 */
 	private function _parseMonsterAttacks( actionsText ) {
 		var attacks = [];
@@ -2937,9 +2941,8 @@ class singleton {
 	/**
 	 * Picks `count` level-appropriate monsters from the seeded SRD `monsters`
 	 * table at random (independently per slot, so duplicates like two
-	 * Skeletons are normal) — replaces this app's previous hand-authored
-	 * Skeleton/Priest Acolyte-only pool. Returns fewer than `count` mobs only
-	 * if the CR band happens to have zero candidates.
+	 * Skeletons are normal). Returns fewer than `count` mobs only if the CR
+	 * band happens to have zero candidates.
 	 */
 	function randomMonstersForLevel( level, count ) {
 		var candidates = _monsterCandidatesForLevel( arguments.level );

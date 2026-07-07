@@ -475,6 +475,11 @@ class extends="cbwire.models.Component" {
 	 * True if (x, y) is a floor tile the player could path to and stand on
 	 * this turn — used by the template to highlight reachable tiles, since
 	 * walls make raw Chebyshev distance an unreliable proxy for reachability.
+	 * The template calls this once per visible tile (~225 for a full 15x15
+	 * viewport), so the actual pathfinding is delegated to _reachableSet(),
+	 * which runs a single bounded BFS and caches it for the rest of this
+	 * request — this used to run a fresh BFS (combatService.pathDistance())
+	 * per tile, 225 full graph searches on every render.
 	 */
 	function tileReachable( x, y ) {
 		if (
@@ -490,8 +495,23 @@ class extends="cbwire.models.Component" {
 		if ( !isNull( _opponentAt( arguments.x, arguments.y ) ) ) {
 			return false;
 		}
-		var distance = combatService.pathDistance( variables.data.grid, player.position, { "x": arguments.x, "y": arguments.y } );
-		return distance > 0 && distance <= variables.data.movementRemaining;
+		return _reachableSet().keyExists( arguments.x & "," & arguments.y );
+	}
+
+	/**
+	 * Lazily computes (once per request, via a plain instance variable
+	 * rather than variables.data — this is a derived cache, not state that
+	 * belongs in the serialized wire snapshot) every tile within the
+	 * player's remaining movement, as a "x,y" -> distance struct. See
+	 * tileReachable()'s doc comment for why this exists.
+	 */
+	private function _reachableSet() {
+		if ( !structKeyExists( variables, "_reachableSetCache" ) ) {
+			variables._reachableSetCache = combatService.reachableSquares(
+				variables.data.grid, variables.data.player.position, variables.data.movementRemaining
+			);
+		}
+		return variables._reachableSetCache;
 	}
 
 	/**

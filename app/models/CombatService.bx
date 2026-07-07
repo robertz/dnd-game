@@ -627,6 +627,55 @@ class singleton {
 	}
 
 	/**
+	 * Every walkable tile within `maxDistance` squares of `start` (8-directional,
+	 * wall-avoiding — same movement rule pathDistance()/_bfs() use), as a
+	 * `"x,y" -> distance` struct. Unlike pathDistance() (one BFS per
+	 * destination, run once per candidate tile), this is one bounded BFS that
+	 * answers "is any of these tiles reachable" for the whole grid at once —
+	 * built for default.bx's tileReachable(), which used to call
+	 * pathDistance() fresh for every one of a viewport's ~225 tiles on every
+	 * render. Bounded by maxDistance (a movement budget, usually single
+	 * digits) rather than exploring the whole connected component the way a
+	 * single-goal BFS does when the goal is unreachable or far away.
+	 *
+	 * @grid A level grid (`{width, height, tiles}`, from MapService).
+	 * @start `{x, y}` — origin square (distance 0; not included in the result).
+	 * @maxDistance Movement budget in squares; tiles beyond it aren't explored.
+	 */
+	function reachableSquares( grid, start, maxDistance ) {
+		var distances = {};
+		var queue = [ { "x": arguments.start.x, "y": arguments.start.y, "dist": 0 } ];
+		var queueHead = 1;
+
+		while ( queueHead <= queue.len() ) {
+			var current = queue[ queueHead ];
+			queueHead += 1;
+			if ( current.dist >= arguments.maxDistance ) {
+				continue;
+			}
+			for ( var dx = -1; dx <= 1; dx++ ) {
+				for ( var dy = -1; dy <= 1; dy++ ) {
+					if ( dx == 0 && dy == 0 ) {
+						continue;
+					}
+					var nx = current.x + dx;
+					var ny = current.y + dy;
+					if ( !isWalkable( arguments.grid, nx, ny ) ) {
+						continue;
+					}
+					var key = nx & "," & ny;
+					if ( distances.keyExists( key ) ) {
+						continue;
+					}
+					distances[ key ] = current.dist + 1;
+					arrayAppend( queue, { "x": nx, "y": ny, "dist": current.dist + 1 } );
+				}
+			}
+		}
+		return distances;
+	}
+
+	/**
 	 * Finds the closest walkable tile to `origin` that isn't itself in
 	 * `excludePositions` — used to place a second, third, etc. mob near the
 	 * level's one designed opponent spawn point without stacking them on the

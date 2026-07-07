@@ -24,6 +24,12 @@ box server start
 
 The app will be available at the URL CommandBox prints (see `server.json`). Copy `.env.example` to `.env` and adjust `DB_*` values if your MySQL server needs different credentials — it defaults to `root` with no password against `127.0.0.1:3306`.
 
+## Screenshots
+
+| Character Select | Character Sheet | Map Editor |
+| --- | --- | --- |
+| ![Character select](docs/screenshots/character-select.png) | ![Character sheet](docs/screenshots/character-sheet.png) | ![Map editor](docs/screenshots/map-editor.png) |
+
 ## Architecture
 
 This is a ColdBox HMVC app; see [CLAUDE.md](CLAUDE.md) for a deeper architectural rundown (including a section on BoxLang/ColdBox/CBWIRE metadata quirks worth knowing about before you go spelunking in `lib/`). The short version:

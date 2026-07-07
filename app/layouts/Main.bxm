@@ -972,6 +972,10 @@
 			flex: 1;
 			min-width: 130px;
 			font-weight: bold;
+			/* .sheet-tab-panel (this row's container) is a dark card, unlike
+			   most --ink text's usual light parchment backdrop — light text
+			   keeps it legible instead of dark-on-dark. */
+			color: var(--parchment);
 		}
 
 		.inventory-stat {

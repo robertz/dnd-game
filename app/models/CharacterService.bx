@@ -621,6 +621,24 @@ class singleton {
 	}
 
 	/**
+	 * Consumes one unit of an item stack (e.g. drinking a potion), deleting
+	 * the row entirely once its quantity reaches 0 rather than leaving a
+	 * zero-quantity row behind.
+	 */
+	function useOneItem( inventoryId ) {
+		queryExecute(
+			"UPDATE character_items SET quantity = quantity - 1 WHERE id = :id AND quantity > 0",
+			{ "id": arguments.inventoryId },
+			{ datasource: "gameserver" }
+		);
+		queryExecute(
+			"DELETE FROM character_items WHERE id = :id AND quantity <= 0",
+			{ "id": arguments.inventoryId },
+			{ datasource: "gameserver" }
+		);
+	}
+
+	/**
 	 * Adjusts a character's gold by `delta` (negative to spend), floored at 0.
 	 */
 	function adjustGold( characterId, delta ) {

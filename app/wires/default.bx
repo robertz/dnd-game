@@ -43,6 +43,11 @@ class extends="cbwire.models.Component" {
 			"height": 20
 		},
 		"player": {},
+		// The player's consumable/misc item inventory (see CharacterService's
+		// getItemInventory()) — loaded in onMount() and refreshed whenever it
+		// changes (looting, using an item), separately from player.inventory
+		// (weapons only, loaded by CombatService.loadCharacter()).
+		"items": [],
 		// The full mob roster for this encounter. Each mob carries its own
 		// stable "mobIndex" (its 1-based position in this array, assigned at
 		// spawn time). "opponent" is a convenience alias for whichever mob is
@@ -110,6 +115,7 @@ class extends="cbwire.models.Component" {
 	 */
 	function onMount( event, rc, prc, params ) {
 		variables.data.player = combatService.loadCharacter( session.charid );
+		variables.data.items = characterService.getItemInventory( session.charid );
 		if ( structKeyExists( rc, "rest" ) ) {
 			combatService.longRest( variables.data.player );
 		}
@@ -225,6 +231,7 @@ class extends="cbwire.models.Component" {
 				characterService.addItemByName( player.characterId, lootItem.name, quantity );
 				arrayAppend( messages, "#quantity#x #lootItem.name#" );
 			}
+			variables.data.items = characterService.getItemInventory( player.characterId );
 		}
 		if ( messages.len() ) {
 			variables.data.log.prepend( "#player.name# finds: #arrayToList( messages, ", " )#." );
@@ -778,6 +785,56 @@ class extends="cbwire.models.Component" {
 		combatService.useBreathWeapon( variables.data );
 		_saveSelectedOpponentIndex();
 		if ( !variables.data.gameOver ) {
+			combatService.endPlayerTurn( variables.data );
+		}
+		_maybeSaveProgress();
+	}
+
+	/**
+	 * True if `itemName` has a coded effect (see CombatService.
+	 * consumableEffects()) — default.bxm uses this to only offer a "Use"
+	 * button for items that actually do something (Potion of Healing) and
+	 * not inert consumables like Rations.
+	 */
+	function itemIsUsable( itemName ) {
+		return combatService.consumableEffects().keyExists( arguments.itemName );
+	}
+
+	/**
+	 * Consumes one unit of an item from variables.data.items (e.g. drinking a
+	 * Potion of Healing) — usable both mid-combat (as the player's action,
+	 * same action-economy slot as Attack/Grapple/Shove) and freely while
+	 * exploring, unlike those other actions which require initiative to have
+	 * been rolled. A no-op if the item isn't in stock, or isn't a recognized
+	 * consumable (see CombatService.consumableEffects()) — Rations/Torch/Rope
+	 * have no coded effect, so they're never actually debited here.
+	 */
+	function useItem( inventoryId ) {
+		if ( variables.data.gameOver || variables.data.autoBattling || variables.data.player.hitPoints <= 0 ) {
+			return;
+		}
+		if ( variables.data.initiativeRolled && ( variables.data.currentTurn != "player" || variables.data.actionUsed ) ) {
+			return;
+		}
+		var index = -1;
+		for ( var i = 1; i <= variables.data.items.len(); i++ ) {
+			if ( variables.data.items[ i ].id == arguments.inventoryId ) {
+				index = i;
+				break;
+			}
+		}
+		if ( index == -1 || variables.data.items[ index ].quantity <= 0 ) {
+			return;
+		}
+
+		if ( !combatService.useConsumableItem( variables.data, variables.data.items[ index ].itemName ) ) {
+			return;
+		}
+		characterService.useOneItem( arguments.inventoryId );
+		variables.data.items = characterService.getItemInventory( variables.data.player.characterId );
+
+		if ( variables.data.initiativeRolled ) {
+			variables.data.actionUsed = true;
 			combatService.endPlayerTurn( variables.data );
 		}
 		_maybeSaveProgress();

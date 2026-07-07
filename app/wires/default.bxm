@@ -189,6 +189,23 @@
 						</bx:loop>
 					</ul>
 				</bx:if>
+				<bx:if items.len() gt 0>
+					<ul class="attack-list">
+						<bx:loop array="#items#" index="invItem">
+							<li>
+								#invItem.itemName# <span class="attack-stat">x#invItem.quantity#</span>
+								<bx:if itemIsUsable( invItem.itemName )>
+									<button
+										type="button"
+										class="btn btn-attack"
+										wire:click="useItem(#invItem.id#)"
+										#( gameOver || autoBattling || player.hitPoints <= 0 || ( initiativeRolled && ( currentTurn != "player" || actionUsed ) ) ? "disabled" : "" )#
+									>Use</button>
+								</bx:if>
+							</li>
+						</bx:loop>
+					</ul>
+				</bx:if>
 				<bx:if structKeyExists( player, "isSpellcaster" ) && player.isSpellcaster && structCount( player.spellSlots ) gt 0>
 					<p class="stat-note"><strong>Slots</strong> <bx:loop collection="#player.spellSlots#" item="spellLevel">L#spellLevel#:#player.spellSlots[ spellLevel ]# </bx:loop></p>
 				</bx:if>

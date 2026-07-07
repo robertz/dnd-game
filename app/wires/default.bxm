@@ -101,11 +101,20 @@
 						<bx:set chebyshev = max( abs( col - player.position.x ), abs( row - player.position.y ) )>
 						<bx:set isReachable = ( !isWall && tileReachable( col, row ) )>
 						<bx:set isAttackable = ( !gameOver && !autoBattling && currentTurn == "player" && isOpponentTile && !actionUsed && chebyshev <= 1 )>
+						<!--- Loot/transition markers only — an "encounter" POI stays
+						      invisible so a scripted ambush can still surprise the
+						      player (see default.bx's _checkEncounter() doc comment). --->
+						<bx:set tilePoiType = "">
+						<bx:loop array="#grid.pois#" index="poiAtTile">
+							<bx:if poiAtTile.x == col && poiAtTile.y == row && listFindNoCase( "loot,transition", poiAtTile.type )>
+								<bx:set tilePoiType = poiAtTile.type>
+							</bx:if>
+						</bx:loop>
 						<div
-							class="tile#baseTileClass##( isPlayerTile ? ' tile-player' : ( isOpponentTile ? ' tile-opponent' : '' ) )##( isTargetedTile ? ' tile-targeted' : '' )##( isReachable ? ' tile-reachable' : '' )##( isAttackable ? ' tile-attackable' : '' )#"
-							title="#( isPlayerTile ? player.name : ( isOpponentTile ? tileOpponent.name : ( len( decoration ) ? decoration : ( isWall ? 'Wall' : 'x' & col & ', y' & row ) ) ) )#"
+							class="tile#baseTileClass##( isPlayerTile ? ' tile-player' : ( isOpponentTile ? ' tile-opponent' : ( tilePoiType == "loot" ? ' tile-loot' : ( tilePoiType == "transition" ? ' tile-transition' : '' ) ) ) )##( isTargetedTile ? ' tile-targeted' : '' )##( isReachable ? ' tile-reachable' : '' )##( isAttackable ? ' tile-attackable' : '' )#"
+							title="#( isPlayerTile ? player.name : ( isOpponentTile ? tileOpponent.name : ( tilePoiType == "loot" ? "Treasure" : ( tilePoiType == "transition" ? "A path onward" : ( len( decoration ) ? decoration : ( isWall ? 'Wall' : 'x' & col & ', y' & row ) ) ) ) ) )#"
 							wire:click="tileClick(#col#, #row#)"
-						>#( isPlayerTile ? '⚔' : ( isOpponentTile ? '☠' : '' ) )#</div>
+						>#( isPlayerTile ? '⚔' : ( isOpponentTile ? '☠' : ( tilePoiType == "loot" ? '💰' : ( tilePoiType == "transition" ? '🌀' : '' ) ) ) )#</div>
 					</bx:loop>
 				</bx:loop>
 			</div>

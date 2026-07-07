@@ -22,8 +22,18 @@
 			--parchment-dark: ##d8c79f;
 			--ink: ##2b1d0e;
 			--gold: ##b9922f;
+			--gold-bright: ##e0b84f;
 			--blood: ##6e1414;
+			--blood-bright: ##a52424;
 			--night: ##14100c;
+			--emerald: ##3a6b3a;
+			--violet: ##50287d;
+
+			--radius-sm: 4px;
+			--radius-md: 6px;
+			--radius-lg: 10px;
+			--ease: cubic-bezier(0.2, 0.7, 0.3, 1);
+			--speed: 0.2s;
 		}
 
 		html, body {
@@ -48,11 +58,50 @@
 			box-sizing: inherit;
 		}
 
+		::selection {
+			background: var(--gold);
+			color: var(--night);
+		}
+
+		/* Themed scrollbars (WebKit/Blink) so panel-internal scroll areas
+		   (log-list, encounter-sidebar) don't show a jarring default bar
+		   against the parchment/ink theme. */
+		.encounter-sidebar::-webkit-scrollbar,
+		.log-list::-webkit-scrollbar,
+		.editor-grid-wrap::-webkit-scrollbar {
+			width: 10px;
+			height: 10px;
+		}
+		.encounter-sidebar::-webkit-scrollbar-track,
+		.log-list::-webkit-scrollbar-track,
+		.editor-grid-wrap::-webkit-scrollbar-track {
+			background: rgba(0, 0, 0, 0.15);
+			border-radius: 10px;
+		}
+		.encounter-sidebar::-webkit-scrollbar-thumb,
+		.log-list::-webkit-scrollbar-thumb,
+		.editor-grid-wrap::-webkit-scrollbar-thumb {
+			background: var(--gold);
+			border-radius: 10px;
+			border: 2px solid transparent;
+			background-clip: padding-box;
+		}
+
 		h1, h2, h3, .fantasy-heading {
 			font-family: "Cinzel Decorative", serif;
 			color: var(--gold);
 			text-shadow: 0 0 8px rgba(185, 146, 47, 0.5);
 			letter-spacing: 0.03em;
+		}
+
+		a {
+			color: inherit;
+		}
+
+		:focus-visible {
+			outline: 2px solid var(--gold-bright);
+			outline-offset: 2px;
+			border-radius: 2px;
 		}
 
 		main.scroll {
@@ -61,6 +110,14 @@
 			margin: 0 auto;
 			flex: 1;
 			display: flex;
+		}
+
+		.container {
+			width: 100%;
+		}
+
+		.mb-5 {
+			margin-bottom: clamp(2rem, 4vw, 3rem);
 		}
 
 		.site-header {
@@ -74,6 +131,20 @@
 			gap: 0.75rem;
 			padding-bottom: 0.75rem;
 			border-bottom: 2px solid var(--gold);
+			position: relative;
+		}
+
+		/* A soft glow beneath the gold rule, echoing torchlight along the
+		   bottom of the header rather than a flat line. */
+		.site-header::after {
+			content: "";
+			position: absolute;
+			left: 0;
+			right: 0;
+			bottom: -2px;
+			height: 10px;
+			background: radial-gradient( ellipse at center, rgba(185, 146, 47, 0.35), transparent 75% );
+			pointer-events: none;
 		}
 
 		.site-title {
@@ -94,28 +165,35 @@
 			color: var(--parchment);
 			background: var(--night);
 			border: 1px solid var(--gold);
-			border-radius: 4px;
+			border-radius: var(--radius-sm);
 			padding: 0.4rem 0.9rem;
-			transition: background 0.15s ease, color 0.15s ease;
+			transition: background var(--speed) var(--ease), color var(--speed) var(--ease),
+				box-shadow var(--speed) var(--ease), transform var(--speed) var(--ease);
+			display: inline-block;
 		}
 
 		.site-nav a:hover {
 			background: var(--gold);
 			color: var(--night);
+			box-shadow: 0 0 10px 1px rgba(185, 146, 47, 0.55);
+			transform: translateY(-1px);
 		}
 
 		.site-nav a.site-nav-active {
 			background: var(--gold);
 			color: var(--night);
+			box-shadow: 0 0 10px 1px rgba(185, 146, 47, 0.4);
 		}
 
 		.parchment-panel {
 			background:
 				radial-gradient( ellipse at top left, rgba(255,255,255,0.15), transparent 60% ),
+				radial-gradient( circle at 20% 30%, rgba(110, 20, 20, 0.05), transparent 40% ),
+				radial-gradient( circle at 80% 75%, rgba(110, 20, 20, 0.05), transparent 45% ),
 				linear-gradient( var(--parchment), var(--parchment-dark) );
 			color: var(--ink);
 			border: 2px solid var(--gold);
-			border-radius: 6px;
+			border-radius: var(--radius-md);
 			box-shadow:
 				0 0 0 6px var(--night),
 				0 0 0 8px var(--gold),
@@ -123,6 +201,12 @@
 			padding: clamp(1.25rem, 2.5vw, 2.5rem);
 			position: relative;
 			width: 100%;
+			animation: panel-in 0.4s var(--ease);
+		}
+
+		@keyframes panel-in {
+			from { opacity: 0; transform: translateY(6px); }
+			to { opacity: 1; transform: translateY(0); }
 		}
 
 		.parchment-panel::before {
@@ -164,6 +248,11 @@
 			margin-top: -0.5rem;
 		}
 
+		.asi-panel,
+		.rest-panel {
+			animation: panel-in 0.3s var(--ease);
+		}
+
 		.battle-grid-wrap {
 			display: flex;
 			justify-content: center;
@@ -193,6 +282,12 @@
 			width: 34px;
 			cursor: pointer;
 			border: 2px solid transparent;
+			border-radius: 3px;
+			transition: transform var(--speed) var(--ease), border-color var(--speed) var(--ease);
+		}
+
+		.palette-swatch:hover {
+			transform: translateY(-2px);
 		}
 
 		.palette-swatch-selected {
@@ -205,7 +300,8 @@
 			gap: 2px;
 			background-color: rgb(14, 11, 7);
 			border: 3px solid var(--gold);
-			box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.8);
+			border-radius: 3px;
+			box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.8), 0 8px 24px rgba(0, 0, 0, 0.5);
 			max-width: 100%;
 		}
 
@@ -222,6 +318,37 @@
 			font-size: clamp(10px, 2vw, 18px);
 			cursor: pointer;
 			position: relative;
+			transition: filter var(--speed) var(--ease);
+		}
+
+		.tile:hover {
+			filter: brightness(1.25);
+		}
+
+		.tile-wall:hover, .tile-torch:hover, .tile-pillar:hover, .tile-water:hover,
+		.tile-forest:hover, .tile-mountain:hover {
+			filter: none;
+		}
+
+		/* Loot POIs get their own glowing marker tile, same convention as
+		   tile-transition below (the map editor already uses tile-transition
+		   for the same purpose) — so they're visible on the map before the
+		   player walks onto them. Encounter POIs deliberately stay unmarked
+		   (see default.bx's _checkEncounter() doc comment) so an ambush
+		   actually surprises the player. */
+		.tile-loot {
+			background-image: radial-gradient( circle, rgba(185, 146, 47, 0.65), rgba(80, 60, 20, 0.65) );
+			box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.6);
+			animation: poi-glow 1.8s ease-in-out infinite;
+		}
+
+		.tile-transition {
+			animation: poi-glow 1.8s ease-in-out infinite;
+		}
+
+		@keyframes poi-glow {
+			0%, 100% { filter: brightness(1); }
+			50% { filter: brightness(1.35); }
 		}
 
 		.tile-wall {
@@ -368,9 +495,9 @@
 			background: rgba(20, 16, 12, 0.9);
 			color: var(--parchment);
 			border: 1px solid var(--gold);
-			border-radius: 4px;
+			border-radius: var(--radius-sm);
 			padding: 0.65rem 0.9rem;
-			transition: opacity 0.3s ease, filter 0.3s ease, box-shadow 0.2s ease;
+			transition: opacity 0.3s ease, filter 0.3s ease, box-shadow var(--speed) var(--ease), transform var(--speed) var(--ease);
 		}
 
 		.stat-card-down {
@@ -382,27 +509,35 @@
 			cursor: pointer;
 		}
 
+		.stat-card-opponent:hover {
+			box-shadow: 0 0 8px 1px rgba(110, 20, 20, 0.5);
+			transform: translateY(-1px);
+		}
+
 		.stat-card-targeted {
 			box-shadow: 0 0 0 2px var(--gold), 0 0 10px 1px var(--gold);
 		}
 
 		.hp-bar {
-			height: 8px;
+			height: 9px;
 			background: rgba(0, 0, 0, 0.5);
 			border: 1px solid var(--gold);
 			border-radius: 3px;
 			overflow: hidden;
 			margin-bottom: 0.75rem;
+			position: relative;
 		}
 
 		.hp-bar-fill {
 			height: 100%;
-			background: ##3a6b3a;
-			transition: width 0.3s ease;
+			background: linear-gradient( ##4a8a4a, var(--emerald) );
+			box-shadow: 0 0 6px rgba(58, 107, 58, 0.6);
+			transition: width 0.4s var(--ease), background 0.4s var(--ease);
 		}
 
 		.hp-bar-fill-bloodied {
-			background: ##b9922f;
+			background: linear-gradient( var(--gold-bright), var(--gold) );
+			box-shadow: 0 0 6px rgba(185, 146, 47, 0.6);
 		}
 
 		.stat-card .fantasy-heading {
@@ -478,37 +613,83 @@
 
 		.btn {
 			font-family: "Cinzel Decorative", serif;
+			font-size: 0.85rem;
 			background: var(--night);
 			color: var(--gold);
 			border: 1px solid var(--gold);
-			border-radius: 4px;
+			border-radius: var(--radius-sm);
 			padding: 0.5rem 1.25rem;
 			cursor: pointer;
+			transition: background var(--speed) var(--ease), color var(--speed) var(--ease),
+				box-shadow var(--speed) var(--ease), transform var(--speed) var(--ease);
 		}
 
 		.btn:hover {
 			background: var(--gold);
 			color: var(--night);
+			box-shadow: 0 0 10px 1px rgba(185, 146, 47, 0.5);
+			transform: translateY(-1px);
+		}
+
+		.btn:active {
+			transform: translateY(0);
+			box-shadow: none;
+		}
+
+		.btn:disabled {
+			opacity: 0.4;
+			cursor: not-allowed;
+			transform: none;
+			box-shadow: none;
+			filter: grayscale(0.4);
+		}
+
+		.btn:disabled:hover {
+			background: var(--night);
+			color: var(--gold);
 		}
 
 		.btn-attack {
 			border-color: var(--blood);
-			color: var(--blood);
+			color: var(--blood-bright);
 		}
 
 		.btn-attack:hover {
 			background: var(--blood);
 			color: var(--parchment);
+			box-shadow: 0 0 10px 1px rgba(110, 20, 20, 0.6);
+		}
+
+		.btn-attack:disabled:hover {
+			background: var(--night);
+			color: var(--blood-bright);
 		}
 
 		.btn-auto-battle {
-			border-color: ##3a6b3a;
-			color: ##3a6b3a;
+			border-color: var(--emerald);
+			color: ##4a8a4a;
 		}
 
 		.btn-auto-battle:hover {
-			background: ##3a6b3a;
+			background: var(--emerald);
 			color: var(--parchment);
+			box-shadow: 0 0 10px 1px rgba(58, 107, 58, 0.6);
+		}
+
+		.btn-auto-battle:disabled:hover {
+			background: var(--night);
+			color: ##4a8a4a;
+		}
+
+		.btn-end-turn {
+			border-color: var(--parchment-dark);
+			color: var(--parchment-dark);
+		}
+
+		.btn-end-turn:hover {
+			background: var(--parchment-dark);
+			color: var(--night);
+			box-shadow: 0 0 10px 1px rgba(216, 199, 159, 0.4);
 		}
 
 		.auto-battle-indicator {
@@ -526,9 +707,10 @@
 		.combat-log {
 			background: rgba(20, 16, 12, 0.9);
 			border: 1px solid var(--gold);
-			border-radius: 4px;
+			border-radius: var(--radius-sm);
 			padding: 0.75rem 1.25rem;
 			margin-top: 1rem;
+			box-shadow: inset 0 0 16px rgba(0, 0, 0, 0.4);
 		}
 
 		.combat-log .fantasy-heading {
@@ -549,7 +731,13 @@
 
 		.log-list li {
 			border-bottom: 1px dotted rgba(185, 146, 47, 0.3);
-			padding: 0.15rem 0;
+			padding: 0.2rem 0;
+			animation: log-in 0.25s var(--ease);
+		}
+
+		@keyframes log-in {
+			from { opacity: 0; transform: translateX(-4px); }
+			to { opacity: 1; transform: translateX(0); }
 		}
 
 		.creation-grid {
@@ -563,14 +751,17 @@
 			background: rgba(20, 16, 12, 0.9);
 			color: var(--parchment);
 			border: 1px solid var(--gold);
-			border-radius: 4px;
+			border-radius: var(--radius-sm);
 			padding: 0.75rem 1rem;
 			cursor: pointer;
-			transition: border-color 0.15s ease, background 0.15s ease;
+			transition: border-color var(--speed) var(--ease), background var(--speed) var(--ease),
+				box-shadow var(--speed) var(--ease), transform var(--speed) var(--ease);
 		}
 
 		.creation-card:hover {
 			border-color: var(--parchment);
+			box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+			transform: translateY(-2px);
 		}
 
 		.creation-card-compact {
@@ -582,7 +773,7 @@
 		}
 
 		.creation-card-selected {
-			border-color: ##3a6b3a;
+			border-color: var(--emerald);
 			background: rgba(58, 107, 58, 0.35);
 		}
 
@@ -602,9 +793,16 @@
 			background: rgba(20, 16, 12, 0.9);
 			color: var(--parchment);
 			border: 1px solid var(--gold);
-			border-radius: 4px;
+			border-radius: var(--radius-sm);
 			padding: 0.5rem 0.75rem;
 			margin: 0.5rem 0 1.5rem;
+			transition: border-color var(--speed) var(--ease), box-shadow var(--speed) var(--ease);
+		}
+
+		.creation-input:focus {
+			outline: none;
+			border-color: var(--gold-bright);
+			box-shadow: 0 0 8px 1px rgba(185, 146, 47, 0.4);
 		}
 
 		/* Character sheet */
@@ -619,13 +817,19 @@
 		.ability-box {
 			background: rgba(20, 16, 12, 0.9);
 			border: 1px solid var(--gold);
-			border-radius: 4px;
+			border-radius: var(--radius-sm);
 			padding: 0.5rem 0.25rem;
 			text-align: center;
 			display: flex;
 			flex-direction: column;
 			align-items: center;
 			gap: 0.2rem;
+			transition: box-shadow var(--speed) var(--ease), transform var(--speed) var(--ease);
+		}
+
+		.ability-box:hover {
+			box-shadow: 0 0 8px 1px rgba(185, 146, 47, 0.35);
+			transform: translateY(-1px);
 		}
 
 		.ability-label {
@@ -661,9 +865,14 @@
 			min-width: 70px;
 			background: rgba(20, 16, 12, 0.9);
 			border: 1px solid var(--gold);
-			border-radius: 4px;
+			border-radius: var(--radius-sm);
 			padding: 0.4rem 0.5rem;
 			text-align: center;
+			transition: box-shadow var(--speed) var(--ease);
+		}
+
+		.core-stat-box:hover {
+			box-shadow: 0 0 8px 1px rgba(185, 146, 47, 0.35);
 		}
 
 		.core-stat-label {
@@ -692,6 +901,11 @@
 			padding: 0.2rem 0.65rem;
 			font-size: 0.8rem;
 			color: var(--parchment);
+			transition: background var(--speed) var(--ease);
+		}
+
+		.feature-chip:hover {
+			background: rgba(185, 146, 47, 0.25);
 		}
 
 		.sheet-tabs {
@@ -699,6 +913,7 @@
 			gap: 0.4rem;
 			margin: 1.25rem 0 0;
 			border-bottom: 2px solid var(--gold);
+			flex-wrap: wrap;
 		}
 
 		.sheet-tab {
@@ -708,11 +923,11 @@
 			color: var(--parchment);
 			border: 1px solid var(--gold);
 			border-bottom: none;
-			border-radius: 4px 4px 0 0;
+			border-radius: var(--radius-sm) var(--radius-sm) 0 0;
 			padding: 0.4rem 1rem;
 			cursor: pointer;
 			margin-bottom: -2px;
-			transition: background 0.15s ease;
+			transition: background var(--speed) var(--ease), color var(--speed) var(--ease);
 		}
 
 		.sheet-tab:hover { background: rgba(185, 146, 47, 0.15); }
@@ -725,10 +940,11 @@
 		.sheet-tab-panel {
 			border: 1px solid var(--gold);
 			border-top: none;
-			border-radius: 0 4px 4px 4px;
+			border-radius: 0 var(--radius-sm) var(--radius-sm) var(--radius-sm);
 			padding: 1rem 1.25rem;
 			background: rgba(20, 16, 12, 0.7);
 			margin-bottom: 1rem;
+			animation: panel-in 0.25s var(--ease);
 		}
 
 		.inventory-row {
@@ -738,6 +954,11 @@
 			padding: 0.55rem 0;
 			border-bottom: 1px solid rgba(185, 146, 47, 0.18);
 			flex-wrap: wrap;
+			transition: background var(--speed) var(--ease);
+		}
+
+		.inventory-row:hover {
+			background: rgba(185, 146, 47, 0.06);
 		}
 
 		.inventory-row:last-of-type { border-bottom: none; }
@@ -769,6 +990,52 @@
 			font-style: italic;
 			margin: 0.75rem 0 0;
 			font-size: 0.9rem;
+		}
+
+		/* Responsive: below ~900px the encounter sidebar drops under the
+		   main battle column instead of squeezing into a narrow rail, and
+		   the site nav centers under the title. */
+		@media (max-width: 900px) {
+			.encounter-sidebar {
+				flex: 1 1 100%;
+				width: 100%;
+				max-height: none;
+			}
+
+			.site-header {
+				justify-content: center;
+				text-align: center;
+			}
+
+			.ability-grid {
+				grid-template-columns: repeat(3, 1fr);
+			}
+		}
+
+		@media (max-width: 520px) {
+			.ability-grid {
+				grid-template-columns: repeat(2, 1fr);
+			}
+
+			.turn-actions {
+				flex-wrap: wrap;
+			}
+
+			.btn {
+				padding: 0.5rem 0.9rem;
+			}
+		}
+
+		/* Respect a user's reduced-motion preference — every animation added
+		   above (panel fade-ins, pulsing attack/POI glows, log entries
+		   sliding in) is purely decorative, so it's safe to flatten to the
+		   end state instantly. */
+		@media (prefers-reduced-motion: reduce) {
+			*, *::before, *::after {
+				animation-duration: 0.001ms !important;
+				animation-iteration-count: 1 !important;
+				transition-duration: 0.001ms !important;
+			}
 		}
 	</style>
 

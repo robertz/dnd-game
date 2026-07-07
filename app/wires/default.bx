@@ -231,6 +231,154 @@ class extends="cbwire.models.Component" {
 		}
 	}
 
+	/**
+	 * If the player's last move landed on an "encounter" POI (see
+	 * MapService.bx's getModuleMap() and the seeded `bandit_ambush` payload
+	 * in adventure_seed.sql) and they aren't already in combat, spawns that
+	 * encounter's mob roster around the player and permanently removes the
+	 * POI (both in-memory and in the DB, via mapService.deletePoiAt()) so
+	 * it can't ambush the player twice on the same map. An encounter payload
+	 * looks like `{"encounterId": "bandit_ambush"}` — an unrecognized or
+	 * missing encounterId falls back to the same random mob pool used when
+	 * first entering a map (_monsterTemplates()).
+	 *
+	 * Unlike loot/transition POIs, an encounter POI is often authored on an
+	 * unwalkable tile (an ambush lurking in forest/rubble the player can't
+	 * step onto — see the "bandit ambush" seed at a forest tile), so this
+	 * triggers on Chebyshev-adjacency (within 1 square) rather than requiring
+	 * the player to land exactly on it.
+	 */
+	private function _checkEncounter() {
+		if ( variables.data.gameOver || ( structKeyExists( variables.data.player, "inCombat" ) && variables.data.player.inCombat ) ) {
+			return;
+		}
+		var remaining = [];
+		var triggered = false;
+		for ( var poi in variables.data.grid.pois ) {
+			if (
+				!triggered && poi.type == "encounter" &&
+				max( abs( poi.x - variables.data.player.position.x ), abs( poi.y - variables.data.player.position.y ) ) <= 1
+			) {
+				triggered = true;
+				_spawnAmbush( poi.payload );
+				mapService.deletePoiAt( session.adventureModule, session.adventureMap, poi.x, poi.y );
+			} else {
+				arrayAppend( remaining, poi );
+			}
+		}
+		if ( triggered ) {
+			variables.data.grid.pois = remaining;
+		}
+	}
+
+	/**
+	 * Spawns a fresh mob roster scattered around the player's current
+	 * position (rather than a level's fixed opponentSpawn, since an ambush
+	 * can trigger anywhere on the map) and lets _updateCombatState() roll
+	 * initiative once line of sight is established — the same mechanism
+	 * that starts combat with a map's initial roster.
+	 */
+	private function _spawnAmbush( payload ) {
+		var player = variables.data.player;
+		var definitions = _encounterDefinitions();
+		var encounterId = structKeyExists( arguments.payload, "encounterId" ) ? arguments.payload.encounterId : "";
+		var definition = definitions.keyExists( encounterId ) ? definitions[ encounterId ] : {};
+
+		var mobs = [];
+		if ( definition.keyExists( "mobs" ) ) {
+			for ( var template in definition.mobs ) {
+				arrayAppend( mobs, duplicate( template ) );
+			}
+		} else {
+			var templates = _monsterTemplates();
+			var mobCount = randRange( MIN_MOB_COUNT, MAX_MOB_COUNT );
+			for ( var i = 1; i <= mobCount; i++ ) {
+				arrayAppend( mobs, duplicate( templates[ randRange( 1, templates.len() ) ] ) );
+			}
+		}
+
+		var takenPositions = [ player.position ];
+		var mobPositions = combatService.randomOpenTilesNear( variables.data.grid, player.position, MOB_SCATTER_RADIUS, mobs.len(), takenPositions );
+
+		var names = [];
+		for ( var i = 1; i <= mobs.len(); i++ ) {
+			mobs[ i ].position = ( i <= mobPositions.len() ) ? mobPositions[ i ] : player.position;
+			mobs[ i ].mobIndex = i;
+			arrayAppend( takenPositions, mobs[ i ].position );
+			arrayAppend( names, mobs[ i ].name );
+		}
+
+		variables.data.opponents = mobs;
+		variables.data.selectedOpponentIndex = 1;
+		variables.data.opponent = mobs[ 1 ];
+		variables.data.initiativeRolled = false;
+
+		variables.data.log.prepend(
+			definition.keyExists( "intro" ) && len( definition.intro )
+				? definition.intro
+				: "Ambush! #arrayToList( names, ", " )# attack#( mobs.len() == 1 ? "s" : "" )#!"
+		);
+
+		_updateCombatState();
+	}
+
+	/**
+	 * Named encounter rosters an "encounter" POI's payload can reference by
+	 * encounterId — separate from _monsterTemplates()'s random pool so a
+	 * level author can script a specific ambush (e.g. the seeded Trade Road
+	 * `bandit_ambush`) instead of getting a random draw.
+	 */
+	private function _encounterDefinitions() {
+		return {
+			"bandit_ambush": {
+				"intro": "Bandits leap from the treeline, blades drawn!",
+				"mobs": [ _banditTemplate(), _banditTemplate() ]
+			}
+		};
+	}
+
+	/**
+	 * SRD "Bandit" stat block (CR 1/8, XP 25): a Scimitar melee attack and a
+	 * Light Crossbow ranged attack (range 80/320 ft. -> 16/64 squares).
+	 */
+	private function _banditTemplate() {
+		return {
+			"name": "Bandit",
+			"creatureType": "Humanoid",
+			"xp": 25,
+			"armorClass": 12,
+			"hitPoints": 11,
+			"maxHitPoints": 11,
+			"speed": 30,
+			"abilityScores": { "str": 11, "dex": 12, "con": 12, "int": 10, "wis": 10, "cha": 10 },
+			"inventory": [
+				{
+					"name": "Scimitar",
+					"category": "melee",
+					"damageDice": "1d6",
+					"damageType": "Slashing",
+					"attackBonus": 3,
+					"damageBonus": 1,
+					"equipped": true
+				},
+				{
+					"name": "Light Crossbow",
+					"category": "ranged",
+					"damageDice": "1d8",
+					"damageType": "Piercing",
+					"attackBonus": 3,
+					"damageBonus": 1,
+					"normalRange": 16,
+					"longRange": 64,
+					"equipped": true
+				}
+			],
+			"vulnerabilities": [],
+			"immunities": [],
+			"encounterIntro": "A bandit snarls and draws a scimitar!"
+		};
+	}
+
 	private function _checkMapTransition() {
 		if ( variables.data.gameOver || ( structKeyExists( variables.data.player, "inCombat" ) && variables.data.player.inCombat ) ) {
 			return;
@@ -541,6 +689,7 @@ class extends="cbwire.models.Component" {
 		combatService.checkOpportunityAttacks( variables.data, player, true, startPosition );
 		_updateCombatState();
 		_checkLoot();
+		_checkEncounter();
 		_checkMapTransition();
 	}
 

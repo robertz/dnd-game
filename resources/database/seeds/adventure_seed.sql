@@ -91,9 +91,13 @@ INSERT INTO adventure_map_chunks (map_id, chunk_x, chunk_y, row_data) VALUES (
     )
 );
 
--- POI: bandit ambush encounter waiting in the forest.
+-- POI: bandit ambush encounter waiting in the forest. Placed just outside the
+-- treeline (39, 59) rather than deep inside it (50, 50) — the forest itself
+-- is unwalkable ("t" -> wall per TILE_LEGEND), and default.bx's
+-- _checkEncounter() triggers on adjacency to the POI, not landing exactly on
+-- it, but the player still has to be able to reach a tile next to it.
 INSERT INTO adventure_map_pois (map_id, x, y, poi_type, payload) VALUES (
-    @map_id, 50, 50, 'encounter', '{"encounterId":"bandit_ambush"}'
+    @map_id, 39, 59, 'encounter', '{"encounterId":"bandit_ambush"}'
 );
 
 -- POI: a small cache of loot near the player's spawn — picked up by

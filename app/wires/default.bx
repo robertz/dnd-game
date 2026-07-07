@@ -32,7 +32,9 @@ class extends="cbwire.models.Component" {
 	 * The player character is loaded from the gameserver `characters` schema
 	 * (see onMount()) rather than hardcoded here — this is just a placeholder
 	 * so "player"/"opponent"/"opponents" exist as data properties before the
-	 * component mounts. The actual roster is built from _monsterTemplates() in onMount().
+	 * component mounts. The actual roster is built in onMount() from
+	 * combatService.randomMonstersForLevel(), which draws from the seeded
+	 * SRD `monsters` table.
 	 */
 	data = {
 		// Placeholder — replaced with a real level (tiles, spawn points) from
@@ -98,9 +100,9 @@ class extends="cbwire.models.Component" {
 	 * (session.charid — the Combat handler guarantees it's set before this
 	 * view ever renders) from the gameserver schema, loads the level's grid
 	 * (tiles + spawn points) from MapService, places the player at their
-	 * designed spawn, and spawns 2-3 mobs (from _monsterTemplates(), each an
-	 * independent copy) scattered across open tiles around the level's one
-	 * designed opponentSpawn.
+	 * designed spawn, and spawns 2-3 mobs (level-appropriate random draws
+	 * from combatService.randomMonstersForLevel()) scattered across open
+	 * tiles around the level's one designed opponentSpawn.
 	 *
 	 * The grid defaults to the hand-authored "grandDungeon" level. A
 	 * `?module=<slug>&map=<slug>` query pair overrides that directly, but
@@ -146,16 +148,16 @@ class extends="cbwire.models.Component" {
 		}
 		variables.data.player.position = { "x": variables.data.grid.playerSpawn.x, "y": variables.data.grid.playerSpawn.y };
 
-		var templates = _monsterTemplates();
 		var mobCount = randRange( MIN_MOB_COUNT, MAX_MOB_COUNT );
+		var mobs = combatService.randomMonstersForLevel( variables.data.player.level, mobCount );
 		var opponents = [];
 		var takenPositions = [ variables.data.player.position ];
 
 		var spawnPoint = variables.data.grid.opponentSpawn;
-		var mobPositions = combatService.randomOpenTilesNear( variables.data.grid, spawnPoint, MOB_SCATTER_RADIUS, mobCount, takenPositions );
+		var mobPositions = combatService.randomOpenTilesNear( variables.data.grid, spawnPoint, MOB_SCATTER_RADIUS, mobs.len(), takenPositions );
 
-		for ( var i = 1; i <= mobCount; i++ ) {
-			var mob = duplicate( templates[ randRange( 1, templates.len() ) ] );
+		for ( var i = 1; i <= mobs.len(); i++ ) {
+			var mob = mobs[ i ];
 			mob.position = ( i <= mobPositions.len() ) ? mobPositions[ i ] : { "x": spawnPoint.x, "y": spawnPoint.y };
 			mob.mobIndex = i;
 			arrayAppend( takenPositions, mob.position );
@@ -246,8 +248,8 @@ class extends="cbwire.models.Component" {
 	 * POI (both in-memory and in the DB, via mapService.deletePoiAt()) so
 	 * it can't ambush the player twice on the same map. An encounter payload
 	 * looks like `{"encounterId": "bandit_ambush"}` — an unrecognized or
-	 * missing encounterId falls back to the same random mob pool used when
-	 * first entering a map (_monsterTemplates()).
+	 * missing encounterId falls back to the same level-appropriate random
+	 * draw used when first entering a map (combatService.randomMonstersForLevel()).
 	 *
 	 * Unlike loot/transition POIs, an encounter POI is often authored on an
 	 * unwalkable tile (an ambush lurking in forest/rubble the player can't
@@ -292,16 +294,14 @@ class extends="cbwire.models.Component" {
 		var definition = definitions.keyExists( encounterId ) ? definitions[ encounterId ] : {};
 
 		var mobs = [];
-		if ( definition.keyExists( "mobs" ) ) {
-			for ( var template in definition.mobs ) {
+		if ( definition.keyExists( "monsterName" ) ) {
+			var mobCount = structKeyExists( definition, "count" ) ? definition.count : 1;
+			var template = combatService.monsterByName( definition.monsterName );
+			for ( var i = 1; i <= mobCount; i++ ) {
 				arrayAppend( mobs, duplicate( template ) );
 			}
 		} else {
-			var templates = _monsterTemplates();
-			var mobCount = randRange( MIN_MOB_COUNT, MAX_MOB_COUNT );
-			for ( var i = 1; i <= mobCount; i++ ) {
-				arrayAppend( mobs, duplicate( templates[ randRange( 1, templates.len() ) ] ) );
-			}
+			mobs = combatService.randomMonstersForLevel( player.level, randRange( MIN_MOB_COUNT, MAX_MOB_COUNT ) );
 		}
 
 		var takenPositions = [ player.position ];
@@ -331,58 +331,17 @@ class extends="cbwire.models.Component" {
 
 	/**
 	 * Named encounter rosters an "encounter" POI's payload can reference by
-	 * encounterId — separate from _monsterTemplates()'s random pool so a
-	 * level author can script a specific ambush (e.g. the seeded Trade Road
-	 * `bandit_ambush`) instead of getting a random draw.
+	 * encounterId — separate from combatService.randomMonstersForLevel()'s
+	 * random draw so a level author can script a specific ambush (e.g. the
+	 * seeded Trade Road `bandit_ambush`) by seeded monster name instead.
 	 */
 	private function _encounterDefinitions() {
 		return {
 			"bandit_ambush": {
 				"intro": "Bandits leap from the treeline, blades drawn!",
-				"mobs": [ _banditTemplate(), _banditTemplate() ]
+				"monsterName": "Bandit",
+				"count": 2
 			}
-		};
-	}
-
-	/**
-	 * SRD "Bandit" stat block (CR 1/8, XP 25): a Scimitar melee attack and a
-	 * Light Crossbow ranged attack (range 80/320 ft. -> 16/64 squares).
-	 */
-	private function _banditTemplate() {
-		return {
-			"name": "Bandit",
-			"creatureType": "Humanoid",
-			"xp": 25,
-			"armorClass": 12,
-			"hitPoints": 11,
-			"maxHitPoints": 11,
-			"speed": 30,
-			"abilityScores": { "str": 11, "dex": 12, "con": 12, "int": 10, "wis": 10, "cha": 10 },
-			"inventory": [
-				{
-					"name": "Scimitar",
-					"category": "melee",
-					"damageDice": "1d6",
-					"damageType": "Slashing",
-					"attackBonus": 3,
-					"damageBonus": 1,
-					"equipped": true
-				},
-				{
-					"name": "Light Crossbow",
-					"category": "ranged",
-					"damageDice": "1d8",
-					"damageType": "Piercing",
-					"attackBonus": 3,
-					"damageBonus": 1,
-					"normalRange": 16,
-					"longRange": 64,
-					"equipped": true
-				}
-			],
-			"vulnerabilities": [],
-			"immunities": [],
-			"encounterIntro": "A bandit snarls and draws a scimitar!"
 		};
 	}
 
@@ -446,92 +405,6 @@ class extends="cbwire.models.Component" {
 				combatService.startNewRound( variables.data );
 			}
 		}
-	}
-
-	/**
-	 * The pool of opponents an encounter can spawn, all CR 1/4 (XP 50) — a
-	 * level-appropriate match for this app's level 1-4 characters. Picked at
-	 * random in onMount() so a spellcasting monster (the Priest Acolyte)
-	 * actually shows up in real play sometimes, not just in tests.
-	 */
-	private function _monsterTemplates() {
-		return [
-			{
-				"name": "Skeleton",
-				"creatureType": "Undead",
-				// CR 1/4 (XP 50), per its SRD stat block.
-				"xp": 50,
-				"armorClass": 14,
-				"hitPoints": 13,
-				"maxHitPoints": 13,
-				"speed": 30,
-				"abilityScores": { "str": 10, "dex": 16, "con": 15, "int": 6, "wis": 8, "cha": 5 },
-				// Per its SRD stat block: Gear is Shortbow, Shortsword, and it has
-				// both a Shortsword and a Shortbow action (range 80/320 ft -> 16/64 squares).
-				"inventory": [
-					{
-						"name": "Shortsword",
-						"category": "melee",
-						"damageDice": "1d6",
-						"damageType": "Piercing",
-						"attackBonus": 5,
-						"damageBonus": 3,
-						"equipped": true
-					},
-					{
-						"name": "Shortbow",
-						"category": "ranged",
-						"damageDice": "1d6",
-						"damageType": "Piercing",
-						"attackBonus": 5,
-						"damageBonus": 3,
-						"normalRange": 16,
-						"longRange": 64,
-						"equipped": true
-					}
-				],
-				"vulnerabilities": [ "Bludgeoning" ],
-				"immunities": [ "Poison", "Exhaustion", "Poisoned" ],
-				"encounterIntro": "A skeletal warrior blocks your path. Roll for initiative!"
-			},
-			{
-				// Per the SRD's "Priest" stat block (CR 1/4, XP 50) — the one
-				// stock monster in this app with real Spellcasting, so it's
-				// the one that actually exercises CombatService's monster-
-				// spellcasting AI (self-heal when bloodied, Radiant Flame at
-				// range otherwise) in a live encounter, not just in tests.
-				// The Mace's stat block also adds 2 (1d4) Radiant damage on
-				// top of its Bludgeoning; simplified here to Bludgeoning only,
-				// since a weapon can only carry one damage type in this engine.
-				"name": "Priest Acolyte",
-				"creatureType": "Humanoid",
-				"xp": 50,
-				"armorClass": 13,
-				"hitPoints": 11,
-				"maxHitPoints": 11,
-				"speed": 30,
-				"abilityScores": { "str": 14, "dex": 10, "con": 12, "int": 10, "wis": 14, "cha": 11 },
-				"modifiers": { "str": 2, "dex": 0, "con": 1, "int": 0, "wis": 2, "cha": 0 },
-				"proficiencyBonus": 2,
-				"spellcastingAbility": "wis",
-				// Radiant Flame: Ranged Attack Roll +4, range 60 ft. (12 squares), 2d6 Radiant.
-				"knownCantrip": { "type": "attack", "name": "Radiant Flame", "damageType": "Radiant", "diceCount": 2, "diceSides": 6, "rangeSquares": 12 },
-				"inventory": [
-					{
-						"name": "Mace",
-						"category": "melee",
-						"damageDice": "1d6",
-						"damageType": "Bludgeoning",
-						"attackBonus": 4,
-						"damageBonus": 2,
-						"equipped": true
-					}
-				],
-				"vulnerabilities": [],
-				"immunities": [],
-				"encounterIntro": "A robed acolyte chants a prayer and raises a mace. Roll for initiative!"
-			}
-		];
 	}
 
 	/**

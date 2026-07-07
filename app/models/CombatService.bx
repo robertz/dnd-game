@@ -2450,6 +2450,239 @@ class singleton {
 	}
 
 	/**
+	 * D&D 5e CR-vs-party-level guidance is calibrated for a four-person
+	 * party — this app only ever fields 2-3 solo monsters against one
+	 * character at once (see MIN_MOB_COUNT/MAX_MOB_COUNT in default.bx), so
+	 * a monster's CR needs to sit well below the player's level rather than
+	 * at or above it, and the top of the band matters more than the bottom
+	 * (a CR right at the target, times up to 3 of them, is already a hard
+	 * fight solo). Capped at level/4 (so a level 1-4 character never faces
+	 * anything above CR 1/4-ish, matching this app's original hand-picked
+	 * Skeleton/Priest Acolyte), down to a quarter of that for variety.
+	 */
+	private function _levelAppropriateCRRange( level ) {
+		var target = max( 0.125, arguments.level / 4 );
+		return { "min": target * 0.25, "max": target };
+	}
+
+	/**
+	 * Parses a monsters.cr value ("1/8", "1/2", "5", ...) into a decimal
+	 * number for range comparisons. Returns -1 for NULL/blank so it never
+	 * matches a CR range.
+	 */
+	private function _crToDecimal( crText ) {
+		if ( isNull( arguments.crText ) || !len( trim( arguments.crText ) ) ) {
+			return -1;
+		}
+		if ( find( "/", arguments.crText ) ) {
+			var parts = listToArray( arguments.crText, "/" );
+			return val( parts[ 1 ] ) / val( parts[ 2 ] );
+		}
+		return val( arguments.crText );
+	}
+
+	/**
+	 * Extracts the base walking speed (in feet) from a monsters.speed string
+	 * ("30 ft.", "10 ft., Swim 40 ft.") — always the first number, per the
+	 * SRD stat block convention of listing walking speed first.
+	 */
+	private function _parseMonsterSpeed( speedText ) {
+		var match = reFind( "(\d+)\s*ft", arguments.speedText, 1, true );
+		if ( structKeyExists( match, "len" ) && match.len.len() >= 2 && match.len[ 2 ] > 0 ) {
+			return int( mid( arguments.speedText, match.pos[ 2 ], match.len[ 2 ] ) );
+		}
+		return 30;
+	}
+
+	/**
+	 * Splits a monsters.vulnerabilities/resistances/immunities cell ("Poison;
+	 * Exhaustion, Poisoned") into a flat array — both "," and ";" separate
+	 * entries in the seeded SRD data.
+	 */
+	private function _parseMonsterDamageList( text ) {
+		if ( isNull( arguments.text ) || !len( trim( arguments.text ) ) ) {
+			return [];
+		}
+		var normalized = replace( arguments.text, ";", ",", "all" );
+		return arrayMap( listToArray( normalized, "," ), ( p ) => trim( p ) );
+	}
+
+	/**
+	 * Strips the SRD's "or Small "/"(Cleric)"-style qualifiers off a
+	 * monsters.creature_type cell, leaving just the bare type ("Humanoid").
+	 */
+	private function _cleanMonsterCreatureType( creatureType ) {
+		if ( isNull( arguments.creatureType ) || !len( trim( arguments.creatureType ) ) ) {
+			return "";
+		}
+		var cleaned = reReplace( arguments.creatureType, "^(or\s+)?(Tiny|Small|Medium|Large|Huge|Gargantuan)\s+", "", "one" );
+		cleaned = reReplace( cleaned, "\s*\([^)]*\)\s*$", "", "one" );
+		return trim( cleaned );
+	}
+
+	/**
+	 * Parses a monsters.actions_text cell's weapon-style attacks
+	 * ("**_Scimitar._** _Melee Attack Roll:_ +3, reach 5 ft. _Hit:_ 4 (1d6 +
+	 * 1) Slashing damage.") into this app's weapon-shaped inventory items.
+	 * Ignores Multiattack summary lines and Spellcasting blocks (neither
+	 * matches this shape) and any secondary "plus X (YdZ) Type damage"
+	 * clause — this engine's weapons carry exactly one damage type/dice,
+	 * the same simplification already used for the hand-authored Priest
+	 * Acolyte's Mace. A "Melee or Ranged" thrown-weapon entry (e.g. Javelin)
+	 * is treated as melee only, and only the first melee / first ranged
+	 * attack found is kept — equippedWeapon() only tracks one weapon per
+	 * category, same limitation the old hardcoded templates had.
+	 */
+	private function _parseMonsterAttacks( actionsText ) {
+		var attacks = [];
+		if ( isNull( arguments.actionsText ) || !len( arguments.actionsText ) ) {
+			return attacks;
+		}
+		var pattern = "\*\*_([^_]+)_\*\* _(Melee(?: or Ranged)?|Ranged) Attack Roll:_ \+(\d+), (?:reach ([0-9/]+) ft\.(?: or range [0-9/]+ ft\.)?|range ([0-9/]+) ft\.) _Hit:_ \d+ \((\d+)d(\d+)(?: \+ (\d+))?\) (\w+) damage";
+		var text = arguments.actionsText;
+		var startPos = 1;
+
+		while ( true ) {
+			var m = reFind( pattern, text, startPos, true );
+			if ( !structKeyExists( m, "len" ) || m.len.len() < 10 || m.len[ 1 ] == 0 ) {
+				break;
+			}
+			var category = ( left( mid( text, m.pos[ 3 ], m.len[ 3 ] ), 5 ) == "Melee" ) ? "melee" : "ranged";
+			if ( !_hasWeaponCategory( attacks, category ) ) {
+				var item = {
+					"name": reReplace( mid( text, m.pos[ 2 ], m.len[ 2 ] ), "\.$", "" ),
+					"category": category,
+					"damageDice": "#mid( text, m.pos[ 7 ], m.len[ 7 ] )#d#mid( text, m.pos[ 8 ], m.len[ 8 ] )#",
+					"damageType": mid( text, m.pos[ 10 ], m.len[ 10 ] ),
+					"attackBonus": int( mid( text, m.pos[ 4 ], m.len[ 4 ] ) ),
+					"damageBonus": ( m.len[ 9 ] > 0 ) ? int( mid( text, m.pos[ 9 ], m.len[ 9 ] ) ) : 0,
+					"equipped": true
+				};
+				if ( category == "ranged" && m.len[ 6 ] > 0 ) {
+					var rangeParts = listToArray( mid( text, m.pos[ 6 ], m.len[ 6 ] ), "/" );
+					var normalFeet = val( rangeParts[ 1 ] );
+					var longFeet   = ( rangeParts.len() >= 2 ) ? val( rangeParts[ 2 ] ) : normalFeet;
+					item.normalRange = int( normalFeet / 5 );
+					item.longRange   = int( longFeet / 5 );
+				}
+				arrayAppend( attacks, item );
+			}
+			startPos = m.pos[ 1 ] + m.len[ 1 ];
+		}
+		return attacks;
+	}
+
+	private function _hasWeaponCategory( items, category ) {
+		for ( var it in arguments.items ) {
+			if ( it.category == arguments.category ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Builds one combat-ready mob struct (same shape as the player's combat
+	 * struct: abilityScores, inventory, vulnerabilities, etc.) from a row of
+	 * a monsters query and its already-parsed inventory.
+	 */
+	private function _buildMonsterStruct( rows, i, inventory ) {
+		return {
+			"name": rows.name[ arguments.i ],
+			"creatureType": _cleanMonsterCreatureType( rows.creature_type[ arguments.i ] ),
+			"xp": rows.xp[ arguments.i ],
+			"armorClass": rows.armor_class[ arguments.i ],
+			"hitPoints": rows.hit_points[ arguments.i ],
+			"maxHitPoints": rows.hit_points[ arguments.i ],
+			"speed": _parseMonsterSpeed( rows.speed[ arguments.i ] ),
+			"abilityScores": {
+				"str": rows.str[ arguments.i ], "dex": rows.dex[ arguments.i ], "con": rows.con[ arguments.i ],
+				"int": rows.int_score[ arguments.i ], "wis": rows.wis[ arguments.i ], "cha": rows.cha[ arguments.i ]
+			},
+			"inventory": arguments.inventory,
+			"vulnerabilities": _parseMonsterDamageList( rows.vulnerabilities[ arguments.i ] ),
+			"resistances": _parseMonsterDamageList( rows.resistances[ arguments.i ] ),
+			"immunities": _parseMonsterDamageList( rows.immunities[ arguments.i ] ),
+			"encounterIntro": "#rows.name[ arguments.i ]# blocks your path. Roll for initiative!"
+		};
+	}
+
+	/**
+	 * Queries every seeded monster within `level`'s CR band (see
+	 * _levelAppropriateCRRange()) that has at least one parseable weapon
+	 * attack — a small handful of the 235 seeded monsters (spellcasters like
+	 * the Djinni, non-combatants like an Awakened Shrub) have none and are
+	 * skipped, since a mob that can never attack isn't a usable candidate.
+	 */
+	private function _monsterCandidatesForLevel( level ) {
+		var range = _levelAppropriateCRRange( arguments.level );
+		var rows = queryExecute(
+			"SELECT name, creature_type, armor_class, hit_points, speed, str, dex, con, int_score, wis, cha,
+			        vulnerabilities, resistances, immunities, cr, xp, actions_text
+			 FROM monsters WHERE cr IS NOT NULL",
+			{}, { datasource: "gameserver" }
+		);
+		var candidates = [];
+		for ( var i = 1; i <= rows.recordCount; i++ ) {
+			var crValue = _crToDecimal( rows.cr[ i ] );
+			if ( crValue < range.min || crValue > range.max ) {
+				continue;
+			}
+			var inventory = _parseMonsterAttacks( rows.actions_text[ i ] );
+			if ( inventory.len() == 0 ) {
+				continue;
+			}
+			arrayAppend( candidates, _buildMonsterStruct( rows, i, inventory ) );
+		}
+		return candidates;
+	}
+
+	/**
+	 * Picks `count` level-appropriate monsters from the seeded SRD `monsters`
+	 * table at random (independently per slot, so duplicates like two
+	 * Skeletons are normal) — replaces this app's previous hand-authored
+	 * Skeleton/Priest Acolyte-only pool. Returns fewer than `count` mobs only
+	 * if the CR band happens to have zero candidates.
+	 */
+	function randomMonstersForLevel( level, count ) {
+		var candidates = _monsterCandidatesForLevel( arguments.level );
+		var mobs = [];
+		for ( var i = 1; i <= arguments.count; i++ ) {
+			if ( candidates.len() == 0 ) {
+				break;
+			}
+			arrayAppend( mobs, duplicate( candidates[ randRange( 1, candidates.len() ) ] ) );
+		}
+		return mobs;
+	}
+
+	/**
+	 * Looks up a single named monster from the `monsters` table, for a
+	 * scripted encounter (e.g. the seeded Trade Road bandit_ambush POI)
+	 * rather than a random level-appropriate draw. Throws if the name
+	 * doesn't match a seeded monster, or the monster has no parseable
+	 * attacks — both are content bugs in whatever's calling this, not
+	 * something to silently paper over.
+	 */
+	function monsterByName( name ) {
+		var rows = queryExecute(
+			"SELECT name, creature_type, armor_class, hit_points, speed, str, dex, con, int_score, wis, cha,
+			        vulnerabilities, resistances, immunities, xp, actions_text
+			 FROM monsters WHERE name = :name",
+			{ "name": arguments.name },
+			{ datasource: "gameserver" }
+		);
+		if ( rows.recordCount == 0 ) {
+			throw( type = "MonsterNotFound", message = "No seeded monster named '#arguments.name#'." );
+		}
+		var inventory = _parseMonsterAttacks( rows.actions_text[ 1 ] );
+		if ( inventory.len() == 0 ) {
+			throw( type = "MonsterHasNoAttacks", message = "Monster '#arguments.name#' has no parseable weapon attacks." );
+		}
+		return _buildMonsterStruct( rows, 1, inventory );
+	}
+
+	/**
 	 * Known consumable item effects, keyed by items.name (see
 	 * armor_and_items_seed.sql) — separate from the items table itself since
 	 * only a handful of seeded items actually do anything when used; the

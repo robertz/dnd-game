@@ -136,13 +136,18 @@ class singleton {
 	}
 
 	/**
-	 * Hands control to the enemy, then resets for the next player turn.
+	 * Hands control to the enemy, runs any legendary actions (see
+	 * _runLegendaryActions()), then resets for the next player turn.
 	 *
 	 * @state The encounter's full mutable game state struct.
 	 */
 	function endPlayerTurn( state ) {
 		arguments.state.currentTurn = "enemy";
 		runEnemyTurn( arguments.state );
+
+		if ( !arguments.state.gameOver ) {
+			_runLegendaryActions( arguments.state );
+		}
 
 		if ( !arguments.state.gameOver ) {
 			arguments.state.round += 1;
@@ -438,6 +443,142 @@ class singleton {
 			"#damage# #special.damageType# damage (#arguments.player.hitPoints#/#arguments.player.maxHitPoints# HP)."
 		);
 		_checkDefenderDefeated( arguments.state, arguments.opponent, arguments.player, true );
+	}
+
+	/**
+	 * Runs each living opponent's legendary action for this round, if it
+	 * has any (see _buildMonsterStruct()'s `legendaryActions`) — called
+	 * once from endPlayerTurn(), right after the enemies' normal turns and
+	 * before the round advances. Real 5e lets a legendary creature act
+	 * after *each other creature's* turn (up to 3 uses/round); simplified
+	 * here to exactly one legendary action per round, since this game has
+	 * a single player and batches every monster's normal turn together
+	 * with no interleaving — "after each other creature's turn" only ever
+	 * has one trigger point per round anyway.
+	 */
+	private function _runLegendaryActions( state ) {
+		var player = arguments.state.player;
+		for ( var opponent in _stateOpponents( arguments.state ) ) {
+			if ( arguments.state.gameOver || player.hitPoints <= 0 || opponent.hitPoints <= 0 ) {
+				continue;
+			}
+			if ( !structKeyExists( opponent, "legendaryActions" ) || opponent.legendaryActions.len() == 0 ) {
+				continue;
+			}
+			_runLegendaryAction( arguments.state, opponent, player );
+		}
+	}
+
+	/**
+	 * Executes one monster's legendary action for the round — scans its
+	 * parsed legendary_actions_json entries (see _buildMonsterStruct()) in
+	 * priority order and resolves the first one it can actually act on
+	 * mechanically: a save-based damage effect (e.g. a dragon's "Cloud of
+	 * Insects"), a self-heal, or reusing one of its own weapon attacks (the
+	 * common "makes one Rend attack" pattern, matched by name against its
+	 * inventory — see _findLegendaryReuseWeapon()). Falls back to logging
+	 * the array's first entry as flavor text with no mechanical effect if
+	 * nothing usable is in range — most of the remaining entries describe
+	 * a spell cast (e.g. "casts Fear") this engine has no mechanic for,
+	 * same simplification already used for monster Spellcasting elsewhere
+	 * in this file.
+	 */
+	private function _runLegendaryAction( state, opponent, player ) {
+		var grid = _stateGrid( arguments.state );
+		var distance = chebyshev( arguments.opponent, arguments.player );
+		var hasLos = isNull( grid ) || hasLineOfSight( grid, arguments.opponent.position, arguments.player.position );
+
+		for ( var entry in arguments.opponent.legendaryActions ) {
+			if ( len( entry.damageDice ) && entry.saveDC > 0 && distance <= entry.rangeSquares && hasLos ) {
+				_useLegendarySaveAttack( arguments.state, arguments.opponent, arguments.player, entry );
+				return;
+			}
+		}
+		for ( var entry in arguments.opponent.legendaryActions ) {
+			if ( entry.healAmount > 0 ) {
+				_useLegendaryHeal( arguments.state, arguments.opponent, entry );
+				return;
+			}
+		}
+		for ( var entry in arguments.opponent.legendaryActions ) {
+			var reused = _findLegendaryReuseWeapon( arguments.opponent, entry );
+			if ( isNull( reused ) ) {
+				continue;
+			}
+			var withinRange = ( reused.category == "melee" ) ? ( distance <= 1 ) : ( distance <= reused.longRange );
+			if ( withinRange && hasLos ) {
+				// Logged (via prepend) after resolveAttack's own hit/miss line, so
+				// this announcement ends up as the newest entry, reading above the
+				// attack-roll detail it announces — same order _useLegendarySaveAttack()
+				// and _useLegendaryHeal() get for free from their single combined message.
+				resolveAttack(
+					arguments.state.log, arguments.opponent, arguments.player, reused, false, false, false,
+					coverBonus( arguments.state, arguments.opponent, arguments.player )
+				);
+				arguments.state.log.prepend( "#arguments.opponent.name# takes a legendary action: #entry.name#!" );
+				_checkDefenderDefeated( arguments.state, arguments.opponent, arguments.player, true );
+				return;
+			}
+		}
+
+		var flavor = arguments.opponent.legendaryActions[ 1 ];
+		arguments.state.log.prepend( "#arguments.opponent.name# takes a legendary action: #flavor.name#." );
+	}
+
+	/**
+	 * A monster's own save-based legendary attack (e.g. a dragon's "Cloud
+	 * of Insects") — same math as _useMonsterSpecialAttack(), just against
+	 * an arbitrary legendary_actions_json entry instead of the monster's
+	 * one precomputed `specialAttack`.
+	 */
+	private function _useLegendarySaveAttack( state, opponent, player, entry ) {
+		var dice = parseDice( arguments.entry.damageDice );
+		var saveResult = rollSavingThrow( arguments.player, arguments.entry.saveAbility, arguments.entry.saveDC );
+		var damage = rollSum( dice.count, dice.sides ) + arguments.entry.damageBonus;
+		if ( saveResult.success ) {
+			damage = int( damage / 2 );
+		}
+		damage = _applyDamageModifiers( arguments.player, damage, arguments.entry.damageType );
+
+		arguments.player.hitPoints = max( 0, arguments.player.hitPoints - damage );
+		arguments.state.log.prepend(
+			"#arguments.opponent.name# takes a legendary action: #arguments.entry.name#! #arguments.player.name# rolls a DC #arguments.entry.saveDC# #arguments.entry.saveAbilityLabel# save: #saveResult.total# — " &
+			( saveResult.success ? "succeeds, takes half damage. " : "fails! " ) &
+			"#damage# #arguments.entry.damageType# damage (#arguments.player.hitPoints#/#arguments.player.maxHitPoints# HP)."
+		);
+		_checkDefenderDefeated( arguments.state, arguments.opponent, arguments.player, true );
+	}
+
+	/**
+	 * A monster's own self-heal legendary action (e.g. Aboleth's "Psychic
+	 * Drain") — flat heal capped at max HP, same shape as the Regeneration
+	 * trait (_structuredRegenerationAmount()) but spent as a deliberate
+	 * legendary action rather than an automatic per-turn tick.
+	 */
+	private function _useLegendaryHeal( state, opponent, entry ) {
+		var healed = min( arguments.entry.healAmount, arguments.opponent.maxHitPoints - arguments.opponent.hitPoints );
+		arguments.opponent.hitPoints += healed;
+		arguments.state.log.prepend(
+			"#arguments.opponent.name# takes a legendary action: #arguments.entry.name#! Regains #healed# Hit Points (#arguments.opponent.hitPoints#/#arguments.opponent.maxHitPoints# HP)."
+		);
+	}
+
+	/**
+	 * Finds the inventory weapon a "makes one X attack"-style legendary
+	 * action entry is referring to — the common pattern (e.g. "The dragon
+	 * makes one Rend attack.") where the legendary action has no damage
+	 * stats of its own and instead reuses one of the monster's own
+	 * actions_json-derived attacks. Matched by a case-insensitive substring
+	 * search for the weapon's name within the entry's `desc` text. Returns
+	 * null if no inventory item's name appears in the description.
+	 */
+	private function _findLegendaryReuseWeapon( opponent, entry ) {
+		for ( var item in arguments.opponent.inventory ) {
+			if ( findNoCase( item.name, arguments.entry.desc ) > 0 ) {
+				return item;
+			}
+		}
+		return javaCast( "null", 0 );
 	}
 
 	/**
@@ -1034,6 +1175,9 @@ class singleton {
 	 * Critical Hit (roll damage dice twice); natural 1 always misses.
 	 * Disadvantage rolls two d20s and keeps the lower result.
 	 * Vulnerability/Resistance/Immunity to the weapon's damage type is applied.
+	 * A defender with an unused Reaction and a parsed Parry trait
+	 * (`defender.parryBonus`, see _structuredParryBonus()) can turn a
+	 * non-critical melee hit into a miss.
 	 *
 	 * @log The encounter's combat log array — a new entry is prepended.
 	 * @attacker The attacker's stat struct (has a `name`).
@@ -1111,11 +1255,31 @@ class singleton {
 			hits = !isFumble && ( isCrit || total >= effectiveAC );
 		}
 
+		// Parry (e.g. Bandit Captain/Erinyes): if adding the defender's parry
+		// bonus to their AC would turn this hit into a miss, they spend their
+		// Reaction to do so — can't help against a natural 20, which always
+		// hits regardless of AC. Shares the same reactionUsed flag as
+		// opportunity attacks (see checkOpportunityAttacks()), since a
+		// creature only has one Reaction per round no matter the source.
+		var usedParry = false;
+		if (
+			hits && !isCrit &&
+			structKeyExists( arguments.weapon, "category" ) && arguments.weapon.category == "melee" &&
+			structKeyExists( arguments.defender, "parryBonus" ) && arguments.defender.parryBonus > 0 &&
+			!( structKeyExists( arguments.defender, "reactionUsed" ) && arguments.defender.reactionUsed ) &&
+			total < effectiveAC + arguments.defender.parryBonus
+		) {
+			arguments.defender.reactionUsed = true;
+			usedParry = true;
+			hits = false;
+		}
+
 		var disadvantageNote = useDisadvantage ? " (Disadvantage)" : ( useAdvantage ? " (Advantage)" : "" );
 		var luckNote = usedLuck ? " (Lucky reroll)" : "";
 		var styleNote = ( styleBonus > 0 ) ? " (Archery)" : "";
 		var inspirationNote = usedInspiration ? " (Heroic Inspiration reroll)" : "";
 		var coverNote = ( arguments.coverBonus > 0 ) ? " (+#arguments.coverBonus# Cover)" : "";
+		var parryNote = usedParry ? " (Parried!)" : "";
 		// A monster's ranged attack drawn from a Spellcasting/Innate
 		// Spellcasting trait (see _buildMonsterStruct()'s isSpell flagging)
 		// reads as a cast, not a mundane weapon swing — cosmetic only, the
@@ -1126,7 +1290,7 @@ class singleton {
 
 		if ( !hits ) {
 			arguments.log.prepend(
-				"#actionPhrase#: #roll# + #arguments.weapon.attackBonus + styleBonus# = #total# vs AC #effectiveAC##coverNote##disadvantageNote##luckNote##styleNote##inspirationNote#. Miss!"
+				"#actionPhrase#: #roll# + #arguments.weapon.attackBonus + styleBonus# = #total# vs AC #effectiveAC##coverNote##disadvantageNote##luckNote##styleNote##inspirationNote##parryNote#. Miss!"
 			);
 			return;
 		}
@@ -1297,6 +1461,15 @@ class singleton {
 		if (
 			arguments.isMagical && listFindNoCase( "int,wis,cha", arguments.ability ) &&
 			structKeyExists( arguments.combatant, "hasGnomishCunning" ) && arguments.combatant.hasGnomishCunning
+		) {
+			hasAdvantage = true;
+		}
+		// Magic Resistance (e.g. many demons/devils/dragons): Advantage on
+		// saving throws against spells and other magical effects — any
+		// ability, not just Int/Wis/Cha like Gnomish Cunning.
+		if (
+			arguments.isMagical &&
+			structKeyExists( arguments.combatant, "hasMagicResistance" ) && arguments.combatant.hasMagicResistance
 		) {
 			hasAdvantage = true;
 		}
@@ -2912,6 +3085,27 @@ class singleton {
 	}
 
 	/**
+	 * A monster's Parry AC bonus (see resolveAttack()) — the reactions_json
+	 * entry named "Parry" doesn't precompute its AC bonus as a structured
+	 * field (unlike Regeneration's healAmount), only in its `desc` text
+	 * ("...adds 2 to its AC against that attack..."), so it's extracted
+	 * with the same reFind()-with-subexpressions idiom already used
+	 * elsewhere in this file (see _parseMonsterSpeed()). 0 if the monster
+	 * has no Parry reaction, or its bonus couldn't be parsed out.
+	 */
+	private function _structuredParryBonus( reactions ) {
+		for ( var reaction in arguments.reactions ) {
+			if ( findNoCase( "Parry", reaction.name ) > 0 ) {
+				var match = reFind( "adds (\d+) to its AC", reaction.desc, 1, true );
+				if ( structKeyExists( match, "len" ) && match.len.len() >= 2 && match.len[ 2 ] > 0 ) {
+					return int( mid( reaction.desc, match.pos[ 2 ], match.len[ 2 ] ) );
+				}
+			}
+		}
+		return 0;
+	}
+
+	/**
 	 * Builds one combat-ready mob struct (same shape as the player's combat
 	 * struct: abilityScores, inventory, vulnerabilities, etc.) from a row of
 	 * a monsters query and its already-parsed inventory.
@@ -2930,6 +3124,14 @@ class singleton {
 		var abilitiesJsonText = rows.special_abilities_json[ arguments.i ];
 		var structuredAbilities = ( !isNull( abilitiesJsonText ) && len( abilitiesJsonText ) )
 			? JSONDeserialize( abilitiesJsonText )
+			: [];
+		var reactionsJsonText = rows.reactions_json[ arguments.i ];
+		var structuredReactions = ( !isNull( reactionsJsonText ) && len( reactionsJsonText ) )
+			? JSONDeserialize( reactionsJsonText )
+			: [];
+		var legendaryActionsJsonText = rows.legendary_actions_json[ arguments.i ];
+		var structuredLegendaryActions = ( !isNull( legendaryActionsJsonText ) && len( legendaryActionsJsonText ) )
+			? JSONDeserialize( legendaryActionsJsonText )
 			: [];
 
 		// A monster's ranged attack (if any) reads as a cast rather than a
@@ -2983,6 +3185,9 @@ class singleton {
 			"conditionImmunities": immunities.conditions,
 			"hasPackTactics": _hasStructuredTraitByName( structuredAbilities, "Pack Tactics" ),
 			"regenerationPerTurn": _structuredRegenerationAmount( structuredAbilities ),
+			"hasMagicResistance": _hasStructuredTraitByName( structuredAbilities, "Magic Resistance" ),
+			"parryBonus": _structuredParryBonus( structuredReactions ),
+			"legendaryActions": structuredLegendaryActions,
 			"usedSpecialAttack": false,
 			"encounterIntro": "#rows.name[ arguments.i ]# blocks your path. Roll for initiative!"
 		};
@@ -3023,7 +3228,7 @@ class singleton {
 			"SELECT name, creature_type, armor_class, hit_points, speed, str, dex, con, int_score, wis, cha,
 			        str_save, dex_save, con_save, int_save, wis_save, cha_save,
 			        vulnerabilities, resistances, immunities, cr, xp,
-			        actions_json, special_abilities_json
+			        actions_json, special_abilities_json, legendary_actions_json, reactions_json
 			 FROM monsters WHERE cr IS NOT NULL",
 			{}, { datasource: "gameserver" }
 		);
@@ -3073,7 +3278,7 @@ class singleton {
 			"SELECT name, creature_type, armor_class, hit_points, speed, str, dex, con, int_score, wis, cha,
 			        str_save, dex_save, con_save, int_save, wis_save, cha_save,
 			        vulnerabilities, resistances, immunities, xp,
-			        actions_json, special_abilities_json
+			        actions_json, special_abilities_json, legendary_actions_json, reactions_json
 			 FROM monsters WHERE name = :name",
 			{ "name": arguments.name },
 			{ datasource: "gameserver" }

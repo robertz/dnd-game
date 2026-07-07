@@ -556,6 +556,163 @@ class extends="testbox.system.BaseSpec" {
 				} );
 			} );
 
+			describe( "Magic Resistance (rollSavingThrow())", () => {
+				it( "grants Advantage on a save against a magical effect", () => {
+					var combatant = makeCombatant( 0, 0, { "modifiers": { "wis": 0 }, "proficiencyBonus": 0, "hasMagicResistance": true } );
+					var result = service.rollSavingThrow( combatant, "wis", 10, "", true );
+					expect( result.hadAdvantage ).toBeTrue();
+				} );
+
+				it( "does not apply to a non-magical save", () => {
+					var combatant = makeCombatant( 0, 0, { "modifiers": { "wis": 0 }, "proficiencyBonus": 0, "hasMagicResistance": true } );
+					var result = service.rollSavingThrow( combatant, "wis", 10, "", false );
+					expect( result.hadAdvantage ).toBeFalse();
+				} );
+
+				it( "does not apply without the trait", () => {
+					var combatant = makeCombatant( 0, 0, { "modifiers": { "wis": 0 }, "proficiencyBonus": 0 } );
+					var result = service.rollSavingThrow( combatant, "wis", 10, "", true );
+					expect( result.hadAdvantage ).toBeFalse();
+				} );
+			} );
+
+			describe( "Parry reaction (resolveAttack())", () => {
+				// AC 15 + parryBonus 5 vs attackBonus 0: rolls 15-19 land as a normal
+				// hit (roll >= 15) that adding the parry bonus (up to 20) always
+				// downgrades to a miss — deterministic for any non-crit, non-fumble
+				// hit in this band, unlike the file's usual "run trials, assert an
+				// aggregate" pattern.
+				it( "turns a would-be hit into a miss and spends the Reaction", () => {
+					var sawParry = false;
+					for ( var i = 1; i <= 300 && !sawParry; i++ ) {
+						var log = [];
+						var defender = makeCombatant( 0, 0, { "armorClass": 15, "parryBonus": 5 } );
+						var weapon = { "name": "Longsword", "category": "melee", "damageDice": "1d8", "damageType": "Slashing", "attackBonus": 0, "damageBonus": 0 };
+						service.resolveAttack( log, { "name": "Attacker" }, defender, weapon, false );
+						if ( log[ 1 ] contains "Parried" ) {
+							sawParry = true;
+							expect( defender.hitPoints ).toBe( 500 );
+							expect( defender.reactionUsed ).toBeTrue();
+						}
+					}
+					expect( sawParry ).toBeTrue();
+				} );
+
+				it( "cannot prevent a natural 20 (Critical Hit)", () => {
+					var sawCrit = false;
+					for ( var i = 1; i <= 400 && !sawCrit; i++ ) {
+						var log = [];
+						var defender = makeCombatant( 0, 0, { "armorClass": 15, "parryBonus": 5 } );
+						var weapon = { "name": "Longsword", "category": "melee", "damageDice": "1d8", "damageType": "Slashing", "attackBonus": 0, "damageBonus": 0 };
+						service.resolveAttack( log, { "name": "Attacker" }, defender, weapon, false );
+						if ( log[ 1 ] contains "Critical hit!" ) {
+							sawCrit = true;
+							expect( defender.hitPoints ).toBeLT( 500 );
+						}
+					}
+					expect( sawCrit ).toBeTrue();
+				} );
+
+				it( "does not apply once the Reaction is already used this round", () => {
+					var sawRealHit = false;
+					for ( var i = 1; i <= 300; i++ ) {
+						var log = [];
+						var defender = makeCombatant( 0, 0, { "armorClass": 15, "parryBonus": 5, "reactionUsed": true } );
+						var weapon = { "name": "Longsword", "category": "melee", "damageDice": "1d8", "damageType": "Slashing", "attackBonus": 0, "damageBonus": 0 };
+						service.resolveAttack( log, { "name": "Attacker" }, defender, weapon, false );
+						expect( log[ 1 ] ).notToInclude( "Parried" );
+						if ( defender.hitPoints < 500 ) {
+							sawRealHit = true;
+						}
+					}
+					expect( sawRealHit ).toBeTrue();
+				} );
+
+				it( "does not apply to ranged attacks", () => {
+					for ( var i = 1; i <= 40; i++ ) {
+						var log = [];
+						var defender = makeCombatant( 0, 0, { "armorClass": 1, "parryBonus": 100 } );
+						var weapon = { "name": "Shortbow", "category": "ranged", "damageDice": "1d6", "damageType": "Piercing", "attackBonus": 100, "damageBonus": 0 };
+						service.resolveAttack( log, { "name": "Attacker" }, defender, weapon, false );
+						expect( log[ 1 ] ).notToInclude( "Parried" );
+					}
+				} );
+			} );
+
+			describe( "legendary actions (endPlayerTurn())", () => {
+				function makeLegendaryState( opponentExtra, playerExtra = {} ){
+					return {
+						"player": makeCombatant( 1, 1, { "name": "Test Hero", "inventory": [] }.append( arguments.playerExtra ) ),
+						"opponent": makeCombatant( 2, 1, { "name": "Test Boss", "inventory": [], "hitPoints": 100, "maxHitPoints": 200 }.append( arguments.opponentExtra ) ),
+						"movementRemaining": 6, "actionUsed": false, "gameOver": false, "outcome": "", "log": [], "round": 1, "currentTurn": "enemy"
+					};
+				}
+
+				it( "reuses a named weapon attack for a 'makes one X attack' legendary action", () => {
+					var state = makeLegendaryState( {
+						"inventory": [ { "name": "Rend", "category": "melee", "damageDice": "2d6", "damageType": "Slashing", "attackBonus": 100, "damageBonus": 5, "equipped": false } ],
+						"legendaryActions": [ {
+							"name": "Tail Swipe", "desc": "Tail Swipe. The dragon makes one Rend attack.",
+							"attackBonus": 0, "damageDice": "", "damageBonus": 0, "damageType": "", "category": "",
+							"saveAbility": "", "saveAbilityLabel": "", "saveDC": 0, "rangeSquares": 0, "healAmount": 0
+						} ]
+					} );
+					service.endPlayerTurn( state );
+					expect( state.player.hitPoints ).toBeLT( 500 );
+					expect( state.log[ 1 ] ).toInclude( "legendary action: Tail Swipe" );
+				} );
+
+				it( "resolves a save-based legendary attack (e.g. a breath-weapon-style effect)", () => {
+					var state = makeLegendaryState( {
+						"legendaryActions": [ {
+							"name": "Cloud of Insects", "desc": "Dexterity Saving Throw: DC 100.",
+							"attackBonus": 0, "damageDice": "4d6", "damageBonus": 0, "damageType": "Poison", "category": "",
+							"saveAbility": "dex", "saveAbilityLabel": "Dexterity", "saveDC": 100, "rangeSquares": 10, "healAmount": 0
+						} ]
+					}, { "modifiers": { "dex": 0 }, "proficiencyBonus": 0 } );
+					// DC 100 is unreachable by any roll, so the save always fails and full damage always lands.
+					service.endPlayerTurn( state );
+					var damageTaken = 500 - state.player.hitPoints;
+					expect( damageTaken >= 4 && damageTaken <= 24 ).toBeTrue();
+					expect( state.log[ 1 ] ).toInclude( "legendary action: Cloud of Insects" );
+				} );
+
+				it( "heals the monster via a healAmount legendary action", () => {
+					var state = makeLegendaryState( {
+						"legendaryActions": [ {
+							"name": "Psychic Drain", "desc": "Regains Hit Points.",
+							"attackBonus": 0, "damageDice": "", "damageBonus": 0, "damageType": "", "category": "",
+							"saveAbility": "", "saveAbilityLabel": "", "saveDC": 0, "rangeSquares": 0, "healAmount": 10
+						} ]
+					} );
+					service.endPlayerTurn( state );
+					expect( state.opponent.hitPoints ).toBe( 110 );
+				} );
+
+				it( "logs a flavor-only legendary action when nothing is mechanically resolvable", () => {
+					var state = makeLegendaryState( {
+						"legendaryActions": [ {
+							"name": "Cloaked Flight", "desc": "The dragon uses Spellcasting to cast Invisibility on itself.",
+							"attackBonus": 0, "damageDice": "", "damageBonus": 0, "damageType": "", "category": "",
+							"saveAbility": "", "saveAbilityLabel": "", "saveDC": 0, "rangeSquares": 0, "healAmount": 0
+						} ]
+					} );
+					service.endPlayerTurn( state );
+					expect( state.player.hitPoints ).toBe( 500 );
+					expect( state.opponent.hitPoints ).toBe( 100 );
+					expect( state.log[ 1 ] ).toInclude( "legendary action: Cloaked Flight" );
+				} );
+
+				it( "does nothing for an opponent with no legendary actions", () => {
+					var state = makeLegendaryState( { "legendaryActions": [] } );
+					var logLenBefore = state.log.len();
+					service.endPlayerTurn( state );
+					for ( var entry in state.log ) {
+						expect( entry ).notToInclude( "legendary action" );
+					}
+				} );
+			} );
+
 			describe( "playerDecideAndAct() / runEnemyTurn() / endPlayerTurn() turn bookkeeping", () => {
 				function makeState(){
 					return {

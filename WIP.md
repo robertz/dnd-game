@@ -610,10 +610,13 @@ is unchanged.
 
 3 new/updated unit tests confirm `roundHadAction` is set on a landed
 attack, stays false on a move-only/no-reach turn, and is reset by
-`startNewRound()`. Not separately live-verified against the exact
-maze-and-water map from the report — the fix is a small, direct extension
-of an already-tested signal, and the full suite passes — but worth
-confirming against that specific map if the stall recurs.
+`startNewRound()`. Also live-verified end-to-end via a temporary debug
+handler that reproduced the exact reported scenario (a Giant Sea Horse
+sealed off from the player by a wall with no gap) and ran the real
+`autoStep()`-equivalent loop against production `CombatService` code —
+confirmed `staleAutoRounds` reaches 3 and auto-battle stops itself with
+neither side ever able to land a hit, then removed the debug code
+(verified via `diff` against the committed version).
 
 ## Priority if picked back up
 1. #1 — needs a decision (schema extension vs. staying 2014-pure) before any code.

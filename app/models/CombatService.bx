@@ -132,9 +132,10 @@ class singleton {
 	/**
 	 * Decides and performs the player's action for one turn: move toward the
 	 * opponent if not adjacent (preferring melee — better damage, no
-	 * Disadvantage), then attack with whatever's in range once movement
-	 * settles. Does not advance to the enemy's turn — callers do that
-	 * separately once they're done acting.
+	 * Disadvantage), then either casts a spell (see _autoCastPlayerSpell())
+	 * or attacks with whatever's in range once movement settles. Does not
+	 * advance to the enemy's turn — callers do that separately once they're
+	 * done acting.
 	 *
 	 * @state The encounter's full mutable game state struct.
 	 */
@@ -170,6 +171,13 @@ class singleton {
 				distance = chebyshev( player, opponent );
 			}
 
+			// A spell replaces the whole Attack action, not one swing of it —
+			// only worth considering on the turn's first action, before any
+			// Extra Attack swings have already committed to a weapon.
+			if ( arguments.state.attacksUsedThisTurn == 0 && _autoCastPlayerSpell( arguments.state, opponent ) ) {
+				return;
+			}
+
 			var choice = pickWeaponForDistance( player, distance, _stateGrid( arguments.state ), opponent.position );
 			if ( isNull( choice ) ) {
 				arguments.state.log.prepend( "#player.name# can't reach #opponent.name# this turn." );
@@ -181,6 +189,53 @@ class singleton {
 			arguments.state.roundHadAction = true;
 			playerAttack( arguments.state, choice.weapon, choice.disadvantage );
 		}
+	}
+
+	/**
+	 * Auto-battle's spellcasting decision for the player — mirrors
+	 * `_runOneOpponentTurn()`'s own priority exactly, so a caster fights as
+	 * intelligently under auto-battle as an enemy spellcaster already does:
+	 * a known heal spell while bloodied (50% HP or less), else a known
+	 * damage/save spell with a slot available and a clear shot at
+	 * `opponent`, else a known cantrip with a clear shot. Returns true (and
+	 * has already cast) the first time one of these applies — auto-battle
+	 * doesn't hold slots in reserve for a tougher fight later, same as the
+	 * enemy AI. False if nothing applied, so the caller falls back to a
+	 * mundane weapon attack.
+	 */
+	private function _autoCastPlayerSpell( state, opponent ) {
+		var player = arguments.state.player;
+		if ( structKeyExists( player, "knownLeveledSpells" ) && player.hitPoints <= player.maxHitPoints / 2 ) {
+			for ( var spell in player.knownLeveledSpells ) {
+				if ( spell.type == "heal" && hasSpellResource( player, spell.level ) ) {
+					castLeveledSpell( arguments.state, spell.name );
+					return true;
+				}
+			}
+		}
+
+		if ( structKeyExists( player, "knownLeveledSpells" ) ) {
+			for ( var spell in player.knownLeveledSpells ) {
+				if (
+					( spell.type == "attack" || spell.type == "save" ) && hasSpellResource( player, spell.level ) &&
+					_isSpellTargetValid( arguments.state, player, arguments.opponent, spell )
+				) {
+					castLeveledSpell( arguments.state, spell.name );
+					return true;
+				}
+			}
+		}
+
+		if ( structKeyExists( player, "knownCantrips" ) ) {
+			for ( var cantrip in player.knownCantrips ) {
+				if ( _isSpellTargetValid( arguments.state, player, arguments.opponent, cantrip ) ) {
+					castCantrip( arguments.state, cantrip.name );
+					return true;
+				}
+			}
+		}
+
+		return false;
 	}
 
 	/**
@@ -2203,6 +2258,25 @@ class singleton {
 		var isFullCaster = isFullCasterClass( className );
 		var isHalfCaster = arrayFindNoCase( HALF_CASTER_CLASSES, className ) > 0;
 
+		// Multiclassing: a character can be a caster via ANY of their
+		// classes — spellcasting ability comes from whichever caster class
+		// has the higher level (ties favor the earlier-taken one). Real SRD
+		// spells still use their own class's ability; this app keeps a
+		// single spellcastingAbility value per character (see WIP.md's
+		// multiclassing section) rather than tracking it per known spell.
+		if ( structKeyExists( arguments.player, "classes" ) && arguments.player.classes.len() > 1 ) {
+			var bestCasterClass = javaCast( "null", 0 );
+			for ( var classEntry in arguments.player.classes ) {
+				var entryIsCaster = isFullCasterClass( classEntry.className ) || arrayFindNoCase( HALF_CASTER_CLASSES, classEntry.className ) > 0;
+				if ( entryIsCaster && ( isNull( bestCasterClass ) || classEntry.level > bestCasterClass.level ) ) {
+					bestCasterClass = classEntry;
+				}
+			}
+			isFullCaster = !isNull( bestCasterClass ) && isFullCasterClass( bestCasterClass.className );
+			isHalfCaster = !isNull( bestCasterClass ) && arrayFindNoCase( HALF_CASTER_CLASSES, bestCasterClass.className ) > 0;
+			className = isNull( bestCasterClass ) ? className : bestCasterClass.className;
+		}
+
 		arguments.player.isSpellcaster = isFullCaster || isHalfCaster || arguments.player.hasMagicInitiate;
 		arguments.player.spellcastingAbility = SPELLCASTING_ABILITY_BY_CLASS.keyExists( className )
 			? SPELLCASTING_ABILITY_BY_CLASS[ className ]
@@ -2278,6 +2352,30 @@ class singleton {
 	}
 
 	/**
+	 * Combined "Multiclass Spellcaster" caster level across every class in
+	 * `player.classes`, per the Multiclassing rules: a full-caster class
+	 * contributes its whole level, a half-caster (Paladin, Ranger)
+	 * contributes floor(level / 2), anything else contributes nothing.
+	 * Only meaningful once a character has more than one class — see the
+	 * caller in _recomputeSpellSlots(). Public (like hasSpellResource())
+	 * purely so this easy-to-get-wrong arithmetic (fractional caster levels
+	 * from half-casters, deliberately NOT matching a solo half-caster's own
+	 * table at some levels — see _recomputeSpellSlots()'s note) has a direct
+	 * unit test.
+	 */
+	function multiclassCasterLevel( player ) {
+		var total = 0;
+		for ( var classEntry in arguments.player.classes ) {
+			if ( isFullCasterClass( classEntry.className ) ) {
+				total += classEntry.level;
+			} else if ( arrayFindNoCase( HALF_CASTER_CLASSES, classEntry.className ) > 0 ) {
+				total += int( classEntry.level / 2 );
+			}
+		}
+		return total;
+	}
+
+	/**
 	 * (Re)computes `player.spellSlots` from the full/half-caster slot tables
 	 * at their current level, then subtracts whatever's already been spent
 	 * this rest cycle (`player.spentSpellSlots`). Factored out of
@@ -2288,12 +2386,27 @@ class singleton {
 	 * loaded fresh into a new encounter.
 	 */
 	private function _recomputeSpellSlots( player ) {
-		var className = arguments.player.class;
-		var isFullCaster = isFullCasterClass( className );
-		var isHalfCaster = arrayFindNoCase( HALF_CASTER_CLASSES, className ) > 0;
-
-		var slotTable = isFullCaster ? SPELL_SLOTS_FULL_CASTER : ( isHalfCaster ? SPELL_SLOTS_HALF_CASTER : [] );
-		var levelIndex = min( arguments.player.level, slotTable.len() );
+		var slotTable = [];
+		var levelIndex = 0;
+		// Multiclassing: the combined "Multiclass Spellcaster" slot table is
+		// mechanically identical to the full-caster progression, indexed by
+		// an effective caster level (see multiclassCasterLevel()) instead
+		// of a single class's own level. A single-class character (still
+		// the overwhelming default) keeps using its own class's table
+		// directly and unchanged — the combined formula is a deliberately
+		// worse fit than a half-caster's own table at some levels (a real
+		// RAW quirk of multiclassing, not a bug), so it must only apply once
+		// there's actually more than one class to combine.
+		if ( structKeyExists( arguments.player, "classes" ) && arguments.player.classes.len() > 1 ) {
+			slotTable = SPELL_SLOTS_FULL_CASTER;
+			levelIndex = min( multiclassCasterLevel( arguments.player ), slotTable.len() );
+		} else {
+			var className = arguments.player.class;
+			var isFullCaster = isFullCasterClass( className );
+			var isHalfCaster = arrayFindNoCase( HALF_CASTER_CLASSES, className ) > 0;
+			slotTable = isFullCaster ? SPELL_SLOTS_FULL_CASTER : ( isHalfCaster ? SPELL_SLOTS_HALF_CASTER : [] );
+			levelIndex = min( arguments.player.level, slotTable.len() );
+		}
 		arguments.player.spellSlots = {};
 		if ( levelIndex > 0 ) {
 			var slotsAtLevel = slotTable[ levelIndex ];
@@ -3082,9 +3195,18 @@ class singleton {
 
 	/**
 	 * Parses a "NdM" damage notation, e.g. "2d6" -> { count: 2, sides: 6 }.
+	 * Returns 0 dice for anything that isn't that exact shape (blank, or a
+	 * malformed value that shouldn't exist in well-formed data but has
+	 * turned up before in imported monster stat blocks — see the "Elk"/
+	 * "Killer Whale"/"Tiger" seed data bug fixed alongside this) — a weapon
+	 * with 0 dice just deals its flat damage bonus, same as a real SRD
+	 * flat-damage attack, rather than crashing combat outright.
 	 */
 	function parseDice( notation ) {
 		var parts = listToArray( arguments.notation, "d" );
+		if ( parts.len() < 2 ) {
+			return { "count": 0, "sides": 0 };
+		}
 		return { "count": int( parts[ 1 ] ), "sides": int( parts[ 2 ] ) };
 	}
 
@@ -3143,10 +3265,15 @@ class singleton {
 		var newTotalXp = totals.experience_points[ 1 ];
 		arguments.state.log.prepend( "#player.name# gains #arguments.xp# XP (#newTotalXp# total)." );
 
+		// `totalLevel` (sum across every class — see loadCharacter()) is what
+		// the XP table actually measures; a single-class character always has
+		// totalLevel == level, unchanged from before multiclassing existed.
+		var currentLevel = structKeyExists( player, "totalLevel" ) ? player.totalLevel : player.level;
 		var targetLevel = levelForXp( newTotalXp );
 		var leveledUp = false;
-		while ( player.level < targetLevel ) {
+		while ( currentLevel < targetLevel ) {
 			_levelUp( arguments.state );
+			currentLevel = structKeyExists( player, "totalLevel" ) ? player.totalLevel : player.level;
 			leveledUp = true;
 		}
 
@@ -3159,13 +3286,25 @@ class singleton {
 			queryExecute(
 				"UPDATE characters SET level = :level, proficiency_bonus = :proficiencyBonus, hit_points = :maxHitPoints, max_hit_points = :maxHitPoints WHERE id = :characterId",
 				{
-					"level": player.level,
+					"level": player.classes[ 1 ].level,
 					"proficiencyBonus": player.proficiencyBonus,
 					"maxHitPoints": player.maxHitPoints,
 					"characterId": player.characterId
 				},
 				{ datasource: "gameserver" }
 			);
+			// Any classes beyond the original one (see startMulticlass()) keep
+			// their own level in character_multiclass_levels — upserted here
+			// too in case this batch of level-ups landed on one of them.
+			for ( var i = 2; i <= player.classes.len(); i++ ) {
+				queryExecute(
+					"INSERT INTO character_multiclass_levels (character_id, class_id, level)
+					 VALUES (:characterId, :classId, :level)
+					 ON DUPLICATE KEY UPDATE level = :level",
+					{ "characterId": player.characterId, "classId": player.classes[ i ].classId, "level": player.classes[ i ].level },
+					{ datasource: "gameserver" }
+				);
+			}
 		}
 	}
 
@@ -3270,15 +3409,60 @@ class singleton {
 	}
 
 	/**
+	 * Finds the entry in `player.classes` that the next level-up applies to
+	 * (see `player.nextLevelClassId`, set by loadCharacter()/startMulticlass()/
+	 * setNextLevelClass()). If `nextLevelClassId` names a class the
+	 * character doesn't have yet (startMulticlass() only ever records
+	 * *intent*, not an actual level — see its doc comment), this is that
+	 * class's first level: a fresh level-0 entry is appended to
+	 * `player.classes` here so the caller's `level += 1` takes it to 1, same
+	 * as the original class's very first level. Falls back to the original
+	 * class (`classes[1]`) if `nextLevelClassId` is unset or names a class
+	 * that no longer exists (a stray/deleted id).
+	 */
+	private function _levelingClassFor( player ) {
+		for ( var classEntry in arguments.player.classes ) {
+			if ( classEntry.classId == arguments.player.nextLevelClassId ) {
+				return classEntry;
+			}
+		}
+		var newClassRows = queryExecute(
+			"SELECT id, name, hit_die FROM classes WHERE id = :classId",
+			{ "classId": arguments.player.nextLevelClassId },
+			{ datasource: "gameserver" }
+		);
+		if ( newClassRows.recordCount == 0 ) {
+			return arguments.player.classes[ 1 ];
+		}
+		var newClassEntry = {
+			"classId": newClassRows.id[ 1 ], "className": newClassRows.name[ 1 ],
+			"subclassId": javaCast( "null", 0 ), "level": 0, "hitDie": newClassRows.hit_die[ 1 ]
+		};
+		arrayAppend( arguments.player.classes, newClassEntry );
+		return newClassEntry;
+	}
+
+	/**
 	 * Applies one level's worth of advancement to `state.player`, per
-	 * "Gaining a Level": +1 Hit Die worth of HP (using the class's fixed
-	 * value + Constitution modifier, minimum 1), an increased Proficiency
-	 * Bonus at the levels that grant one (bumping equipped weapons' attack
-	 * bonus to match), and any new class features at the new level.
+	 * "Gaining a Level": +1 Hit Die worth of HP (using the *leveling
+	 * class's* fixed value + Constitution modifier, minimum 1 — see
+	 * _levelingClassFor()/multiclassing above), an increased Proficiency
+	 * Bonus (by total character level) at the levels that grant one
+	 * (bumping equipped weapons' attack bonus to match), and any new class
+	 * features that class unlocks at its new level.
 	 */
 	private function _levelUp( state ) {
 		var player = arguments.state.player;
-		player.level += 1;
+		var levelingClass = _levelingClassFor( player );
+		levelingClass.level += 1;
+		// `player.level`/`hitDiceMax` mirror the original class specifically
+		// (used for its own short-rest hit-die size) — kept in sync only
+		// when the original class is the one gaining this level.
+		if ( levelingClass.classId == player.classes[ 1 ].classId ) {
+			player.level = levelingClass.level;
+		}
+		player.totalLevel += 1;
+		player.hitDiceMax = player.totalLevel;
 
 		// A caster's slot count is level-dependent (and a half-caster's very
 		// first slot unlocks at level 2) — recompute immediately so a level-up
@@ -3290,11 +3474,12 @@ class singleton {
 
 		// Dwarven Toughness adds +1 per level on top of the normal Hit Die gain.
 		var hpBonusPerLevel = structKeyExists( player, "hpBonusPerLevel" ) ? player.hpBonusPerLevel : 0;
-		var hpGain = max( 1, player.hitPointsPerLevel + player.modifiers.con ) + hpBonusPerLevel;
+		var hitPointsPerLevel = _fixedHitPointsPerLevel( levelingClass.hitDie );
+		var hpGain = max( 1, hitPointsPerLevel + player.modifiers.con ) + hpBonusPerLevel;
 		player.maxHitPoints += hpGain;
 		player.hitPoints += hpGain;
 
-		var newProficiencyBonus = proficiencyBonusForLevel( player.level );
+		var newProficiencyBonus = proficiencyBonusForLevel( player.totalLevel );
 		var proficiencyIncreased = ( newProficiencyBonus > player.proficiencyBonus );
 		if ( proficiencyIncreased ) {
 			var bonusIncrease = newProficiencyBonus - player.proficiencyBonus;
@@ -3306,10 +3491,12 @@ class singleton {
 			}
 		}
 
-		var newFeatureNames = _grantNewFeatures( player );
+		var newFeatureNames = _grantNewFeatures(
+			player, levelingClass.classId, isNull( levelingClass.subclassId ) ? 0 : levelingClass.subclassId, levelingClass.level
+		);
 
 		arguments.state.log.prepend(
-			"#player.name# reaches level #player.level#! +#hpGain# HP" &
+			"#player.name# reaches character level #player.totalLevel# (#levelingClass.className# #levelingClass.level#)! +#hpGain# HP" &
 			( proficiencyIncreased ? ", Proficiency Bonus now +#player.proficiencyBonus#" : "" ) &
 			( newFeatureNames.len() ? ", gains #arrayToList( newFeatureNames, ", " )#" : "" ) &
 			"."
@@ -3391,22 +3578,181 @@ class singleton {
 	}
 
 	/**
-	 * Grants `player` any class features for their (already incremented)
-	 * level, from the gameserver rule set — adding them to `player.features`
-	 * and recording them against the persisted character. A subclass
-	 * feature is only included once the player has actually chosen a
-	 * subclass (see chooseSubclass()) — reaching the unlock level alone
-	 * doesn't grant them. Returns the names of any features gained.
+	 * True if `abilityScores` meets the Multiclassing ability-score
+	 * prerequisite described by `primaryAbilityText` — the exact text
+	 * already stored in `classes.primary_ability` (e.g. "Strength or
+	 * Dexterity" for Fighter, "Strength and Charisma" for Paladin, a bare
+	 * "Wisdom" for Cleric), which happens to already match the SRD's
+	 * multiclassing prerequisite table for every class in this dataset.
+	 * "and" requires every named ability at 13+; "or" requires any one of
+	 * them; a single ability name requires just that one. Empty/unrecognized
+	 * text never blocks (treated as "no prerequisite" rather than silently
+	 * excluding every class from multiclass options). Public (like
+	 * hasSpellResource()/multiclassCasterLevel()) so this string-parsing —
+	 * easy to get subtly wrong around "and" vs. "or" and the 13 boundary —
+	 * has a direct unit test, independent of multiclassOptions()'s DB query.
 	 */
-	private function _grantNewFeatures( player ) {
+	function meetsMulticlassPrerequisite( abilityScores, primaryAbilityText ) {
+		var text = trim( arguments.primaryAbilityText );
+		if ( !len( text ) ) {
+			return true;
+		}
+		var abilityAbbrevByName = {
+			"strength": "str", "dexterity": "dex", "constitution": "con",
+			"intelligence": "int", "wisdom": "wis", "charisma": "cha"
+		};
+		var requireAll = findNoCase( " and ", text ) > 0;
+		var separator = requireAll ? " and " : " or ";
+		// `true` as the 4th arg treats `separator` as one literal delimiter
+		// string rather than a set of delimiter characters — same listToArray()
+		// usage already relied on elsewhere for this kind of " and "-joined
+		// SRD text (see the savingThrowProficiencies parsing in loadCharacter()).
+		var parts = ( findNoCase( separator, text ) > 0 ) ? listToArray( text, separator, false, true ) : [ text ];
+		var anyMet = false;
+		var allMet = true;
+		for ( var part in parts ) {
+			var abbrev = abilityAbbrevByName.keyExists( lCase( trim( part ) ) ) ? abilityAbbrevByName[ lCase( trim( part ) ) ] : "";
+			var met = len( abbrev ) && structKeyExists( arguments.abilityScores, abbrev ) && arguments.abilityScores[ abbrev ] >= 13;
+			anyMet = anyMet || met;
+			allMet = allMet && met;
+		}
+		return requireAll ? allMet : anyMet;
+	}
+
+	/**
+	 * Classes `characterId` could multiclass into right now: every class
+	 * they don't already have, whose own ability-score prerequisite they
+	 * meet — provided they also still meet the prerequisite for every class
+	 * they've *already* taken (the real "you need 13+ in your current
+	 * class's primary ability too" multiclassing rule). Returns
+	 * `[{id, name, primaryAbility}, ...]`, empty if none qualify. Never
+	 * auto-applied — the player picks via startMulticlass(), same
+	 * skippable/revisitable pattern as pendingSubclassChoice().
+	 */
+	function multiclassOptions( characterId ) {
+		var charRow = queryExecute(
+			"SELECT class_id, str, dex, con, int_score, wis, cha FROM characters WHERE id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		if ( charRow.recordCount == 0 ) {
+			return [];
+		}
+		var abilityScores = {
+			"str": charRow.str[ 1 ], "dex": charRow.dex[ 1 ], "con": charRow.con[ 1 ],
+			"int": charRow.int_score[ 1 ], "wis": charRow.wis[ 1 ], "cha": charRow.cha[ 1 ]
+		};
+
+		var takenRows = queryExecute(
+			"SELECT id, primary_ability FROM classes WHERE id = :classId
+			 UNION
+			 SELECT cl.id, cl.primary_ability FROM character_multiclass_levels cml
+			 JOIN classes cl ON cl.id = cml.class_id WHERE cml.character_id = :characterId",
+			{ "classId": charRow.class_id[ 1 ], "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		var takenClassIds = [];
+		var meetsAllTakenPrereqs = true;
+		for ( var row in takenRows ) {
+			arrayAppend( takenClassIds, row.id );
+			if ( !meetsMulticlassPrerequisite( abilityScores, row.primary_ability ) ) {
+				meetsAllTakenPrereqs = false;
+			}
+		}
+		if ( !meetsAllTakenPrereqs ) {
+			return [];
+		}
+
+		var candidateRows = queryExecute( "SELECT id, name, primary_ability FROM classes ORDER BY name", {}, { datasource: "gameserver" } );
+		var options = [];
+		for ( var row in candidateRows ) {
+			if ( arrayFind( takenClassIds, row.id ) > 0 ) {
+				continue;
+			}
+			if ( meetsMulticlassPrerequisite( abilityScores, row.primary_ability ) ) {
+				arrayAppend( options, { "id": row.id, "name": row.name, "primaryAbility": row.primary_ability } );
+			}
+		}
+		return options;
+	}
+
+	/**
+	 * Declares intent to multiclass into `classId` — validated against
+	 * multiclassOptions() so a stray/invalid id can't bypass the ability-score
+	 * prerequisite. Only redirects future automatic level-ups (`_levelUp()`,
+	 * via `next_level_class_id`) at the new class; grants nothing by itself.
+	 * A character doesn't actually gain a level (HP, features, a real row in
+	 * `character_multiclass_levels`) in the new class until they've earned
+	 * enough XP for their *next* character level and `_levelUp()` fires
+	 * naturally — multiclassing redirects where that next level goes, it
+	 * doesn't hand out a free one. See _levelingClassFor(), which creates the
+	 * actual level-1 entry (and grants its features) the moment that happens.
+	 */
+	function startMulticlass( characterId, classId ) {
+		var options = multiclassOptions( arguments.characterId );
+		var isValid = false;
+		for ( var option in options ) {
+			if ( option.id == arguments.classId ) {
+				isValid = true;
+			}
+		}
+		if ( !isValid ) {
+			return;
+		}
+		queryExecute(
+			"UPDATE characters SET next_level_class_id = :classId WHERE id = :characterId",
+			{ "classId": arguments.classId, "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+	}
+
+	/**
+	 * Redirects future automatic level-ups (`_levelUp()`) to `classId` —
+	 * always available once a character has multiclassed, so the player can
+	 * change which class their next kill's XP advances at any time from the
+	 * character sheet. A no-op if `classId` isn't one of the character's
+	 * original or multiclass classes (guards against a stray id) — use
+	 * startMulticlass() instead to redirect at a class not yet taken.
+	 */
+	function setNextLevelClass( characterId, classId ) {
+		var validRows = queryExecute(
+			"SELECT class_id FROM characters WHERE id = :characterId AND class_id = :classId
+			 UNION
+			 SELECT class_id FROM character_multiclass_levels WHERE character_id = :characterId AND class_id = :classId",
+			{ "characterId": arguments.characterId, "classId": arguments.classId },
+			{ datasource: "gameserver" }
+		);
+		if ( validRows.recordCount == 0 ) {
+			return;
+		}
+		queryExecute(
+			"UPDATE characters SET next_level_class_id = :classId WHERE id = :characterId",
+			{ "classId": arguments.classId, "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+	}
+
+	/**
+	 * Grants `player` any class features of `classId` at `level` (the class
+	 * that's just gained this level — see _levelingClassFor(); for a
+	 * single-class character this is always their one class), from the
+	 * gameserver rule set — adding them to `player.features` and recording
+	 * them against the persisted character. A subclass feature is only
+	 * included once the player has actually chosen a subclass for that
+	 * class (see chooseSubclass()/startMulticlass()) — reaching the unlock
+	 * level alone doesn't grant them. Returns the names of any features
+	 * gained.
+	 *
+	 * @subclassId Pass 0 (not a real id) for "no subclass chosen yet" — avoids binding a SQL NULL parameter.
+	 */
+	private function _grantNewFeatures( player, classId, subclassId, level ) {
 		var names = [];
 
 		var rows = queryExecute(
-			"SELECT cf.id, cf.name FROM class_features cf
-			 JOIN characters c ON c.class_id = cf.class_id
-			 WHERE c.id = :characterId AND cf.level = :level
-			   AND ( cf.subclass_id IS NULL OR cf.subclass_id = c.subclass_id )",
-			{ "characterId": arguments.player.characterId, "level": arguments.player.level },
+			"SELECT id, name FROM class_features
+			 WHERE class_id = :classId AND level = :level
+			   AND ( subclass_id IS NULL OR subclass_id = :subclassId )",
+			{ "classId": arguments.classId, "level": arguments.level, "subclassId": arguments.subclassId },
 			{ datasource: "gameserver" }
 		);
 
@@ -5044,6 +5390,41 @@ class singleton {
 			"knownCantripNames": len( row.known_cantrips[ 1 ] ) ? listToArray( row.known_cantrips[ 1 ] ) : [],
 			"knownSpellNames": len( row.known_spells[ 1 ] ) ? listToArray( row.known_spells[ 1 ] ) : []
 		};
+
+		// Multiclassing (see startMulticlass()/setNextLevelClass()):
+		// `player.classes` always has at least one entry (the original
+		// class); `player.level`/`player.hitDieSize` above stay scoped to
+		// that original class specifically (used for its own hit-die rolls
+		// and feature grants), while `player.totalLevel` is the sum across
+		// every class — what proficiency bonus, XP thresholds, and combined
+		// spell slots actually key off. A single-class character (the
+		// overwhelming default) just gets a one-entry `classes` array and
+		// `totalLevel == level`, unchanged from before this feature existed.
+		player.classes = [ {
+			"classId": row.class_id[ 1 ], "className": row.className[ 1 ],
+			"subclassId": isNull( row.subclass_id[ 1 ] ) ? javaCast( "null", 0 ) : row.subclass_id[ 1 ],
+			"level": row.level[ 1 ], "hitDie": row.hit_die[ 1 ]
+		} ];
+		player.totalLevel = row.level[ 1 ];
+		var multiclassRows = queryExecute(
+			"SELECT cml.class_id, cml.subclass_id, cml.level, cl.name AS className, cl.hit_die
+			 FROM character_multiclass_levels cml JOIN classes cl ON cl.id = cml.class_id
+			 WHERE cml.character_id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		for ( var mcRow in multiclassRows ) {
+			arrayAppend( player.classes, {
+				"classId": mcRow.class_id, "className": mcRow.className,
+				"subclassId": isNull( mcRow.subclass_id ) ? javaCast( "null", 0 ) : mcRow.subclass_id,
+				"level": mcRow.level, "hitDie": mcRow.hit_die
+			} );
+			player.totalLevel += mcRow.level;
+		}
+		// Which class the next automatic level-up applies to (see
+		// _levelUp()) — defaults to the original class until the player
+		// multiclasses and/or redirects it via setNextLevelClass().
+		player.nextLevelClassId = isNull( row.next_level_class_id[ 1 ] ) ? row.class_id[ 1 ] : row.next_level_class_id[ 1 ];
 
 		var featureRows = queryExecute(
 			"SELECT cf.name FROM character_features chf

@@ -926,6 +926,24 @@ class extends="cbwire.models.Component" {
 	}
 
 	/**
+	 * One-line flavor text for a cantrip/leveled spell struct's Cast button
+	 * tooltip (e.g. "Attack — 1d10 Fire", "Save (DEX) — 3d6 Fire",
+	 * "Heal — 1d8") — same formatting characterSheet.bx's Spells tab already
+	 * uses for its cantrip/spell picker cards, duplicated here since this is
+	 * a separate CBWIRE component with its own template.
+	 */
+	function describeSpell( spell ) {
+		if ( arguments.spell.type == "heal" ) {
+			return "Heal — " & arguments.spell.diceCount & "d" & arguments.spell.diceSides;
+		}
+		if ( arguments.spell.type == "attack" ) {
+			return "Attack — " & arguments.spell.diceCount & "d" & arguments.spell.diceSides & " " & arguments.spell.damageType;
+		}
+		return "Save (" & uCase( arguments.spell.saveAbility ) & ") — "
+			& arguments.spell.diceCount & "d" & arguments.spell.diceSides & " " & arguments.spell.damageType;
+	}
+
+	/**
 	 * Whether the player could actually pay for a leveled spell of
 	 * `minimumLevel` right now — a slot at or above that level, or an
 	 * unused Magic Initiate bonus spell (see combatService.hasSpellResource()).

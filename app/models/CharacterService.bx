@@ -360,6 +360,22 @@ class singleton {
 	}
 
 	/**
+	 * Starts multiclassing — see CombatService.startMulticlass() and the
+	 * character sheet's Multiclass panel (CombatService.multiclassOptions()).
+	 */
+	function startMulticlass( characterId, classId ) {
+		combatService.startMulticlass( arguments.characterId, arguments.classId );
+	}
+
+	/**
+	 * Redirects future automatic level-ups to a different class the
+	 * character already has — see CombatService.setNextLevelClass().
+	 */
+	function setNextLevelClass( characterId, classId ) {
+		combatService.setNextLevelClass( arguments.characterId, arguments.classId );
+	}
+
+	/**
 	 * Learns a new cantrip/leveled spell — the character sheet's "Learn a
 	 * Cantrip"/"Learn a Spell" panel's action (see
 	 * CombatService.pendingCantripChoice()/pendingSpellChoice()). Never
@@ -471,7 +487,7 @@ class singleton {
 	 */
 	function getCharacterSheet( characterId ) {
 		var row = queryExecute(
-			"SELECT c.id, c.name, c.species, c.background, c.alignment, c.level,
+			"SELECT c.id, c.name, c.species, c.background, c.alignment, c.level, c.class_id, c.next_level_class_id,
 			        c.str, c.dex, c.con, c.int_score, c.wis, c.cha,
 			        c.proficiency_bonus, c.armor_class, c.max_hit_points, c.speed, c.gold,
 			        c.experience_points, c.known_cantrips, c.known_spells, c.chosen_skill_proficiencies,
@@ -487,6 +503,48 @@ class singleton {
 			throw( type = "CharacterNotFound", message = "No character with id ##arguments.characterId##." );
 		}
 
+		// Multiclassing (see CombatService.startMulticlass()/setNextLevelClass()):
+		// `classes` always has at least the original class; `totalLevel` is
+		// the sum across all of them (what the sheet's header/level display
+		// should actually show once there's more than one).
+		var classes = [ { "classId": row.class_id[ 1 ], "className": row.className[ 1 ], "level": row.level[ 1 ] } ];
+		var totalLevel = row.level[ 1 ];
+		var multiclassRows = queryExecute(
+			"SELECT cml.class_id, cml.level, cl.name AS className
+			 FROM character_multiclass_levels cml JOIN classes cl ON cl.id = cml.class_id
+			 WHERE cml.character_id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		for ( var mcRow in multiclassRows ) {
+			arrayAppend( classes, { "classId": mcRow.class_id, "className": mcRow.className, "level": mcRow.level } );
+			totalLevel += mcRow.level;
+		}
+
+		// The "Next Level Goes To" selector's options: every class already
+		// taken, plus — if startMulticlass() has pointed the next level-up
+		// at a class not yet taken (see its doc comment: it only records
+		// intent, no level yet) — that class too, shown at level 0 so the
+		// player can see it's queued up rather than already gained.
+		var nextLevelClassId = isNull( row.next_level_class_id[ 1 ] ) ? row.class_id[ 1 ] : row.next_level_class_id[ 1 ];
+		var nextLevelOptions = duplicate( classes );
+		var hasNextLevelClass = false;
+		for ( var classOption in nextLevelOptions ) {
+			if ( classOption.classId == nextLevelClassId ) {
+				hasNextLevelClass = true;
+			}
+		}
+		if ( !hasNextLevelClass ) {
+			var pendingClassRows = queryExecute(
+				"SELECT name FROM classes WHERE id = :classId",
+				{ "classId": nextLevelClassId },
+				{ datasource: "gameserver" }
+			);
+			if ( pendingClassRows.recordCount > 0 ) {
+				arrayAppend( nextLevelOptions, { "classId": nextLevelClassId, "className": pendingClassRows.name[ 1 ], "level": 0 } );
+			}
+		}
+
 		var sheet = {
 			"characterId": row.id[ 1 ],
 			"name": row.name[ 1 ],
@@ -498,6 +556,18 @@ class singleton {
 			"backgroundDetail": getBackgroundDetail( len( row.background[ 1 ] ) ? row.background[ 1 ] : "" ),
 			"alignment": len( row.alignment[ 1 ] ) ? row.alignment[ 1 ] : "",
 			"level": row.level[ 1 ],
+			// Multiclassing: `classes` always has at least the original
+			// class; `totalLevel` matches `level` for the overwhelming
+			// single-class case. The sheet's header shows "Fighter 3 /
+			// Wizard 2" style once `classes.len() > 1`.
+			"classes": classes,
+			"totalLevel": totalLevel,
+			"nextLevelClassId": nextLevelClassId,
+			// classes already taken, plus a level-0 entry for a
+			// startMulticlass()-declared-but-not-yet-leveled class, if any.
+			"nextLevelOptions": nextLevelOptions,
+			// { pending, availableClasses } — see CombatService.multiclassOptions().
+			"multiclassOptions": combatService.multiclassOptions( arguments.characterId ),
 			"abilityScores": {
 				"str": row.str[ 1 ], "dex": row.dex[ 1 ], "con": row.con[ 1 ],
 				"int": row.int_score[ 1 ], "wis": row.wis[ 1 ], "cha": row.cha[ 1 ]

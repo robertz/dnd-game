@@ -199,7 +199,12 @@
 								</bx:if>
 								<bx:if structKeyExists( player, "knownCantrips" )>
 									<bx:loop array="#player.knownCantrips#" index="knownCantrip">
-										<button type="button" class="btn btn-attack" wire:click="castCantrip('#knownCantrip.name#')">Cast #knownCantrip.name#</button>
+										<button
+											type="button"
+											class="btn btn-attack"
+											wire:click="castCantrip('#knownCantrip.name#')"
+											title="#htmlEditFormat( describeSpell( knownCantrip ) )#"
+										>Cast #knownCantrip.name#</button>
 									</bx:loop>
 								</bx:if>
 								<bx:if structKeyExists( player, "knownLeveledSpells" )>
@@ -209,7 +214,7 @@
 											class="btn btn-attack"
 											wire:click="castLeveledSpell('#knownSpell.name#')"
 											#( hasSpellResource( knownSpell.level ) ? "" : "disabled" )#
-											title="#( hasSpellResource( knownSpell.level ) ? '' : 'No level-#knownSpell.level#+ spell slots left' )#"
+											title="#htmlEditFormat( hasSpellResource( knownSpell.level ) ? describeSpell( knownSpell ) : 'No level-#knownSpell.level#+ spell slots left — #describeSpell( knownSpell )#' )#"
 										>Cast #knownSpell.name#</button>
 									</bx:loop>
 								</bx:if>

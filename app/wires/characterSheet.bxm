@@ -7,13 +7,53 @@
 			<div class="parchment-panel" style="margin-bottom: 1rem;">
 				<h2 class="fantasy-heading" style="margin: 0 0 0.3rem;">#character.name#</h2>
 				<p class="stat-subtitle" style="margin: 0;">
-					Level #character.level# #character.species# #character.className#
+					<bx:if character.classes.len() gt 1>
+						Level #character.totalLevel# #character.species#
+						<bx:loop array="#character.classes#" index="classesHeaderEntry">#classesHeaderEntry.className# #classesHeaderEntry.level#<bx:if classesHeaderEntry.classId neq character.classes[ character.classes.len() ].classId> / </bx:if></bx:loop>
+					<bx:else>
+						Level #character.level# #character.species# #character.className#
+					</bx:if>
 					<bx:if len( character.subclassName )> (#character.subclassName#)</bx:if>
 					<bx:if len( character.background )> &bull; #character.background#</bx:if>
 					<bx:if len( character.alignment )> &bull; #character.alignment#</bx:if>
 					&bull; #character.experiencePoints# XP &bull; Hit Die: #character.hitDie#
 				</p>
 			</div>
+
+			<bx:if character.multiclassOptions.len()>
+				<div class="parchment-panel asi-panel" style="margin-bottom: 1rem;">
+					<h3 class="fantasy-heading" style="margin: 0 0 0.3rem;">Multiclass</h3>
+					<p class="stat-subtitle" style="margin: 0 0 0.5rem;">
+						Your ability scores qualify you to multiclass into one of these. Picking one doesn't grant a level by itself — it queues your next XP-earned level to go there instead of #character.className#. You may pick this now, or come back later.
+					</p>
+					<div class="creation-grid">
+						<bx:loop array="#character.multiclassOptions#" index="pendingMulticlassOption">
+							<div
+								class="creation-card creation-card-compact"
+								wire:click="startMulticlass(#pendingMulticlassOption.id#)"
+								title="Requires #pendingMulticlassOption.primaryAbility# 13+"
+							>#pendingMulticlassOption.name#</div>
+						</bx:loop>
+					</div>
+				</div>
+			</bx:if>
+
+			<bx:if character.nextLevelOptions.len() gt 1>
+				<div class="parchment-panel asi-panel" style="margin-bottom: 1rem;">
+					<h3 class="fantasy-heading" style="margin: 0 0 0.3rem;">Next Level Goes To</h3>
+					<p class="stat-subtitle" style="margin: 0 0 0.5rem;">
+						Which class your next kill's XP advances. Change this any time.
+					</p>
+					<div class="creation-grid">
+						<bx:loop array="#character.nextLevelOptions#" index="nextLevelOption">
+							<div
+								class="creation-card creation-card-compact#( nextLevelOption.classId == character.nextLevelClassId ? ' creation-card-selected' : '' )#"
+								wire:click="#( nextLevelOption.level == 0 ? 'startMulticlass' : 'setNextLevelClass' )#(#nextLevelOption.classId#)"
+							>#nextLevelOption.className# #( nextLevelOption.level == 0 ? '(new)' : nextLevelOption.level )#</div>
+						</bx:loop>
+					</div>
+				</div>
+			</bx:if>
 
 			<bx:if character.subclassChoice.pending>
 				<div class="parchment-panel asi-panel" style="margin-bottom: 1rem;">

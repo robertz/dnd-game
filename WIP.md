@@ -401,7 +401,8 @@ below is confirmed absent, not a guess:
   sustained combat effect (no Bless/Hunter's Mark-style ongoing buff), so
   losing concentration is currently bookkeeping + a log line, not an actual
   effect removal — there's nothing yet for it to remove.
-- **No multiclassing** — one `class_id` per character, period.
+- **No multiclassing** — one `class_id` per character, period. **Resolved,
+  see #16.**
 - **Most granted class features are still name-only** (see #7/#7a/#7b) — as
   of #7b, `Extra Attack`/`Two Extra Attacks`/`Three Extra Attacks`,
   `Fighting Style`, `Ability Score Improvement`, `Rage`, `Sneak Attack`,
@@ -618,6 +619,201 @@ confirmed `staleAutoRounds` reaches 3 and auto-battle stops itself with
 neither side ever able to land a hit, then removed the debug code
 (verified via `diff` against the committed version).
 
+## 16. No multiclassing
+Every character was locked to one `class_id`/`level` pair for life. Added
+full SRD multiclassing: ability-score prerequisites, per-class hit dice,
+the real combined spellcaster slot table, and class features granted per
+class/level — with two deliberate simplifications, both consistent with
+patterns already used elsewhere in this app (Warlock's Pact Magic already
+collapses to the full-caster table; `HEAL_PREFERRING_CLASSES` already
+flattens spell-choice nuance):
+- **Spellcasting ability stays a single value per character**
+  (`player.spellcastingAbility`), not tracked per spell's granting class —
+  set to whichever caster class has the higher level (ties favor the
+  earlier-taken one), rather than each known spell using its own class's
+  ability.
+- **No multiclassing proficiency-gain limits.** The SRD restricts which
+  armor/weapon/skill proficiencies you gain when multiclassing in, but this
+  app doesn't enforce armor/weapon proficiency at all (confirmed:
+  `armor_training`/`weapon_proficiencies` are only ever displayed, never
+  checked before an action) — nothing to restrict.
+- **Short Rest hit-die healing still uses one die size** (`hitDieSize`,
+  scoped to the character's original class) even once multiclassed, rather
+  than tracking a mixed-size hit dice pool per class. `hitDiceMax` is
+  correctly the *total* level across all classes (so the right number of
+  dice are available), just all rolled at the original class's die size —
+  a minor, narrow simplification versus a fully mixed pool.
+
+**Data model** (`015_multiclassing.sql`): a new `character_multiclass_levels`
+table (`character_id`, `class_id`, `subclass_id`, `level`) holds every class
+*beyond* the character's original one — a single-class character (still the
+overwhelming default) has zero rows here, so no existing single-class code
+path changes behavior. `characters.next_level_class_id` (nullable) records
+which class the next automatic level-up applies to.
+
+**Mechanics** (`CombatService.bx`): `loadCharacter()` now builds
+`player.classes` (always at least the original class) and `player.totalLevel`
+(the sum — what proficiency bonus and XP thresholds actually key off,
+distinct from `player.level`, which stays scoped to the original class).
+`multiclassCasterLevel()` (public, like `hasSpellResource()` — exposed
+purely for a direct unit test on genuinely error-prone arithmetic) sums a
+full-caster class's whole level plus a half-caster's `floor(level / 2)`
+across every class, then `_recomputeSpellSlots()` indexes that combined
+level directly into the existing `SPELL_SLOTS_FULL_CASTER` table — which
+*is* the SRD's Multiclass Spellcaster table. Deliberately **not** applied to
+a single-class half-caster (Paladin/Ranger alone): the combined-level
+formula is a real RAW quirk that's a worse fit than that class's own
+front-loaded table at some levels, so a solo half-caster keeps using its
+own table exactly as before, unaffected by this feature.
+
+`meetsMulticlassPrerequisite()` (also made public for its own direct unit
+test) parses the ability-score prerequisite straight out of
+`classes.primary_ability` — text like "Strength or Dexterity" (Fighter) or
+"Strength and Charisma" (Paladin) already happens to match the SRD's
+multiclassing prerequisite table verbatim for every class in this dataset,
+so no separate prerequisite table was needed. `multiclassOptions()` checks
+both the prerequisite for any *new* class and for every class already
+taken (the real "you need 13+ in your current class's primary ability too"
+rule) before offering it.
+
+**The choice itself never grants anything by itself** — `startMulticlass()`
+only validates the prerequisite and sets `next_level_class_id`, mirroring
+the "never auto-assign a player choice" rule the same way
+`pendingSubclassChoice()`/`chooseSubclass()` do, but stricter: a first pass
+at this feature had `startMulticlass()` immediately grant a free level (HP,
+features) with no additional XP cost, caught during live verification (see
+below) and corrected. The character only actually gains a level in the new
+class — a fresh entry appended to `player.classes`, its features granted,
+HP added — the next time enough XP is earned for their *next* character
+level and `_levelUp()`/`_levelingClassFor()` fires naturally, exactly as if
+they'd kept leveling their original class. `setNextLevelClass()` lets the
+player freely redirect between classes they already have at any time from
+the character sheet.
+
+**UI** (`characterSheet.bx`/`.bxm`): a "Multiclass" panel (mirroring the
+subclass-choice panel's shape) lists qualifying classes; a "Next Level Goes
+To" panel lists classes already taken plus, if a multiclass choice is
+pending but not yet leveled, that class shown as "(new)"; the header shows
+"Fighter 3 / Wizard 2" once there's more than one class.
+
+11 new unit tests: `meetsMulticlassPrerequisite()`'s "and"/"or"/single-ability
+parsing and the 13-point boundary, `multiclassCasterLevel()`'s full-caster/
+half-caster/mixed combinations. `startMulticlass()`/`setNextLevelClass()`/
+`_levelUp()`'s multiclass branch aren't unit tested — like
+`chooseSubclass()`/`pendingFightingStyleChoice()`/every other DB-backed
+"pending choice" function in this app, they're DB-bound with no test-double
+seam, so this app's existing convention is to skip unit tests for them and
+rely on live verification instead. Live-verified end-to-end via the
+established temporary-debug-handler pattern against a real DB-backed test
+character (Fighter 3, ability scores qualifying for Wizard) walked through:
+`multiclassOptions()` correctly offering Wizard → `startMulticlass()`
+recording intent with **no** immediate level/feature/HP change → enough XP
+awarded to cross the next threshold → the character correctly gained
+Wizard 1 (not Fighter 4), including its features and the exact combined
+spell slot count (`multiclassCasterLevel` 1 → `SPELL_SLOTS_FULL_CASTER[1]`
+→ 1 first-level slot) → `setNextLevelClass()` redirected back to Fighter →
+further XP correctly leveled Fighter to 4 instead, including the
+Proficiency Bonus increase at total level 5. This run is exactly what
+caught and drove the fix for the "free level" bug described above. Debug
+handler code fully reverted afterward (verified via `diff` against the
+committed version); test character removed from the database.
+
+## 17. Auto-battle never used a caster's spells, and mob condition display
+Two separate asks: (1) whether auto-battle ever cast a known spell (it
+didn't — `playerDecideAndAct()`, the only caller of which is `autoStep()`,
+only ever moved toward the nearest opponent and swung an equipped weapon,
+even for a full caster sitting on unused spell slots — noticeably dumber
+than the enemy AI, which already prioritizes spellcasting in
+`_runOneOpponentTurn()`); (2) a request to show conditions applied to mobs
+in combat, which turned out to already exist (`default.bxm`'s opponent
+sidebar card already had a "Conditions" row with tooltips before this
+session — nothing to add there, though it's rarely visible in practice
+since only Shove/Grapple/Weapon Mastery-Topple apply any condition at all
+anywhere in this app, and no spell does).
+
+**Resolved (1).** Added `_autoCastPlayerSpell()`, mirroring
+`_runOneOpponentTurn()`'s own priority order exactly: a known heal spell
+while bloodied (50% HP or less) and a slot's available, else a known
+damage/save spell with a slot and a clear shot (range + line of sight, via
+the existing `_isSpellTargetValid()`) at the target, else a known cantrip
+with a clear shot — only falling back to a mundane weapon attack if none
+of those apply. Only considered on the turn's first action (a spell
+replaces the whole Attack action, so it doesn't interact with Extra
+Attack's multiple weapon swings). Like the enemy AI it mirrors, this
+doesn't hold slots in reserve for a tougher fight later — auto-battle
+spends what it has the moment it's useful.
+
+Also added a spell tooltip while here (a related, smaller ask from the
+same session): Cast buttons in combat now show a `title` with the spell's
+type/dice/damage (e.g. "Attack — 1d10 Fire", "Save (DEX) — 1d8 Radiant"),
+via a new `describeSpell()` in `default.bx` — a direct duplicate of
+`characterSheet.bx`'s existing function of the same name and shape, since
+CBWIRE components don't share a view-helper mixin in this app and every
+other small display-formatting helper here (`featDescription()`,
+`featureDescription()`) is already duplicated per-wire the same way.
+
+5 new unit tests cover the priority order (damage spell over weapon, heal
+over damage while bloodied, cantrip fallback once slots are gone, weapon
+fallback when out of spell range). Live-verified via the established
+debug-handler pattern: loaded a real DB-backed Cleric (Sacred Flame/Guiding
+Bolt known, 1 first-level slot) against an adjacent weak opponent and
+confirmed `playerDecideAndAct()` cast Guiding Bolt (spending the slot, not
+swinging her Mace) and killed it outright. That run incidentally persisted
+real XP/gold to the live test character via `awardExperience()`'s direct
+DB writes (a side effect of using a real character rather than a throwaway
+one) — caught immediately and manually reverted (`-10 XP, -2 gold`) before
+finishing; debug handler code fully reverted afterward (verified via
+`diff`).
+
+## 18. Crash: some monsters could never attack in melee (blank damage dice)
+A live crash report came in while testing #17:
+`ortus...BoxRuntimeException: Array index [1] is out of bounds for an array
+of length [0]` in `parseDice()`, called from `resolveAttack()` via
+`_runOneOpponentTurn()` — any time an Elk, Killer Whale, or Tiger actually
+attacked, combat crashed outright.
+
+**Root cause**: a data bug in both monster seed files
+(`monsters_5e_srd_missing_seed.sql`'s INSERT and
+`monsters_5e_srd_missing_schema_update.sql`'s corrective UPDATE — the bug
+was baked into both) — 4 melee attacks (Elk's Ram/Hooves, Killer Whale's
+Bite, Tiger's Claw) had `attackBonus: 0, damageDice: "", damageBonus: 0`
+even though their own `desc` text plainly stated the real values (e.g.
+Killer Whale's Bite: *"+6 to hit ... Hit: 21 (5d6 + 4) piercing damage"*).
+Whatever generated this data failed to parse those 4 specific entries —
+worth noting Tiger's identical-shaped **Bite** action parsed correctly
+right next to the broken **Claw** entry in the same JSON array, so this
+wasn't a systemic every-attack failure, just 4 stray rows. A
+whole-seed-file regex scan (checking every melee/ranged action across
+every monster seed file for "`desc` contains real dice notation but
+`damageDice` is blank") confirmed these were the **only** 4 affected rows
+in the entire dataset.
+
+**Resolved.** Backfilled the correct `attackBonus`/`damageDice`/
+`damageBonus` (parsed straight from each action's own `desc` text) into
+both seed files directly, and applied the same fix live to the running
+`gameserver.monsters` table so no `box server restart`/reseed was needed
+to unblock testing. Elk was especially bad off — its *first* melee action
+(`Ram`) was the broken one, so `_parseStructuredActions()`'s "keep only
+the first attack per category" rule meant Elk had **no working melee
+attack at all** and crashed on its very first swing; Killer Whale's only
+action was the broken one, so it crashed every time as well.
+
+Also hardened `parseDice()` itself as a safety net: it now returns `{count:
+0, sides: 0}` for anything that isn't real `NdM` notation instead of
+indexing into an empty array — a weapon with 0 dice just deals its flat
+damage bonus (a genuine, valid SRD shape for some very weak creatures —
+e.g. a Crab's Claw is *"+0 to hit ... Hit: 1 bludgeoning damage"* with no
+dice at all, and its `category` happens to be blank so it doesn't
+currently reach this code path, but there was no guarantee some other
+monster's blank-`damageDice`-but-real-`category` combination wouldn't
+crash the same way in the future). 1 new unit test covers this directly.
+
+Live-verified via the debug-handler pattern: loaded all three fixed
+monsters via `monsterByName()` and ran a real `runEnemyTurn()` against a
+dummy target — confirmed Elk/Killer Whale/Tiger now attack with their
+correct dice/bonus and no crash. Debug handler code fully reverted
+afterward (verified via `diff`).
+
 ## Priority if picked back up
 1. #1 — needs a decision (schema extension vs. staying 2014-pure) before any code.
 2. Full mechanics for the remaining ~100 inert class feature names (see
@@ -628,8 +824,9 @@ neither side ever able to land a hit, then removed the debug code
    Sneak Attack/Second Wind/Expertise/Weapon Mastery are done (#7a).
 3. A new non-combat gameplay moment (Perception/Insight/Stealth check) for
    `rollSkillCheck()` to gate is still open from #2, and still additive.
-4. Multiclassing and the remaining conditions (Charmed/Deafened/Exhaustion)
-   are the next-biggest gaps after class feature mechanics.
+4. Multiclassing is done (#16); the remaining conditions (Charmed/
+   Deafened/Exhaustion) are still the next-biggest gap after class feature
+   mechanics.
 5. Charmed, Deafened, Exhaustion (#11) and the 6 dead-data Boon feats only
    matter once something in the game actually inflicts/offers them — low
    priority until paired with new monster abilities or the feat list

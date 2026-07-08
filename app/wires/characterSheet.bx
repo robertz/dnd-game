@@ -124,6 +124,28 @@ class extends="cbwire.models.Component" {
 	}
 
 	/**
+	 * Starts multiclassing into a new class, for the "Multiclass" panel
+	 * shown whenever character.multiclassOptions is non-empty (see
+	 * CombatService.multiclassOptions()). Not forced — the panel simply
+	 * stays available (and keeps reappearing options) for as long as any
+	 * more classes qualify.
+	 */
+	function startMulticlass( classId ) {
+		characterService.startMulticlass( session.charid, arguments.classId );
+		_loadSheet();
+	}
+
+	/**
+	 * Redirects the character's next automatic level-up (from XP gained in
+	 * combat) to a different class they already have — always available
+	 * once multiclassed, and freely changeable at any time.
+	 */
+	function setNextLevelClass( classId ) {
+		characterService.setNextLevelClass( session.charid, arguments.classId );
+		_loadSheet();
+	}
+
+	/**
 	 * Learns a new cantrip, for the "Learn a Cantrip" panel shown whenever
 	 * cantripChoice.pending is true (see CombatService.pendingCantripChoice()).
 	 * Not forced — the panel simply reappears next visit if left unchosen.

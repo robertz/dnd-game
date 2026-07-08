@@ -371,6 +371,16 @@ class extends="testbox.system.BaseSpec" {
 					expect( dice.count ).toBe( 1 );
 					expect( dice.sides ).toBe( 4 );
 				} );
+
+				it( "returns 0 dice for a blank notation instead of erroring", () => {
+					// A real monster data bug (Elk/Killer Whale/Tiger's seed data,
+					// since fixed) once shipped a weapon attack with an empty
+					// damageDice — resolveAttack() would otherwise crash outright
+					// on every attack from that monster.
+					var dice = service.parseDice( "" );
+					expect( dice.count ).toBe( 0 );
+					expect( dice.sides ).toBe( 0 );
+				} );
 			} );
 
 			describe( "rollSum()", () => {
@@ -1028,6 +1038,82 @@ class extends="testbox.system.BaseSpec" {
 					expect( state.player.position.x ).toBe( 19 );
 					expect( state.log.len() ).toBe( 1 );
 					expect( state.roundHadAction ).toBeTrue();
+				} );
+
+				it( "casts a known damage spell instead of attacking when a slot is available and the target is in range", () => {
+					var state = makeState();
+					state.player.position = { "x": 19, "y": 20 };
+					state.player.modifiers = { "str": 0, "dex": 0, "con": 0, "int": 3, "wis": 0, "cha": 0 };
+					state.player.proficiencyBonus = 2;
+					state.player.spellcastingAbility = "int";
+					state.player.spellSlots = { "1": 1 };
+					state.player.knownLeveledSpells = [
+						{ "type": "attack", "name": "Fire Bolt", "level": 1, "concentration": false, "damageType": "Fire", "diceCount": 1, "diceSides": 10, "rangeSquares": 24 }
+					];
+					service.playerDecideAndAct( state );
+					expect( state.log[ 1 ] ).toInclude( "casts Fire Bolt" );
+					expect( state.actionUsed ).toBeTrue();
+				} );
+
+				it( "falls back to a weapon attack when no spell slot (or Magic Initiate bonus) is available", () => {
+					var state = makeState();
+					state.player.position = { "x": 19, "y": 20 };
+					state.player.modifiers = { "str": 0, "dex": 0, "con": 0, "int": 3, "wis": 0, "cha": 0 };
+					state.player.proficiencyBonus = 2;
+					state.player.spellcastingAbility = "int";
+					state.player.spellSlots = { "1": 0 };
+					state.player.knownLeveledSpells = [
+						{ "type": "attack", "name": "Fire Bolt", "level": 1, "concentration": false, "damageType": "Fire", "diceCount": 1, "diceSides": 10, "rangeSquares": 24 }
+					];
+					service.playerDecideAndAct( state );
+					expect( state.log[ 1 ] ).toInclude( "attacks" );
+					expect( state.log[ 1 ] ).notToInclude( "casts" );
+				} );
+
+				it( "prefers a heal spell over attacking while bloodied, even with a damage spell also known", () => {
+					var state = makeState();
+					state.player.position = { "x": 19, "y": 20 };
+					state.player.hitPoints = 1;
+					state.player.maxHitPoints = 30;
+					state.player.modifiers = { "str": 0, "dex": 0, "con": 0, "int": 0, "wis": 3, "cha": 0 };
+					state.player.proficiencyBonus = 2;
+					state.player.spellcastingAbility = "wis";
+					state.player.spellSlots = { "1": 1 };
+					state.player.knownLeveledSpells = [
+						{ "type": "heal", "name": "Cure Wounds", "level": 1, "concentration": false, "diceCount": 1, "diceSides": 8 },
+						{ "type": "attack", "name": "Fire Bolt", "level": 1, "concentration": false, "damageType": "Fire", "diceCount": 1, "diceSides": 10, "rangeSquares": 24 }
+					];
+					service.playerDecideAndAct( state );
+					expect( state.log[ 1 ] ).toInclude( "casts Cure Wounds" );
+					expect( state.opponent.hitPoints ).toBe( state.opponent.maxHitPoints );
+				} );
+
+				it( "casts a known cantrip when no leveled spell slot is available", () => {
+					var state = makeState();
+					state.player.position = { "x": 19, "y": 20 };
+					state.player.modifiers = { "str": 0, "dex": 0, "con": 0, "int": 3, "wis": 0, "cha": 0 };
+					state.player.proficiencyBonus = 2;
+					state.player.spellcastingAbility = "int";
+					state.player.spellSlots = { "1": 0 };
+					state.player.knownCantrips = [
+						{ "type": "attack", "name": "Fire Bolt", "level": 0, "concentration": false, "damageType": "Fire", "diceCount": 1, "diceSides": 10, "rangeSquares": 24 }
+					];
+					service.playerDecideAndAct( state );
+					expect( state.log[ 1 ] ).toInclude( "casts Fire Bolt" );
+				} );
+
+				it( "does not cast a spell out of range, falling back to a weapon attack instead", () => {
+					var state = makeState();
+					state.player.position = { "x": 19, "y": 20 };
+					state.player.modifiers = { "str": 0, "dex": 0, "con": 0, "int": 3, "wis": 0, "cha": 0 };
+					state.player.proficiencyBonus = 2;
+					state.player.spellcastingAbility = "int";
+					state.player.spellSlots = { "1": 1 };
+					state.player.knownLeveledSpells = [
+						{ "type": "attack", "name": "Fire Bolt", "level": 1, "concentration": false, "damageType": "Fire", "diceCount": 1, "diceSides": 10, "rangeSquares": 0 }
+					];
+					service.playerDecideAndAct( state );
+					expect( state.log[ 1 ] ).toInclude( "attacks" );
 				} );
 
 				it( "hands off to the enemy and resets for the next player turn", () => {
@@ -2191,6 +2277,61 @@ class extends="testbox.system.BaseSpec" {
 					var defender = makeCombatant( 5, 5, { "name": "Target", "armorClass": 1 } );
 					service.resolveAttack( [], attacker, defender, attacker.inventory[ 1 ], false, false, false, 0, {} );
 					expect( structKeyExists( attacker, "vexAdvantageTarget" ) ).toBeFalse();
+				} );
+			} );
+
+			describe( "Multiclassing", () => {
+				describe( "meetsMulticlassPrerequisite()", () => {
+					it( "passes a single-ability prerequisite at exactly 13", () => {
+						expect( service.meetsMulticlassPrerequisite( { "wis": 13 }, "Wisdom" ) ).toBeTrue();
+					} );
+
+					it( "fails a single-ability prerequisite at 12", () => {
+						expect( service.meetsMulticlassPrerequisite( { "wis": 12 }, "Wisdom" ) ).toBeFalse();
+					} );
+
+					it( "passes an ""or"" prerequisite when only one named ability qualifies", () => {
+						expect( service.meetsMulticlassPrerequisite( { "str": 8, "dex": 13 }, "Strength or Dexterity" ) ).toBeTrue();
+					} );
+
+					it( "fails an ""or"" prerequisite when neither named ability qualifies", () => {
+						expect( service.meetsMulticlassPrerequisite( { "str": 8, "dex": 12 }, "Strength or Dexterity" ) ).toBeFalse();
+					} );
+
+					it( "passes an ""and"" prerequisite only when every named ability qualifies", () => {
+						expect( service.meetsMulticlassPrerequisite( { "str": 13, "cha": 13 }, "Strength and Charisma" ) ).toBeTrue();
+					} );
+
+					it( "fails an ""and"" prerequisite when only one named ability qualifies", () => {
+						expect( service.meetsMulticlassPrerequisite( { "str": 13, "cha": 8 }, "Strength and Charisma" ) ).toBeFalse();
+					} );
+
+					it( "never blocks on empty/unrecognized prerequisite text", () => {
+						expect( service.meetsMulticlassPrerequisite( { "str": 1 }, "" ) ).toBeTrue();
+					} );
+				} );
+
+				describe( "multiclassCasterLevel()", () => {
+					it( "is 0 for a character with no caster classes", () => {
+						var player = { "classes": [ { "className": "Fighter", "level": 5 }, { "className": "Rogue", "level": 2 } ] };
+						expect( service.multiclassCasterLevel( player ) ).toBe( 0 );
+					} );
+
+					it( "a Fighter/Wizard combo only counts the Wizard's full levels", () => {
+						var player = { "classes": [ { "className": "Fighter", "level": 3 }, { "className": "Wizard", "level": 2 } ] };
+						expect( service.multiclassCasterLevel( player ) ).toBe( 2 );
+					} );
+
+					it( "halves (rounding down) a half-caster's levels", () => {
+						var player = { "classes": [ { "className": "Paladin", "level": 4 }, { "className": "Ranger", "level": 3 } ] };
+						// floor(4/2) + floor(3/2) = 2 + 1 = 3
+						expect( service.multiclassCasterLevel( player ) ).toBe( 3 );
+					} );
+
+					it( "sums two full-caster classes' whole levels", () => {
+						var player = { "classes": [ { "className": "Wizard", "level": 3 }, { "className": "Cleric", "level": 3 } ] };
+						expect( service.multiclassCasterLevel( player ) ).toBe( 6 );
+					} );
 				} );
 			} );
 

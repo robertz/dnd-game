@@ -178,6 +178,7 @@ class singleton {
 
 			arguments.state.attacksUsedThisTurn += 1;
 			arguments.state.actionUsed = true;
+			arguments.state.roundHadAction = true;
 			playerAttack( arguments.state, choice.weapon, choice.disadvantage );
 		}
 	}
@@ -245,6 +246,12 @@ class singleton {
 		arguments.state.actionUsed = false;
 		arguments.state.bonusActionUsed = false;
 		arguments.state.attacksUsedThisTurn = 0;
+		// Whether either side actually attacked/cast this round — see
+		// autoStep()'s stalemate check, which stops auto-battle rather than
+		// polling forever when neither combatant can reach the other (e.g. a
+		// monster stranded in water, or a maze pocket the player can't path
+		// out of).
+		arguments.state.roundHadAction = false;
 		arguments.state.player.reactionUsed = false;
 		// Sneak Attack (Rogue) and Weapon Mastery — Vex are each limited to
 		// "once per turn"/"until your next attack lands"; both reset here so a
@@ -487,6 +494,7 @@ class singleton {
 			}
 			var packAdvantage = _hasPackTacticsAdvantage( arguments.state, arguments.opponent, player );
 			resolveAttack( arguments.state.log, arguments.opponent, player, choice.weapon, choice.disadvantage, packAdvantage, false, coverBonus( arguments.state, arguments.opponent, player ), arguments.state );
+			arguments.state.roundHadAction = true;
 			_checkDefenderDefeated( arguments.state, arguments.opponent, player, true );
 		}
 	}
@@ -521,6 +529,7 @@ class singleton {
 		var special = arguments.opponent.specialAttack;
 		arguments.opponent.usedSpecialAttack = true;
 		arguments.state.actionUsed = true;
+		arguments.state.roundHadAction = true;
 
 		var saveResult = rollSavingThrow( arguments.player, special.saveAbility, special.saveDC );
 		var damage = rollSum( special.diceCount, special.diceSides ) + special.damageBonus;
@@ -2679,6 +2688,7 @@ class singleton {
 		}
 
 		arguments.state.actionUsed = true;
+		arguments.state.roundHadAction = true;
 		// Dice default to 1d8 (save) / 1d10 (attack), matching the classes'
 		// cantrips — but a monster's own signature cantrip (e.g. a Priest's
 		// Radiant Flame, 2d6) can override with its own diceCount/diceSides.
@@ -2738,6 +2748,7 @@ class singleton {
 		}
 
 		arguments.state.actionUsed = true;
+		arguments.state.roundHadAction = true;
 		if ( arguments.spell.keyExists( "concentration" ) && arguments.spell.concentration ) {
 			_startConcentrating( arguments.state, arguments.attacker, arguments.spell.name );
 		}

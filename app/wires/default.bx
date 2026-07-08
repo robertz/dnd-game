@@ -77,6 +77,8 @@ class extends="cbwire.models.Component" {
 		"actionUsed": false,
 		"bonusActionUsed": false,
 		"attacksUsedThisTurn": 0,
+		"roundHadAction": false,
+		"staleAutoRounds": 0,
 		"gameOver": false,
 		"outcome": "",
 		"log": [],
@@ -1192,6 +1194,7 @@ class extends="cbwire.models.Component" {
 			return;
 		}
 		variables.data.autoBattling = true;
+		variables.data.staleAutoRounds = 0;
 	}
 
 	/**
@@ -1369,6 +1372,18 @@ class extends="cbwire.models.Component" {
 		} else {
 			combatService.runEnemyTurn( variables.data );
 			if ( !variables.data.gameOver ) {
+				// Neither side landed an attack, cast a spell, or used a special
+				// attack this round — usually because a mob is stranded
+				// somewhere the player can't path to (e.g. water-only terrain,
+				// a maze pocket) and vice versa. Left unchecked, wire:poll would
+				// keep ticking autoStep() forever with the fight never able to
+				// resolve, so give up on auto-battle after a few dead rounds
+				// and hand control back to the player.
+				variables.data.staleAutoRounds = variables.data.roundHadAction ? 0 : variables.data.staleAutoRounds + 1;
+				if ( variables.data.staleAutoRounds >= 3 ) {
+					variables.data.autoBattling = false;
+					variables.data.log.prepend( "Auto-battle stopped — no one can reach an opponent. Try moving manually." );
+				}
 				variables.data.round += 1;
 				variables.data.currentTurn = "player";
 				combatService.startNewRound( variables.data );

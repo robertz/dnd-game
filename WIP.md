@@ -558,6 +558,63 @@ keyframes, and is covered by the round-tracking unit test above, but
 actually watching the blink-and-fade animation play in a browser is still
 worth doing before calling this fully done.
 
+**Follow-up, same feature area:** the original animation's triple opacity
+blink read as jarring rather than smooth. Replaced `mob-defeated`'s
+keyframes (`Main.bxm`) with a single-pass sequence — one brief red
+`box-shadow` flash to register the kill, a short hold, then one continuous
+fade + slight shrink + grayscale to invisible — instead of oscillating
+opacity three times.
+
+## 14. Spell slots weren't visible during combat, and unaffordable spells could still be "cast"
+The action bar gave no indication of remaining spell slots, and a caster
+could click "Cast [spell]" for a spell whose level they had no slots left
+for (the attempt would just silently no-op inside `_castLeveledSpellFor()`).
+
+**Resolved.** `CombatService._hasSpellResource()` (previously used only by
+the enemy AI to decide whether casting was worth attempting) was made
+public as `hasSpellResource()` and reused by the wire/template: `default.bxm`
+now renders a chip row above the action bar (one chip per spell level the
+caster has, dimmed once that level is fully spent) and disables a leveled
+spell's "Cast" button (with a tooltip) once `hasSpellResource()` is false
+for its level. Cantrip buttons are untouched since they don't consume slots.
+
+5 new unit tests for `hasSpellResource()`. **Not** visually verified in a
+live browser session, for the same reason as #13 — the change is template
+markup gated by an already-tested pure function, but seeing the chip
+styling and disabled-button state actually render is still worth a quick
+look.
+
+## 15. Auto-battle could get stuck running forever on some maps
+Reported: on some maps, auto-battle stayed active indefinitely even after
+the only reachable mob was defeated. Root cause: a remaining opponent
+positioned somewhere the player's pathfinding can't reach (e.g. water-only
+terrain a land-bound character can't cross, or a maze pocket with no route
+through) — and symmetrically, that opponent often can't reach the player
+either. Neither `playerDecideAndAct()` nor `_runOneOpponentTurn()` treat
+"can't reach" as an error, so the fight just logged "can't reach" every
+round forever with `wire:poll` calling `autoStep()` forever alongside it.
+
+**Resolved.** Added `state.roundHadAction`, set `true` at every point a
+combatant actually lands an attack, casts a spell, or uses a special
+attack (`playerDecideAndAct()`, the opponent weapon-attack loop,
+`_useMonsterSpecialAttack()`, `_castCantripFor()`/`_castLeveledSpellFor()`),
+and reset to `false` at the top of `startNewRound()`. `default.bx`'s
+`autoStep()` now tracks `staleAutoRounds`, incrementing it whenever a full
+round completes with `roundHadAction` still false and resetting it to 0
+otherwise; after 3 consecutive dead rounds it stops auto-battle and logs
+"Auto-battle stopped — no one can reach an opponent. Try moving manually."
+so the player regains manual control instead of it spinning forever. This
+only affects auto-battle's own stopping condition — movement/pathing
+itself (and why a mob ended up somewhere unreachable in the first place)
+is unchanged.
+
+3 new/updated unit tests confirm `roundHadAction` is set on a landed
+attack, stays false on a move-only/no-reach turn, and is reset by
+`startNewRound()`. Not separately live-verified against the exact
+maze-and-water map from the report — the fix is a small, direct extension
+of an already-tested signal, and the full suite passes — but worth
+confirming against that specific map if the stall recurs.
+
 ## Priority if picked back up
 1. #1 — needs a decision (schema extension vs. staying 2014-pure) before any code.
 2. Full mechanics for the remaining ~100 inert class feature names (see

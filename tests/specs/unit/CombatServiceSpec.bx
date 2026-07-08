@@ -1006,21 +1006,28 @@ class extends="testbox.system.BaseSpec" {
 
 				it( "advances the player toward the opponent when not adjacent, without attacking", () => {
 					var state = makeState();
+					state.roundHadAction = false;
 					service.playerDecideAndAct( state );
 					// Distance starts at 19 (Chebyshev), farther than the 6-square move budget.
 					expect( state.movementRemaining ).toBe( 0 );
 					expect( state.player.position.x ).toBe( 7 );
 					expect( state.player.position.y ).toBe( 7 );
 					expect( state.actionUsed ).toBeFalse();
+					// Confirms the auto-battle stalemate check (see the wire's
+					// autoStep()) can tell "still closing the distance" apart from
+					// an actual attack.
+					expect( state.roundHadAction ).toBeFalse();
 				} );
 
 				it( "attacks instead of moving once adjacent", () => {
 					var state = makeState();
 					state.player.position = { "x": 19, "y": 20 };
+					state.roundHadAction = false;
 					service.playerDecideAndAct( state );
 					expect( state.actionUsed ).toBeTrue();
 					expect( state.player.position.x ).toBe( 19 );
 					expect( state.log.len() ).toBe( 1 );
+					expect( state.roundHadAction ).toBeTrue();
 				} );
 
 				it( "hands off to the enemy and resets for the next player turn", () => {
@@ -1260,6 +1267,16 @@ class extends="testbox.system.BaseSpec" {
 					var state = { "player": player, "opponents": [], "movementRemaining": 0, "actionUsed": false, "bonusActionUsed": false, "attacksUsedThisTurn": 0 };
 					service.startNewRound( state );
 					expect( structKeyExists( player, "gameClockSeconds" ) ).toBeFalse();
+				} );
+
+				it( "resets roundHadAction (used by the wire's auto-battle stalemate check)", () => {
+					var player = makeCombatant( 1, 1 );
+					var state = {
+						"player": player, "opponents": [], "movementRemaining": 0,
+						"actionUsed": false, "bonusActionUsed": false, "attacksUsedThisTurn": 0, "roundHadAction": true
+					};
+					service.startNewRound( state );
+					expect( state.roundHadAction ).toBeFalse();
 				} );
 			} );
 

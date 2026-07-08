@@ -7,24 +7,165 @@ class singleton {
 
 	property name="combatService" inject="CombatService";
 
-	// Backgrounds grant a specific feat, per "Character Origin" (Step 2).
-	// Only the feat's name is recorded here — Acolyte/Sage's "Magic Initiate"
-	// spell-list choice (Cleric vs. Wizard) isn't tracked, since this app has
-	// no spellcasting system for it to feed into.
-	BACKGROUND_FEATS = {
-		"Acolyte": "Magic Initiate",
-		"Criminal": "Alert",
-		"Sage": "Magic Initiate",
-		"Soldier": "Savage Attacker"
-	};
+	ABILITY_BONUS_COLUMNS = { "str": "str_bonus", "dex": "dex_bonus", "con": "con_bonus", "int": "int_bonus", "wis": "wis_bonus", "cha": "cha_bonus" };
 
-	// Species base Speed, per their SRD stat blocks. Every other species is 30 ft.
-	SPECIES_SPEED = { "Goliath": 35 };
+	/**
+	 * Returns every base species (no parent_species_id) plus its subraces,
+	 * for the Origin step's species picker: [{ name, subraces: [name, ...] }].
+	 */
+	function listSpeciesOptions() {
+		var baseRows = queryExecute(
+			"SELECT id, name FROM species WHERE parent_species_id IS NULL ORDER BY name",
+			{}, { datasource: "gameserver" }
+		);
+		var subRows = queryExecute(
+			"SELECT parent_species_id, name FROM species WHERE parent_species_id IS NOT NULL ORDER BY name",
+			{}, { datasource: "gameserver" }
+		);
 
-	// Species-derived flat Hit Point maximum bonus. Dwarven Toughness (+1 HP
-	// at level 1, +1 more per level thereafter) is applied here at creation;
-	// CombatService applies the "+1 more per level" half during level-ups.
-	SPECIES_HP_BONUS = { "Dwarf": 1 };
+		var result = [];
+		for ( var baseRow in baseRows ) {
+			var subraces = [];
+			for ( var subRow in subRows ) {
+				if ( subRow.parent_species_id == baseRow.id ) {
+					subraces.append( subRow.name );
+				}
+			}
+			result.append( { "name": baseRow.name, "subraces": subraces } );
+		}
+		return result;
+	}
+
+	/**
+	 * Returns every background name, for the Origin step's background picker.
+	 */
+	function listBackgroundOptions() {
+		var rows = queryExecute( "SELECT name FROM backgrounds ORDER BY name", {}, { datasource: "gameserver" } );
+		var result = [];
+		for ( var row in rows ) {
+			result.append( row.name );
+		}
+		return result;
+	}
+
+	/**
+	 * Resolves a species (or subrace, e.g. "Hill Dwarf") to its full mechanical
+	 * summary, merging in the parent race's data when given a subrace name —
+	 * a Hill Dwarf gets both Dwarf's ability bonuses/traits/resistances and
+	 * its own on top. Returns a struct with zeroed/empty defaults (speed 30,
+	 * no bonuses, no traits) for a blank or unrecognized name, so an old
+	 * character's species (or none at all) never breaks character creation
+	 * or the sheet.
+	 */
+	function resolveSpecies( name ) {
+		var summary = {
+			"name": arguments.name, "size": "", "speed": 30, "darkvision": 0,
+			"abilityBonuses": { "str": 0, "dex": 0, "con": 0, "int": 0, "wis": 0, "cha": 0 },
+			"choiceAbilityCount": 0, "choiceAbilityBonus": 0, "choiceSkillCount": 0,
+			"languages": [], "bonusLanguageChoice": false,
+			"resistances": [], "traits": [], "description": ""
+		};
+		if ( !len( arguments.name ) ) {
+			return summary;
+		}
+
+		var rows = queryExecute(
+			"SELECT s.*, p.id AS parent_id, p.size AS parent_size, p.speed AS parent_speed,
+			        p.darkvision AS parent_darkvision, p.str_bonus AS parent_str_bonus,
+			        p.dex_bonus AS parent_dex_bonus, p.con_bonus AS parent_con_bonus,
+			        p.int_bonus AS parent_int_bonus, p.wis_bonus AS parent_wis_bonus,
+			        p.cha_bonus AS parent_cha_bonus, p.choice_ability_count AS parent_choice_ability_count,
+			        p.choice_ability_bonus AS parent_choice_ability_bonus, p.languages AS parent_languages,
+			        p.bonus_language_choice AS parent_bonus_language_choice, p.resistances AS parent_resistances,
+			        p.description AS parent_description
+			 FROM species s LEFT JOIN species p ON p.id = s.parent_species_id
+			 WHERE s.name = :name",
+			{ "name": arguments.name },
+			{ datasource: "gameserver" }
+		);
+		if ( rows.recordCount == 0 ) {
+			return summary;
+		}
+
+		var hasParent = !isNull( rows.parent_id[ 1 ] );
+		summary.size = len( rows.size[ 1 ] ) ? rows.size[ 1 ] : ( hasParent ? rows.parent_size[ 1 ] : "" );
+		summary.speed = !isNull( rows.speed[ 1 ] ) ? rows.speed[ 1 ] : ( hasParent ? rows.parent_speed[ 1 ] : 30 );
+		summary.darkvision = !isNull( rows.darkvision[ 1 ] ) ? rows.darkvision[ 1 ] : ( hasParent ? rows.parent_darkvision[ 1 ] : 0 );
+		for ( var ability in ABILITY_BONUS_COLUMNS ) {
+			var column = ABILITY_BONUS_COLUMNS[ ability ];
+			summary.abilityBonuses[ ability ] = rows[ column ][ 1 ] + ( hasParent ? rows[ "parent_" & column ][ 1 ] : 0 );
+		}
+		summary.choiceAbilityCount = rows.choice_ability_count[ 1 ] + ( hasParent ? rows.parent_choice_ability_count[ 1 ] : 0 );
+		summary.choiceAbilityBonus = max( rows.choice_ability_bonus[ 1 ], hasParent ? rows.parent_choice_ability_bonus[ 1 ] : 0 );
+		var languagesText = len( rows.languages[ 1 ] ) ? rows.languages[ 1 ] : ( hasParent ? rows.parent_languages[ 1 ] : "" );
+		if ( len( languagesText ) ) {
+			for ( var language in listToArray( languagesText, "," ) ) {
+				summary.languages.append( trim( language ) );
+			}
+		}
+		summary.bonusLanguageChoice = rows.bonus_language_choice[ 1 ] || ( hasParent && rows.parent_bonus_language_choice[ 1 ] );
+		var resistanceNames = [];
+		for ( var resistanceList in [ rows.resistances[ 1 ], hasParent ? rows.parent_resistances[ 1 ] : "" ] ) {
+			if ( len( resistanceList ) ) {
+				for ( var resistance in listToArray( resistanceList, "," ) ) {
+					resistanceNames.append( trim( resistance ) );
+				}
+			}
+		}
+		summary.resistances = resistanceNames;
+		summary.description = rows.description[ 1 ];
+
+		var speciesIds = [ rows.id[ 1 ] ];
+		if ( hasParent ) {
+			speciesIds.append( rows.parent_id[ 1 ] );
+		}
+		var traitRows = queryExecute(
+			"SELECT species_id, name, description FROM species_traits
+			 WHERE species_id IN (#arrayToList( speciesIds )#) ORDER BY species_id, sort_order",
+			{}, { datasource: "gameserver" }
+		);
+		for ( var traitRow in traitRows ) {
+			summary.traits.append( { "name": traitRow.name, "description": traitRow.description } );
+		}
+
+		var traitNames = [];
+		for ( var trait in summary.traits ) {
+			traitNames.append( trait.name );
+		}
+		summary.choiceSkillCount = combatService.speciesSkillChoiceCount( traitNames );
+
+		return summary;
+	}
+
+	/**
+	 * Looks up one background's full detail, for the Origin step's detail
+	 * panel and the character sheet. Returns a struct with empty defaults for
+	 * a blank or unrecognized name.
+	 */
+	function getBackgroundDetail( name ) {
+		var detail = {
+			"name": arguments.name, "description": "", "skillProficiencies": "", "toolProficiencies": "",
+			"bonusLanguageCount": 0, "equipmentText": "", "featureName": "", "featureDescription": ""
+		};
+		if ( !len( arguments.name ) ) {
+			return detail;
+		}
+		var rows = queryExecute(
+			"SELECT * FROM backgrounds WHERE name = :name",
+			{ "name": arguments.name }, { datasource: "gameserver" }
+		);
+		if ( rows.recordCount == 0 ) {
+			return detail;
+		}
+		detail.description = rows.description[ 1 ];
+		detail.skillProficiencies = len( rows.skill_proficiencies[ 1 ] ) ? rows.skill_proficiencies[ 1 ] : "";
+		detail.toolProficiencies = len( rows.tool_proficiencies[ 1 ] ) ? rows.tool_proficiencies[ 1 ] : "";
+		detail.bonusLanguageCount = rows.bonus_language_count[ 1 ];
+		detail.equipmentText = rows.equipment_text[ 1 ];
+		detail.featureName = len( rows.feature_name[ 1 ] ) ? rows.feature_name[ 1 ] : "";
+		detail.featureDescription = len( rows.feature_description[ 1 ] ) ? rows.feature_description[ 1 ] : "";
+		return detail;
+	}
 
 	/**
 	 * Returns a summary of every class, for a character creation UI to list
@@ -32,7 +173,7 @@ class singleton {
 	 */
 	function listClasses() {
 		return queryExecute(
-			"SELECT id, name, primary_ability, hit_die, saving_throw_proficiencies, starting_equipment
+			"SELECT id, name, primary_ability, hit_die, saving_throw_proficiencies, starting_equipment, skill_proficiencies
 			 FROM classes ORDER BY name",
 			{}, { datasource: "gameserver" }
 		);
@@ -62,8 +203,25 @@ class singleton {
 	 * @name Character name.
 	 * @classId classes.id.
 	 * @str,dex,con,intScore,wis,cha The six ability scores.
-	 * @species,background,alignment Flavor choices from character creation
-	 *  Steps 2 and 4 — recorded on the sheet, not mechanically modeled.
+	 * @species,alignment Flavor choices from character creation Steps 2 and 4.
+	 *  Species is mechanical: resolveSpecies() applies its ability bonuses,
+	 *  Speed, and (Dwarven Toughness) Hit Point bonus below. Alignment is
+	 *  recorded on the sheet only.
+	 * @background Character Origin's background choice — resolveSpecies()'s
+	 *  counterpart, getBackgroundDetail(), is display-only (skills/tools/
+	 *  feature text): no background in the current dataset grants a feat or
+	 *  other combat-mechanical effect.
+	 * @choiceAbilities Ability keys (e.g. ["str","cha"]) the player assigned
+	 *  the species' "N abilities of your choice" bonus to (e.g. Half-Elf) —
+	 *  must have exactly resolveSpecies(species).choiceAbilityCount entries;
+	 *  ignored otherwise.
+	 * @classSkills The skills the player picked from the class's
+	 *  skill_proficiencies choice (e.g. a Fighter's "Choose 2 of Athletics,
+	 *  Insight, ..."; see CombatService.parseClassSkillChoice()) — stored
+	 *  verbatim, not validated against the class's option list here.
+	 * @fightingStyle The player's chosen Fighting Style feat name (see
+	 *  classFightingStyleAtCreation()) — only meaningful for a class that
+	 *  grants one at level 1 (Fighter); ignored otherwise.
 	 * @level Starting level (defaults to 1).
 	 * @knownCantrip,knownSpell The player's chosen cantrip/1st-level spell
 	 *  names from character creation's Spells step (full casters only) —
@@ -73,7 +231,7 @@ class singleton {
 	function createCharacter(
 		name, classId, str, dex, con, intScore, wis, cha,
 		species = "", background = "", alignment = "", level = 1,
-		knownCantrip = "", knownSpell = ""
+		knownCantrip = "", knownSpell = "", choiceAbilities = [], classSkills = [], fightingStyle = ""
 	) {
 		var classRows = queryExecute(
 			"SELECT hit_die FROM classes WHERE id = :classId",
@@ -84,17 +242,31 @@ class singleton {
 			throw( type = "ClassNotFound", message = "No class with id #arguments.classId#." );
 		}
 
+		var speciesSummary = resolveSpecies( arguments.species );
+		var abilityScores = { "str": arguments.str, "dex": arguments.dex, "con": arguments.con, "int": arguments.intScore, "wis": arguments.wis, "cha": arguments.cha };
+		for ( var ability in abilityScores ) {
+			abilityScores[ ability ] += speciesSummary.abilityBonuses[ ability ];
+			if ( arrayFindNoCase( arguments.choiceAbilities, ability ) > 0 ) {
+				abilityScores[ ability ] += speciesSummary.choiceAbilityBonus;
+			}
+		}
+
 		var dieSize = int( reReplace( classRows.hit_die[ 1 ], "[^0-9]*(\d+).*", "\1" ) );
-		var speciesHpBonus = SPECIES_HP_BONUS.keyExists( arguments.species ) ? SPECIES_HP_BONUS[ arguments.species ] : 0;
-		var maxHitPoints = dieSize + combatService.abilityModifier( arguments.con ) + speciesHpBonus;
-		var armorClass = 10 + combatService.abilityModifier( arguments.dex );
+		var hasDwarvenToughness = false;
+		for ( var trait in speciesSummary.traits ) {
+			if ( trait.name == "Dwarven Toughness" ) {
+				hasDwarvenToughness = true;
+				break;
+			}
+		}
+		var maxHitPoints = dieSize + combatService.abilityModifier( abilityScores.con ) + ( hasDwarvenToughness ? 1 : 0 );
+		var armorClass = 10 + combatService.abilityModifier( abilityScores.dex );
 		var proficiencyBonus = combatService.proficiencyBonusForLevel( arguments.level );
-		var speed = SPECIES_SPEED.keyExists( arguments.species ) ? SPECIES_SPEED[ arguments.species ] : 30;
 
 		queryExecute(
 			"INSERT INTO characters
-			 (name, class_id, species, background, alignment, level, str, dex, con, int_score, wis, cha, proficiency_bonus, armor_class, hit_points, max_hit_points, speed, known_cantrip, known_spell)
-			 VALUES (:name, :classId, :species, :background, :alignment, :level, :str, :dex, :con, :intScore, :wis, :cha, :proficiencyBonus, :armorClass, :hitPoints, :maxHitPoints, :speed, :knownCantrip, :knownSpell)",
+			 (name, class_id, species, background, alignment, level, str, dex, con, int_score, wis, cha, proficiency_bonus, armor_class, hit_points, max_hit_points, speed, known_cantrips, known_spells, chosen_skill_proficiencies)
+			 VALUES (:name, :classId, :species, :background, :alignment, :level, :str, :dex, :con, :intScore, :wis, :cha, :proficiencyBonus, :armorClass, :hitPoints, :maxHitPoints, :speed, :knownCantrip, :knownSpell, :chosenSkillProficiencies)",
 			{
 				"name": arguments.name,
 				"classId": arguments.classId,
@@ -102,84 +274,112 @@ class singleton {
 				"background": len( arguments.background ) ? arguments.background : javaCast( "null", 0 ),
 				"alignment": len( arguments.alignment ) ? arguments.alignment : javaCast( "null", 0 ),
 				"level": arguments.level,
-				"str": arguments.str, "dex": arguments.dex, "con": arguments.con,
-				"intScore": arguments.intScore, "wis": arguments.wis, "cha": arguments.cha,
+				"str": abilityScores.str, "dex": abilityScores.dex, "con": abilityScores.con,
+				"intScore": abilityScores.int, "wis": abilityScores.wis, "cha": abilityScores.cha,
 				"proficiencyBonus": proficiencyBonus,
 				"armorClass": armorClass,
 				"hitPoints": maxHitPoints,
 				"maxHitPoints": maxHitPoints,
-				"speed": speed,
+				"speed": speciesSummary.speed,
 				"knownCantrip": len( arguments.knownCantrip ) ? arguments.knownCantrip : javaCast( "null", 0 ),
-				"knownSpell": len( arguments.knownSpell ) ? arguments.knownSpell : javaCast( "null", 0 )
+				"knownSpell": len( arguments.knownSpell ) ? arguments.knownSpell : javaCast( "null", 0 ),
+				"chosenSkillProficiencies": arguments.classSkills.len() ? arrayToList( arguments.classSkills, "," ) : javaCast( "null", 0 )
 			},
 			{ datasource: "gameserver", result: "insertResult" }
 		);
 
 		var characterId = insertResult.generatedKey;
 		assignStartingEquipment( characterId );
-		_grantBackgroundFeat( characterId, arguments.background );
-		_grantLevelOneFightingStyle( characterId, arguments.classId );
+		_grantLevelOneClassFeatures( characterId, arguments.classId );
+		if ( len( arguments.fightingStyle ) && classFightingStyleAtCreation( arguments.classId ) ) {
+			combatService.grantFightingStyle( characterId, arguments.fightingStyle );
+		}
 		return characterId;
 	}
 
 	/**
-	 * Fighter is the only class that grants a Fighting Style at level 1 (the
-	 * level a new character starts at); Paladin/Ranger grant theirs at level
-	 * 2, handled by CombatService._grantNewFeatures() during a later level-up.
-	 * Auto-picks a style via CombatService.grantFightingStyle(), since this
-	 * app has no UI for the player to choose one.
+	 * Records every level-1 class feature (Rage, Second Wind, Spellcasting,
+	 * Sneak Attack, Weapon Mastery, etc.) against a freshly created
+	 * character. Mirrors what CombatService._grantNewFeatures() does for a
+	 * level-up, but a brand-new character starts at level 1 without ever
+	 * "leveling up" into it, so nothing else ever ran this for a character's
+	 * starting level — every level-1 class feature was recorded nowhere
+	 * until this existed. Subclass features are still excluded (no subclass
+	 * unlocks at level 1 in the current dataset — every class unlocks at
+	 * level 3, granted during level-up instead).
 	 */
-	private function _grantLevelOneFightingStyle( characterId, classId ) {
-		var featureRows = queryExecute(
+	private function _grantLevelOneClassFeatures( characterId, classId ) {
+		var rows = queryExecute(
+			"SELECT id FROM class_features WHERE class_id = :classId AND level = 1 AND subclass_id IS NULL",
+			{ "classId": arguments.classId },
+			{ datasource: "gameserver" }
+		);
+		for ( var row in rows ) {
+			queryExecute(
+				"INSERT IGNORE INTO character_features (character_id, class_feature_id) VALUES (:characterId, :featureId)",
+				{ "characterId": arguments.characterId, "featureId": row.id },
+				{ datasource: "gameserver" }
+			);
+		}
+	}
+
+	/**
+	 * True if `classId` grants a Fighting Style at level 1 (only Fighter, in
+	 * the current dataset) — the character creation wizard uses this to
+	 * decide whether to show the Fighting Style picker on the Class step.
+	 * Paladin/Ranger grant theirs at level 2, and Fighter grants a second at
+	 * level 7 — both handled later via CombatService.pendingFightingStyleChoice()
+	 * on the character sheet, since they happen after creation.
+	 */
+	function classFightingStyleAtCreation( classId ) {
+		var rows = queryExecute(
 			"SELECT 1 FROM class_features WHERE class_id = :classId AND level = 1 AND name = 'Fighting Style'",
 			{ "classId": arguments.classId },
 			{ datasource: "gameserver" }
 		);
-		if ( featureRows.recordCount == 0 ) {
-			return;
-		}
-
-		var inventoryRows = queryExecute(
-			"SELECT ci.equipped, ci.category, w.properties
-			 FROM character_inventory ci JOIN weapons w ON w.id = ci.weapon_id
-			 WHERE ci.character_id = :characterId",
-			{ "characterId": arguments.characterId },
-			{ datasource: "gameserver" }
-		);
-		var inventory = [];
-		for ( var row in inventoryRows ) {
-			arrayAppend( inventory, {
-				"equipped": row.equipped,
-				"category": row.category,
-				"properties": listToArray( row.properties )
-			} );
-		}
-		combatService.grantFightingStyle( arguments.characterId, [], inventory );
+		return rows.recordCount > 0;
 	}
 
 	/**
-	 * Grants the feat tied to a character's background (e.g. Soldier ->
-	 * Savage Attacker), if any. Safe to call more than once (INSERT IGNORE).
+	 * Grants a player-chosen Fighting Style feat — the character creation
+	 * wizard's counterpart to a level-up's pendingFightingStyleChoice()/
+	 * chooseFightingStyle() flow.
 	 */
-	private function _grantBackgroundFeat( characterId, background ) {
-		if ( !BACKGROUND_FEATS.keyExists( arguments.background ) ) {
-			return;
-		}
+	function chooseFightingStyle( characterId, styleName ) {
+		return combatService.grantFightingStyle( arguments.characterId, arguments.styleName );
+	}
 
-		var featRows = queryExecute(
-			"SELECT id FROM feats WHERE name = :name",
-			{ "name": BACKGROUND_FEATS[ arguments.background ] },
-			{ datasource: "gameserver" }
-		);
-		if ( featRows.recordCount == 0 ) {
-			return;
-		}
+	/**
+	 * Assigns a character's subclass — the character sheet's "Choose Your
+	 * Subclass" panel's action (see CombatService.pendingSubclassChoice()/
+	 * chooseSubclass()). Never forced: the panel keeps reappearing until the
+	 * player picks one.
+	 */
+	function chooseSubclass( characterId, subclassId ) {
+		combatService.chooseSubclass( arguments.characterId, arguments.subclassId );
+	}
 
-		queryExecute(
-			"INSERT IGNORE INTO character_feats (character_id, feat_id) VALUES (:characterId, :featId)",
-			{ "characterId": arguments.characterId, "featId": featRows.id[ 1 ] },
-			{ datasource: "gameserver" }
-		);
+	/**
+	 * Learns a new cantrip/leveled spell — the character sheet's "Learn a
+	 * Cantrip"/"Learn a Spell" panel's action (see
+	 * CombatService.pendingCantripChoice()/pendingSpellChoice()). Never
+	 * forced: the panel keeps reappearing until the player picks one.
+	 */
+	function chooseCantrip( characterId, cantripName ) {
+		combatService.chooseCantrip( arguments.characterId, arguments.cantripName );
+	}
+
+	function chooseSpell( characterId, spellName ) {
+		combatService.chooseSpell( arguments.characterId, arguments.spellName );
+	}
+
+	/**
+	 * Grants Expertise in a skill — the character sheet's "Choose Expertise"
+	 * panel's action (see CombatService.pendingExpertiseChoice()/
+	 * chooseExpertise()).
+	 */
+	function chooseExpertise( characterId, skillName ) {
+		combatService.chooseExpertise( arguments.characterId, arguments.skillName );
 	}
 
 	/**
@@ -274,9 +474,11 @@ class singleton {
 			"SELECT c.id, c.name, c.species, c.background, c.alignment, c.level,
 			        c.str, c.dex, c.con, c.int_score, c.wis, c.cha,
 			        c.proficiency_bonus, c.armor_class, c.max_hit_points, c.speed, c.gold,
-			        c.experience_points, c.known_cantrip, c.known_spell,
-			        cl.name AS className, cl.hit_die, cl.saving_throw_proficiencies
+			        c.experience_points, c.known_cantrips, c.known_spells, c.chosen_skill_proficiencies,
+			        c.expertise_skills,
+			        cl.name AS className, cl.hit_die, cl.saving_throw_proficiencies, sc.name AS subclassName
 			 FROM characters c JOIN classes cl ON cl.id = c.class_id
+			 LEFT JOIN subclasses sc ON sc.id = c.subclass_id
 			 WHERE c.id = :characterId",
 			{ "characterId": arguments.characterId },
 			{ datasource: "gameserver" }
@@ -291,7 +493,9 @@ class singleton {
 			"className": row.className[ 1 ],
 			"hitDie": row.hit_die[ 1 ],
 			"species": len( row.species[ 1 ] ) ? row.species[ 1 ] : "",
+			"speciesDetail": resolveSpecies( len( row.species[ 1 ] ) ? row.species[ 1 ] : "" ),
 			"background": len( row.background[ 1 ] ) ? row.background[ 1 ] : "",
+			"backgroundDetail": getBackgroundDetail( len( row.background[ 1 ] ) ? row.background[ 1 ] : "" ),
 			"alignment": len( row.alignment[ 1 ] ) ? row.alignment[ 1 ] : "",
 			"level": row.level[ 1 ],
 			"abilityScores": {
@@ -313,8 +517,34 @@ class singleton {
 			"gold": row.gold[ 1 ],
 			"experiencePoints": row.experience_points[ 1 ],
 			"savingThrowProficiencies": listToArray( row.saving_throw_proficiencies[ 1 ], " and ", false, true ),
-			"knownCantripName": len( row.known_cantrip[ 1 ] ) ? row.known_cantrip[ 1 ] : "",
-			"knownSpellName": len( row.known_spell[ 1 ] ) ? row.known_spell[ 1 ] : "",
+			// Background + species traits (see CombatService.resolveSkillProficiencies())
+			// plus the class skills the player picked at creation (chosen_skill_proficiencies).
+			"skillProficiencies": _mergeSkills(
+				combatService.resolveSkillProficiencies(
+					len( row.species[ 1 ] ) ? row.species[ 1 ] : "",
+					len( row.background[ 1 ] ) ? row.background[ 1 ] : ""
+				),
+				len( row.chosen_skill_proficiencies[ 1 ] ) ? listToArray( row.chosen_skill_proficiencies[ 1 ], "," ) : []
+			),
+			// Expertise (Rogue 1, Bard 2, Ranger 9): doubles Proficiency Bonus
+			// for these skills — see CombatService.pendingExpertiseChoice()/
+			// chooseExpertise(); read by skillCheckBonus() via _skillProficiencyBonus().
+			"expertiseSkills": len( row.expertise_skills[ 1 ] ) ? listToArray( row.expertise_skills[ 1 ] ) : [],
+			// Full list of known cantrips/leveled spells (starting choice plus
+			// anything learned since via learnCantrip()/learnSpell()).
+			"knownCantripNames": len( row.known_cantrips[ 1 ] ) ? listToArray( row.known_cantrips[ 1 ] ) : [],
+			"knownSpellNames": len( row.known_spells[ 1 ] ) ? listToArray( row.known_spells[ 1 ] ) : [],
+			// The original starting choice (index 1) — the Spells tab's
+			// "change your starting cantrip/spell" picker only ever edits this
+			// slot; anything learned later is added, never replaced, via the
+			// pending cantrip/spell choice panel instead.
+			"knownCantripName": len( row.known_cantrips[ 1 ] ) ? listToArray( row.known_cantrips[ 1 ] )[ 1 ] : "",
+			"knownSpellName": len( row.known_spells[ 1 ] ) ? listToArray( row.known_spells[ 1 ] )[ 1 ] : "",
+			// { pending, availableStyles } — see CombatService.pendingFightingStyleChoice().
+			"fightingStyleChoice": combatService.pendingFightingStyleChoice( arguments.characterId ),
+			"subclassName": isNull( row.subclassName[ 1 ] ) ? "" : row.subclassName[ 1 ],
+			// { pending, availableSubclasses } — see CombatService.pendingSubclassChoice().
+			"subclassChoice": combatService.pendingSubclassChoice( arguments.characterId ),
 			"features": [],
 			"feats": []
 		};
@@ -764,19 +994,59 @@ class singleton {
 	}
 
 	/**
-	 * Persists a full-caster character's chosen cantrip and 1st-level spell names.
+	 * Replaces a full-caster character's starting cantrip/1st-level spell
+	 * choice (the first entry of known_cantrips/known_spells) with a new
+	 * pick. Any additional cantrips/spells learned since character creation
+	 * (via learnCantrip()/learnSpell()) occupy later list entries and are
+	 * left untouched.
 	 */
 	function updateSpellChoices( characterId, knownCantrip, knownSpell ) {
+		var current = queryExecute(
+			"SELECT known_cantrips, known_spells FROM characters WHERE id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		var cantrips = len( current.known_cantrips[ 1 ] ) ? listToArray( current.known_cantrips[ 1 ] ) : [];
+		var spells = len( current.known_spells[ 1 ] ) ? listToArray( current.known_spells[ 1 ] ) : [];
+		if ( len( arguments.knownCantrip ) ) {
+			if ( cantrips.len() ) {
+				cantrips[ 1 ] = arguments.knownCantrip;
+			} else {
+				cantrips.append( arguments.knownCantrip );
+			}
+		}
+		if ( len( arguments.knownSpell ) ) {
+			if ( spells.len() ) {
+				spells[ 1 ] = arguments.knownSpell;
+			} else {
+				spells.append( arguments.knownSpell );
+			}
+		}
 		queryExecute(
-			"UPDATE characters SET known_cantrip = :knownCantrip, known_spell = :knownSpell
+			"UPDATE characters SET known_cantrips = :knownCantrips, known_spells = :knownSpells
 			 WHERE id = :characterId",
 			{
 				"characterId": arguments.characterId,
-				"knownCantrip": len( arguments.knownCantrip ) ? arguments.knownCantrip : javaCast( "null", 0 ),
-				"knownSpell": len( arguments.knownSpell ) ? arguments.knownSpell : javaCast( "null", 0 )
+				"knownCantrips": cantrips.len() ? arrayToList( cantrips ) : javaCast( "null", 0 ),
+				"knownSpells": spells.len() ? arrayToList( spells ) : javaCast( "null", 0 )
 			},
 			{ datasource: "gameserver" }
 		);
+	}
+
+	/**
+	 * Unions two skill-name arrays without duplicates, preserving `base`'s
+	 * order first. Used to combine background/species-derived skills with a
+	 * character's chosen class skills for display.
+	 */
+	private function _mergeSkills( base, extra ) {
+		var merged = duplicate( arguments.base );
+		for ( var skill in arguments.extra ) {
+			if ( arrayFindNoCase( merged, skill ) == 0 ) {
+				merged.append( skill );
+			}
+		}
+		return merged;
 	}
 
 	/**

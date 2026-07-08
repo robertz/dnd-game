@@ -3,15 +3,40 @@
 	<h1 class="fantasy-heading">Create Your Character</h1>
 
 	<bx:if len( createdCharacterId )>
+		<bx:set createdSheet = createdCharacterSheet()>
 		<p class="encounter-banner encounter-banner-victory">
 			#characterName# the #selectedClassName( classes, selectedClassId )# has been created (character id #createdCharacterId#)!
 		</p>
 		<div class="stat-card">
 			<h2 class="fantasy-heading">#characterName#</h2>
-			<p class="stat-subtitle">#selectedSpecies# #selectedClassName( classes, selectedClassId )# — #selectedBackground# — #selectedAlignment#</p>
+			<p class="stat-subtitle">#effectiveSpeciesName()# #selectedClassName( classes, selectedClassId )# — #selectedBackground# — #selectedAlignment#</p>
 			<ul class="stat-list">
-				<li><strong>STR</strong> #assignedScores.str# &nbsp; <strong>DEX</strong> #assignedScores.dex# &nbsp; <strong>CON</strong> #assignedScores.con#</li>
-				<li><strong>INT</strong> #assignedScores.int# &nbsp; <strong>WIS</strong> #assignedScores.wis# &nbsp; <strong>CHA</strong> #assignedScores.cha#</li>
+				<li><strong>STR</strong> #createdSheet.abilityScores.str# &nbsp; <strong>DEX</strong> #createdSheet.abilityScores.dex# &nbsp; <strong>CON</strong> #createdSheet.abilityScores.con#</li>
+				<li><strong>INT</strong> #createdSheet.abilityScores.int# &nbsp; <strong>WIS</strong> #createdSheet.abilityScores.wis# &nbsp; <strong>CHA</strong> #createdSheet.abilityScores.cha#</li>
+				<bx:if createdSheet.skillProficiencies.len()>
+					<li>
+						<strong>Skill Proficiencies</strong>
+						<bx:loop array="#createdSheet.skillProficiencies#" index="sheetSkill">
+							<span class="skill-chip" title="#skillAbility( sheetSkill )# — #modLabel( skillCheckBonus( sheetSkill ) )# to #sheetSkill# checks">#sheetSkill#</span>
+						</bx:loop>
+					</li>
+				</bx:if>
+				<bx:if createdSheet.feats.len()>
+					<li>
+						<strong>Feats</strong>
+						<bx:loop array="#createdSheet.feats#" index="sheetFeat">
+							<span class="skill-chip" title="#featDescription( sheetFeat )#">#sheetFeat#</span>
+						</bx:loop>
+					</li>
+				</bx:if>
+				<bx:if createdSheet.features.len()>
+					<li>
+						<strong>Features</strong>
+						<bx:loop array="#createdSheet.features#" index="sheetFeature">
+							<span class="skill-chip" title="#featureDescription( sheetFeature.name )#">Lv #sheetFeature.level# — #sheetFeature.name#</span>
+						</bx:loop>
+					</li>
+				</bx:if>
 			</ul>
 		</div>
 		<div class="turn-actions">
@@ -39,6 +64,34 @@
 					</div>
 				</bx:loop>
 			</div>
+
+			<bx:if len( selectedClassId )>
+				<bx:set skillChoice = classSkillChoiceFor( selectedClassId )>
+				<bx:if skillChoice.count gt 0>
+					<p class="stat-subtitle">Choose #skillChoice.count# Skill Proficienc#( skillChoice.count == 1 ? "y" : "ies" )#</p>
+					<div class="creation-grid">
+						<bx:loop array="#skillChoice.options#" index="skillOption">
+							<div
+								class="creation-card creation-card-compact#( arrayFindNoCase( selectedClassSkills, skillOption ) ? ' creation-card-selected' : '' )#"
+								wire:click="toggleClassSkill('#skillOption#')"
+								title="#skillAbility( skillOption )# — adds your Proficiency Bonus to #skillOption# checks"
+							>#skillOption#</div>
+						</bx:loop>
+					</div>
+				</bx:if>
+				<bx:if hasFightingStyleAtCreation( selectedClassId )>
+					<p class="stat-subtitle">Choose a Fighting Style</p>
+					<div class="creation-grid">
+						<bx:loop array="#fightingStyleNames()#" index="styleOption">
+							<div
+								class="creation-card creation-card-compact#( selectedFightingStyle == styleOption ? ' creation-card-selected' : '' )#"
+								wire:click="selectFightingStyle('#styleOption#')"
+								title="#featDescription( styleOption )#"
+							>#styleOption#</div>
+						</bx:loop>
+					</div>
+				</bx:if>
+			</bx:if>
 		</bx:if>
 
 		<bx:if step == 2>
@@ -47,18 +100,73 @@
 			<div class="creation-grid">
 				<bx:loop array="#speciesOptions#" index="opt">
 					<div
-						class="creation-card creation-card-compact#( selectedSpecies == opt ? ' creation-card-selected' : '' )#"
-						wire:click="selectSpecies('#opt#')"
-					>#opt#</div>
+						class="creation-card creation-card-compact#( selectedSpecies == opt.name ? ' creation-card-selected' : '' )#"
+						wire:click="selectSpecies('#opt.name#')"
+					>#opt.name#</div>
 				</bx:loop>
 			</div>
-				<bx:if len( selectedSpecies )>
-					<div class="stat-card creation-detail">
-						<h3 class="fantasy-heading">#selectedSpecies#</h3>
-						<p class="stat-subtitle">#speciesDetails[ selectedSpecies ].size# — Speed #speciesDetails[ selectedSpecies ].speed#</p>
-						<p>#speciesDetails[ selectedSpecies ].traits#</p>
-					</div>
-				</bx:if>
+
+			<bx:if len( selectedSpecies ) && subracesFor( selectedSpecies ).len()>
+				<p class="stat-subtitle">Choose a #selectedSpecies# Subrace</p>
+				<div class="creation-grid">
+					<bx:loop array="#subracesFor( selectedSpecies )#" index="subraceOpt">
+						<div
+							class="creation-card creation-card-compact#( selectedSubrace == subraceOpt ? ' creation-card-selected' : '' )#"
+							wire:click="selectSubrace('#subraceOpt#')"
+						>#subraceOpt#</div>
+					</bx:loop>
+				</div>
+			</bx:if>
+
+			<bx:if len( effectiveSpeciesName() )>
+				<bx:set speciesDetail = speciesDetailFor( effectiveSpeciesName() )>
+				<div class="stat-card creation-detail">
+					<h3 class="fantasy-heading">#effectiveSpeciesName()#</h3>
+					<p class="stat-subtitle">
+						#speciesDetail.size# — Speed #speciesDetail.speed# ft
+						<bx:if speciesDetail.darkvision gt 0> — Darkvision #speciesDetail.darkvision# ft</bx:if>
+					</p>
+					<bx:if len( abilityBonusSummary( speciesDetail ) )>
+						<p><strong>Ability Bonus</strong> #abilityBonusSummary( speciesDetail )#</p>
+					</bx:if>
+					<bx:if speciesDetail.languages.len()>
+						<p><strong>Languages</strong> #arrayToList( speciesDetail.languages, ", " )#<bx:if speciesDetail.bonusLanguageChoice> plus one of your choice</bx:if></p>
+					</bx:if>
+					<bx:if speciesDetail.resistances.len()>
+						<p><strong>Resistances</strong> #arrayToList( speciesDetail.resistances, ", " )#</p>
+					</bx:if>
+					<bx:if speciesDetail.traits.len()>
+						<ul class="stat-list">
+							<bx:loop array="#speciesDetail.traits#" index="speciesTrait">
+								<li><strong>#speciesTrait.name#</strong> #speciesTrait.description#</li>
+							</bx:loop>
+						</ul>
+					</bx:if>
+					<bx:if speciesDetail.choiceAbilityCount gt 0>
+						<p class="stat-subtitle">Choose #speciesDetail.choiceAbilityCount# ability score#( speciesDetail.choiceAbilityCount == 1 ? "" : "s" )# to increase by #speciesDetail.choiceAbilityBonus#</p>
+						<div class="creation-grid">
+							<bx:loop array="#choiceAbilityOptions( speciesDetail )#" index="choiceAbility">
+								<div
+									class="creation-card creation-card-compact#( arrayFindNoCase( selectedChoiceAbilities, choiceAbility ) ? ' creation-card-selected' : '' )#"
+									wire:click="toggleChoiceAbility('#choiceAbility#')"
+								>#uCase( choiceAbility )#</div>
+							</bx:loop>
+						</div>
+					</bx:if>
+					<bx:if speciesDetail.choiceSkillCount gt 0>
+						<p class="stat-subtitle">Choose #speciesDetail.choiceSkillCount# skill#( speciesDetail.choiceSkillCount == 1 ? "" : "s" )# of your choice</p>
+						<div class="creation-grid">
+							<bx:loop array="#allSkillNames()#" index="speciesSkillOption">
+								<div
+									class="creation-card creation-card-compact#( arrayFindNoCase( selectedSpeciesSkills, speciesSkillOption ) ? ' creation-card-selected' : '' )#"
+									wire:click="toggleSpeciesSkill('#speciesSkillOption#')"
+									title="#skillAbility( speciesSkillOption )#"
+								>#speciesSkillOption#</div>
+							</bx:loop>
+						</div>
+					</bx:if>
+				</div>
+			</bx:if>
 
 			<p class="stat-subtitle">Choose a Background</p>
 			<div class="creation-grid">
@@ -70,13 +178,20 @@
 				</bx:loop>
 			</div>
 				<bx:if len( selectedBackground )>
+					<bx:set backgroundDetail = backgroundDetailFor( selectedBackground )>
 					<div class="stat-card creation-detail">
 						<h3 class="fantasy-heading">#selectedBackground#</h3>
 						<ul class="stat-list">
-							<li><strong>Ability Scores</strong> #backgroundDetails[ selectedBackground ].abilityScores#</li>
-							<li><strong>Feat</strong> #backgroundDetails[ selectedBackground ].feat#</li>
-							<li><strong>Skills</strong> #backgroundDetails[ selectedBackground ].skills#</li>
-							<li><strong>Tool</strong> #backgroundDetails[ selectedBackground ].tool#</li>
+							<li><strong>Skill Proficiencies</strong> #backgroundDetail.skillProficiencies#</li>
+							<bx:if len( backgroundDetail.toolProficiencies )>
+								<li><strong>Tool Proficiencies</strong> #backgroundDetail.toolProficiencies#</li>
+							</bx:if>
+							<bx:if backgroundDetail.bonusLanguageCount gt 0>
+								<li><strong>Languages</strong> #backgroundDetail.bonusLanguageCount# of your choice</li>
+							</bx:if>
+							<bx:if len( backgroundDetail.featureName )>
+								<li><strong>#backgroundDetail.featureName#</strong> #backgroundDetail.featureDescription#</li>
+							</bx:if>
 						</ul>
 					</div>
 				</bx:if>
@@ -149,10 +264,32 @@
 				<h3 class="fantasy-heading">Review</h3>
 				<ul class="stat-list">
 					<li><strong>Class</strong> #selectedClassName( classes, selectedClassId )#</li>
-					<li><strong>Species</strong> #selectedSpecies#</li>
+					<bx:if selectedClassSkills.len()>
+						<li>
+						<strong>Class Skills</strong>
+						<bx:loop array="#selectedClassSkills#" index="reviewSkill">
+							<span class="skill-chip" title="#skillAbility( reviewSkill )# — adds your Proficiency Bonus to #reviewSkill# checks">#reviewSkill#</span>
+						</bx:loop>
+					</li>
+					</bx:if>
+					<bx:if len( selectedFightingStyle )>
+						<li><strong>Fighting Style</strong> #selectedFightingStyle#</li>
+					</bx:if>
+					<li><strong>Species</strong> #effectiveSpeciesName()#</li>
 					<li><strong>Background</strong> #selectedBackground#</li>
 					<li><strong>Alignment</strong> #selectedAlignment#</li>
-					<li><strong>Ability Scores</strong> STR #assignedScores.str#, DEX #assignedScores.dex#, CON #assignedScores.con#, INT #assignedScores.int#, WIS #assignedScores.wis#, CHA #assignedScores.cha#</li>
+					<li><strong>Base Ability Scores</strong> STR #assignedScores.str#, DEX #assignedScores.dex#, CON #assignedScores.con#, INT #assignedScores.int#, WIS #assignedScores.wis#, CHA #assignedScores.cha#</li>
+					<bx:if selectedSpeciesSkills.len()>
+						<li>
+							<strong>Species Skills</strong>
+							<bx:loop array="#selectedSpeciesSkills#" index="reviewSpeciesSkill">
+								<span class="skill-chip" title="#skillAbility( reviewSpeciesSkill )# — adds your Proficiency Bonus to #reviewSpeciesSkill# checks">#reviewSpeciesSkill#</span>
+							</bx:loop>
+						</li>
+					</bx:if>
+					<bx:if len( abilityBonusSummary( speciesDetailFor( effectiveSpeciesName() ) ) )>
+						<li><strong>Species Bonus</strong> #abilityBonusSummary( speciesDetailFor( effectiveSpeciesName() ) )#</li>
+					</bx:if>
 					<bx:if len( selectedCantripName )>
 						<li><strong>Cantrip</strong> #selectedCantripName#</li>
 					</bx:if>

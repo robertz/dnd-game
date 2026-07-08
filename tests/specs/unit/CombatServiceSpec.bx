@@ -458,6 +458,46 @@ class extends="testbox.system.BaseSpec" {
 					}
 					expect( sawCritDamage ).toBeTrue();
 				} );
+
+				it( "Half-Orc Savage Attacks adds one extra weapon die on a melee critical hit only", () => {
+					// A 1-sided die always rolls 1: normal hit = 1, crit (2 dice) = 2,
+					// crit with Savage Attacks (3 dice) = 3. Same trial-until-a-natural-20
+					// approach as the plain crit test above.
+					var sawSavageCritDamage = false;
+					for ( var i = 1; i <= 200; i++ ) {
+						var log = [];
+						var attacker = { "name": "Attacker", "hasSavageAttacks": true };
+						var defender = makeCombatant( 0, 0, { "armorClass": 1 } );
+						var weapon = { "name": "Handaxe", "category": "melee", "damageDice": "1d1", "damageType": "Slashing", "attackBonus": 0, "damageBonus": 0 };
+						service.resolveAttack( log, attacker, defender, weapon, false );
+						if ( ( 500 - defender.hitPoints ) == 3 ) {
+							sawSavageCritDamage = true;
+							break;
+						}
+					}
+					expect( sawSavageCritDamage ).toBeTrue();
+				} );
+
+				it( "does not add a Savage Attacks die to a ranged critical hit", () => {
+					var sawExtraDamage = false;
+					for ( var i = 1; i <= 200; i++ ) {
+						var log = [];
+						var attacker = { "name": "Attacker", "hasSavageAttacks": true };
+						var defender = makeCombatant( 0, 0, { "armorClass": 1 } );
+						var weapon = { "name": "Shortbow", "category": "ranged", "damageDice": "1d1", "damageType": "Piercing", "attackBonus": 0, "damageBonus": 0 };
+						service.resolveAttack( log, attacker, defender, weapon, false );
+						var damageTaken = 500 - defender.hitPoints;
+						if ( damageTaken == 2 ) {
+							// Crit occurred (2 dice) — confirm it never reaches 3 (Savage Attacks' extra die).
+							continue;
+						}
+						if ( damageTaken == 3 ) {
+							sawExtraDamage = true;
+							break;
+						}
+					}
+					expect( sawExtraDamage ).toBeFalse();
+				} );
 			} );
 
 			describe( "conditions", () => {
@@ -468,6 +508,37 @@ class extends="testbox.system.BaseSpec" {
 					expect( service.hasCondition( combatant, "Prone" ) ).toBeTrue();
 					service.removeCondition( combatant, "Prone" );
 					expect( service.hasCondition( combatant, "Prone" ) ).toBeFalse();
+				} );
+
+				it( "conditionDescription() returns the SRD rules text for a known condition, empty for an unknown one", () => {
+					expect( len( service.conditionDescription( "Poisoned" ) ) ).toBeGT( 0 );
+					expect( service.conditionDescription( "NotARealCondition" ) ).toBe( "" );
+				} );
+
+				it( "skillAbility() returns the governing ability name for a known skill, empty for an unknown one", () => {
+					expect( service.skillAbility( "Perception" ) ).toBe( "Wisdom" );
+					expect( service.skillAbility( "Athletics" ) ).toBe( "Strength" );
+					expect( service.skillAbility( "NotARealSkill" ) ).toBe( "" );
+				} );
+
+				it( "skillCheckBonus() totals ability modifier plus Proficiency Bonus only when proficient", () => {
+					var combatant = makeCombatant( 0, 0, {
+						"modifiers": { "wis": 3 }, "proficiencyBonus": 2, "skillProficiencies": [ "Perception" ]
+					} );
+					expect( service.skillCheckBonus( combatant, "Perception" ) ).toBe( 5 );
+					expect( service.skillCheckBonus( combatant, "Insight" ) ).toBe( 3 );
+				} );
+
+				it( "speciesSkillChoiceCount() totals TRAIT_SKILL_CHOICE_COUNTS matches, 0 for no matching trait", () => {
+					expect( service.speciesSkillChoiceCount( [ "Skill Versatility" ] ) ).toBe( 2 );
+					expect( service.speciesSkillChoiceCount( [ "Darkvision", "Fey Ancestry" ] ) ).toBe( 0 );
+				} );
+
+				it( "allSkillNames() returns all 18 SRD skills, alphabetically", () => {
+					var names = service.allSkillNames();
+					expect( names.len() ).toBe( 18 );
+					expect( names[ 1 ] ).toBe( "Acrobatics" );
+					expect( arrayFindNoCase( names, "Survival" ) ).toBeGT( 0 );
 				} );
 
 				it( "gives melee Advantage, but ranged Disadvantage, against a Prone target", () => {
@@ -553,6 +624,203 @@ class extends="testbox.system.BaseSpec" {
 					var state = { "log": [], "actionUsed": false };
 					service.attemptShove( state, attacker, defender );
 					expect( service.hasCondition( defender, "Prone" ) ).toBeTrue();
+				} );
+
+				it( "attemptGrapple() only adds Proficiency Bonus for a combatant with skillProficiencies if they're actually proficient", () => {
+					// A combatant with a skillProficiencies array but no Athletics in it
+					// gets no Proficiency Bonus on the roll, unlike a monster (no
+					// skillProficiencies array at all), which is always treated as
+					// proficient for lack of per-skill data. Equal ability modifiers
+					// and a huge proficiency gap makes the un-proficient attacker's
+					// win virtually impossible if the bonus were (wrongly) still added.
+					var attacker = makeCombatant( 1, 1, { "modifiers": { "str": 0 }, "proficiencyBonus": 20, "skillProficiencies": [ "Persuasion" ] } );
+					var defender = makeCombatant( 2, 1, { "modifiers": { "str": 0, "dex": 0 }, "proficiencyBonus": 20 } );
+					var wins = 0;
+					for ( var i = 1; i <= 100; i++ ) {
+						var state = { "log": [], "actionUsed": false };
+						defender.grappledBy = "";
+						service.removeCondition( defender, "Restrained" );
+						service.attemptGrapple( state, attacker, defender );
+						if ( service.hasCondition( defender, "Restrained" ) ) {
+							wins += 1;
+						}
+					}
+					// Attacker rolls d20+0, defender rolls d20+0+20 — attacker can only
+					// win on the rare case both roll high and defender rolls low.
+					expect( wins ).toBeLT( 20 );
+				} );
+			} );
+
+			describe( "rollSkillCheck()", () => {
+				it( "adds Proficiency Bonus only when the combatant is listed as proficient in that skill", () => {
+					var combatant = makeCombatant( 0, 0, { "modifiers": { "wis": 0 }, "proficiencyBonus": 5, "skillProficiencies": [ "Perception" ] } );
+					var proficientResult = service.rollSkillCheck( combatant, "Perception", 1 );
+					expect( proficientResult.isProficient ).toBeTrue();
+
+					var unproficientResult = service.rollSkillCheck( combatant, "Insight", 1 );
+					expect( unproficientResult.isProficient ).toBeFalse();
+				} );
+
+				it( "treats a combatant with no skillProficiencies array as proficient in everything", () => {
+					var monster = makeCombatant( 0, 0, { "modifiers": { "cha": 0 }, "proficiencyBonus": 5 } );
+					var result = service.rollSkillCheck( monster, "Intimidation", 1 );
+					expect( result.isProficient ).toBeTrue();
+				} );
+
+				it( "succeeds/fails against the DC based on the rolled total", () => {
+					var combatant = makeCombatant( 0, 0, { "modifiers": { "str": 100 }, "proficiencyBonus": 0 } );
+					var result = service.rollSkillCheck( combatant, "Athletics", 5 );
+					expect( result.success ).toBeTrue();
+				} );
+			} );
+
+			describe( "isIncapacitated() / isHelpless() / cantMove()", () => {
+				it( "isIncapacitated() is true for Incapacitated itself and for each helpless condition", () => {
+					for ( var name in [ "Incapacitated", "Paralyzed", "Petrified", "Stunned", "Unconscious" ] ) {
+						var combatant = makeCombatant( 0, 0 );
+						service.addCondition( combatant, name );
+						expect( service.isIncapacitated( combatant ) ).toBeTrue();
+					}
+				} );
+
+				it( "isHelpless() is false for plain Incapacitated, true for the other four", () => {
+					var incapacitated = makeCombatant( 0, 0 );
+					service.addCondition( incapacitated, "Incapacitated" );
+					expect( service.isHelpless( incapacitated ) ).toBeFalse();
+
+					var paralyzed = makeCombatant( 0, 0 );
+					service.addCondition( paralyzed, "Paralyzed" );
+					expect( service.isHelpless( paralyzed ) ).toBeTrue();
+				} );
+
+				it( "cantMove() is true for Restrained and each helpless condition, false for plain Incapacitated", () => {
+					var restrained = makeCombatant( 0, 0 );
+					service.addCondition( restrained, "Restrained" );
+					expect( service.cantMove( restrained ) ).toBeTrue();
+
+					var stunned = makeCombatant( 0, 0 );
+					service.addCondition( stunned, "Stunned" );
+					expect( service.cantMove( stunned ) ).toBeTrue();
+
+					var incapacitated = makeCombatant( 0, 0 );
+					service.addCondition( incapacitated, "Incapacitated" );
+					expect( service.cantMove( incapacitated ) ).toBeFalse();
+				} );
+
+				it( "moveToward() returns 0 steps for a Paralyzed mover", () => {
+					var mover = makeCombatant( 1, 1 );
+					service.addCondition( mover, "Paralyzed" );
+					var target = makeCombatant( 10, 1 );
+					expect( service.moveToward( mover, target, 6 ) ).toBe( 0 );
+				} );
+			} );
+
+			describe( "Blinded / Invisible (resolveAttack())", () => {
+				it( "Blinded attacker has Disadvantage on their own attack", () => {
+					var log = [];
+					var attacker = makeCombatant( 0, 0, { "name": "Attacker" } );
+					service.addCondition( attacker, "Blinded" );
+					var defender = makeCombatant( 0, 0, { "armorClass": 10 } );
+					var weapon = { "name": "Club", "damageDice": "1d1", "damageType": "Bludgeoning", "attackBonus": 0, "damageBonus": 0, "category": "melee" };
+					service.resolveAttack( log, attacker, defender, weapon, false );
+					expect( log[ 1 ] ).toInclude( "(Disadvantage)" );
+				} );
+
+				it( "attacks against a Blinded defender have Advantage", () => {
+					var log = [];
+					var attacker = { "name": "Attacker" };
+					var defender = makeCombatant( 0, 0, { "armorClass": 10 } );
+					service.addCondition( defender, "Blinded" );
+					var weapon = { "name": "Club", "damageDice": "1d1", "damageType": "Bludgeoning", "attackBonus": 0, "damageBonus": 0, "category": "melee" };
+					service.resolveAttack( log, attacker, defender, weapon, false );
+					expect( log[ 1 ] ).toInclude( "(Advantage)" );
+				} );
+
+				it( "Invisible attacker has Advantage on their own attack", () => {
+					var log = [];
+					var attacker = makeCombatant( 0, 0, { "name": "Attacker" } );
+					service.addCondition( attacker, "Invisible" );
+					var defender = makeCombatant( 0, 0, { "armorClass": 10 } );
+					var weapon = { "name": "Club", "damageDice": "1d1", "damageType": "Bludgeoning", "attackBonus": 0, "damageBonus": 0, "category": "melee" };
+					service.resolveAttack( log, attacker, defender, weapon, false );
+					expect( log[ 1 ] ).toInclude( "(Advantage)" );
+				} );
+
+				it( "attacks against an Invisible defender have Disadvantage", () => {
+					var log = [];
+					var attacker = { "name": "Attacker" };
+					var defender = makeCombatant( 0, 0, { "armorClass": 10 } );
+					service.addCondition( defender, "Invisible" );
+					var weapon = { "name": "Club", "damageDice": "1d1", "damageType": "Bludgeoning", "attackBonus": 0, "damageBonus": 0, "category": "melee" };
+					service.resolveAttack( log, attacker, defender, weapon, false );
+					expect( log[ 1 ] ).toInclude( "(Disadvantage)" );
+				} );
+			} );
+
+			describe( "Paralyzed / Petrified / Stunned / Unconscious (resolveAttack() / rollSavingThrow())", () => {
+				it( "attacks against a helpless defender have Advantage", () => {
+					var log = [];
+					var attacker = { "name": "Attacker" };
+					var defender = makeCombatant( 0, 0, { "armorClass": 10 } );
+					service.addCondition( defender, "Stunned" );
+					var weapon = { "name": "Club", "damageDice": "1d1", "damageType": "Bludgeoning", "attackBonus": 0, "damageBonus": 0, "category": "melee" };
+					service.resolveAttack( log, attacker, defender, weapon, false );
+					expect( log[ 1 ] ).toInclude( "(Advantage)" );
+				} );
+
+				it( "a melee hit against a Paralyzed or Unconscious defender is always a Critical Hit", () => {
+					var log = [];
+					var attacker = { "name": "Attacker" };
+					var defender = makeCombatant( 0, 0, { "armorClass": 1 } );
+					service.addCondition( defender, "Paralyzed" );
+					// 1d1 always rolls 1: normal hit = 1 damage, crit (2 dice) = 2.
+					var weapon = { "name": "Dagger", "damageDice": "1d1", "damageType": "Piercing", "attackBonus": 100, "damageBonus": 0, "category": "melee" };
+					service.resolveAttack( log, attacker, defender, weapon, false );
+					expect( 500 - defender.hitPoints ).toBe( 2 );
+				} );
+
+				it( "does not auto-crit a Stunned (not Paralyzed/Unconscious) defender", () => {
+					var log = [];
+					var attacker = { "name": "Attacker" };
+					var defender = makeCombatant( 0, 0, { "armorClass": 1 } );
+					service.addCondition( defender, "Stunned" );
+					var weapon = { "name": "Dagger", "damageDice": "1d1", "damageType": "Piercing", "attackBonus": 100, "damageBonus": 0, "category": "melee" };
+					service.resolveAttack( log, attacker, defender, weapon, false );
+					expect( 500 - defender.hitPoints ).toBe( 1 );
+				} );
+
+				it( "does not auto-crit a ranged hit against a Paralyzed defender", () => {
+					var log = [];
+					var attacker = { "name": "Attacker" };
+					var defender = makeCombatant( 0, 0, { "armorClass": 1 } );
+					service.addCondition( defender, "Paralyzed" );
+					var weapon = { "name": "Sling", "damageDice": "1d1", "damageType": "Bludgeoning", "attackBonus": 100, "damageBonus": 0, "category": "ranged" };
+					service.resolveAttack( log, attacker, defender, weapon, false );
+					expect( 500 - defender.hitPoints ).toBe( 1 );
+				} );
+
+				it( "Petrified halves all incoming damage regardless of type", () => {
+					var log = [];
+					var attacker = { "name": "Attacker" };
+					var defender = makeCombatant( 0, 0, { "armorClass": 1 } );
+					service.addCondition( defender, "Petrified" );
+					// 2 dice worth of 1d1 (crit, since Petrified auto-advantage doesn't
+					// force a crit, so force via attack bonus + natural roll isn't
+					// guaranteed) — use a huge flat damageBonus instead so halving is
+					// easy to see regardless of crit/no-crit dice variance.
+					var weapon = { "name": "Club", "damageDice": "1d1", "damageType": "Bludgeoning", "attackBonus": 100, "damageBonus": 9, "category": "melee" };
+					service.resolveAttack( log, attacker, defender, weapon, false );
+					var damageTaken = 500 - defender.hitPoints;
+					// Non-crit: (1+9)/2 = 5. Crit (2 dice): (2+9)/2 = 5 (int-floored either way).
+					expect( damageTaken ).toBe( 5 );
+				} );
+
+				it( "auto-fails a Strength/Dexterity save while helpless, but not other abilities", () => {
+					var combatant = makeCombatant( 0, 0, { "modifiers": { "str": 100, "wis": 100 }, "proficiencyBonus": 0 } );
+					service.addCondition( combatant, "Paralyzed" );
+					expect( service.rollSavingThrow( combatant, "str", 1 ).success ).toBeFalse();
+					expect( service.rollSavingThrow( combatant, "dex", 1 ).success ).toBeFalse();
+					expect( service.rollSavingThrow( combatant, "wis", 1 ).success ).toBeTrue();
 				} );
 			} );
 
@@ -808,6 +1076,15 @@ class extends="testbox.system.BaseSpec" {
 					expect( state.opponents[ 2 ].hitPoints ).toBeGT( 0 );
 				} );
 
+				it( "records the round a mob died in, for the sidebar's fade-out timing", () => {
+					var state = makeMultiMobState();
+					state.round = 3;
+					attackUntilHit( state );
+					expect( state.opponents[ 1 ].defeatedAtRound ).toBe( 3 );
+					// The mob that's still alive was never marked.
+					expect( structKeyExists( state.opponents[ 2 ], "defeatedAtRound" ) ).toBeFalse();
+				} );
+
 				it( "auto-retargets to the next living mob once the current target is downed", () => {
 					var state = makeMultiMobState();
 					attackUntilHit( state );
@@ -970,6 +1247,127 @@ class extends="testbox.system.BaseSpec" {
 					expect( player.reactionUsed ).toBeFalse();
 					expect( mob.reactionUsed ).toBeFalse();
 				} );
+
+				it( "advances the in-game clock by 6 seconds", () => {
+					var player = makeCombatant( 1, 1, { "gameClockSeconds": 100 } );
+					var state = { "player": player, "opponents": [], "movementRemaining": 0, "actionUsed": false, "bonusActionUsed": false, "attacksUsedThisTurn": 0 };
+					service.startNewRound( state );
+					expect( player.gameClockSeconds ).toBe( 106 );
+				} );
+
+				it( "does not error for a combatant with no gameClockSeconds field", () => {
+					var player = makeCombatant( 1, 1 );
+					var state = { "player": player, "opponents": [], "movementRemaining": 0, "actionUsed": false, "bonusActionUsed": false, "attacksUsedThisTurn": 0 };
+					service.startNewRound( state );
+					expect( structKeyExists( player, "gameClockSeconds" ) ).toBeFalse();
+				} );
+			} );
+
+			describe( "Rest (Short Rest / Long Rest) and the in-game clock", () => {
+				function makeRestPlayer( extra = {} ){
+					return makeCombatant( 0, 0, {
+						"characterId": -1, "class": "Fighter", "level": 3, "hasMagicInitiate": false,
+						"modifiers": { "str": 0, "dex": 0, "con": 2, "int": 0, "wis": 0, "cha": 0 },
+						"hitDieSize": 10, "hitDiceMax": 3, "hitDiceSpent": 3,
+						"hitPoints": 5, "maxHitPoints": 30,
+						"features": [ "Rage", "Second Wind" ], "ragesUsed": 2,
+						"usedSecondWind": true, "usedBreathWeapon": true, "usedRelentlessEndurance": true,
+						"usedHeroicInspiration": true, "usedMagicInitiateSpell": true,
+						"gameClockSeconds": 0, "lastLongRestSeconds": javaCast( "null", 0 ),
+						"spentSpellSlots": { "1": 2 }
+					}.append( arguments.extra ) );
+				}
+
+				it( "shortRest() heals for the requested number of dice and spends them", () => {
+					var player = makeRestPlayer( { "hitDiceSpent": 1 } );
+					var result = service.shortRest( player, 2 );
+					expect( result.rolls.len() ).toBe( 2 );
+					expect( player.hitDiceSpent ).toBe( 3 );
+					expect( player.hitPoints ).toBeGT( 5 );
+					expect( player.hitPoints ).toBeLTE( 5 + ( 10 + 2 ) * 2 );
+				} );
+
+				it( "shortRest() clamps diceCount to whatever's actually left unspent", () => {
+					var player = makeRestPlayer( { "hitDiceSpent": 2 } );
+					var result = service.shortRest( player, 5 );
+					expect( result.rolls.len() ).toBe( 1 );
+					expect( player.hitDiceSpent ).toBe( 3 );
+				} );
+
+				it( "shortRest() advances the clock by 1 hour and recovers Second Wind and one Rage use", () => {
+					var player = makeRestPlayer();
+					service.shortRest( player, 0 );
+					expect( player.gameClockSeconds ).toBe( 3600 );
+					expect( player.usedSecondWind ).toBeFalse();
+					expect( player.ragesUsed ).toBe( 1 );
+				} );
+
+				it( "shortRest() with 0 dice still runs (no HP change, resources still recover)", () => {
+					var player = makeRestPlayer();
+					var result = service.shortRest( player, 0 );
+					expect( result.rolls.len() ).toBe( 0 );
+					expect( result.healing ).toBe( 0 );
+					expect( player.hitPoints ).toBe( 5 );
+					expect( player.usedSecondWind ).toBeFalse();
+				} );
+
+				it( "longRest() fully heals, resets slots/rages, and recovers every Long-Rest-only resource", () => {
+					var player = makeRestPlayer();
+					var result = service.longRest( player );
+					expect( result.success ).toBeTrue();
+					expect( player.hitPoints ).toBe( 30 );
+					expect( player.hitDiceSpent ).toBe( 2 ); // recovers max(1, floor(3/2))=1 of 3 spent
+					expect( player.spentSpellSlots ).toBeEmpty();
+					expect( player.ragesUsed ).toBe( 0 );
+					expect( player.usedSecondWind ).toBeFalse();
+					expect( player.usedBreathWeapon ).toBeFalse();
+					expect( player.usedRelentlessEndurance ).toBeFalse();
+					expect( player.usedHeroicInspiration ).toBeFalse();
+					expect( player.usedMagicInitiateSpell ).toBeFalse();
+				} );
+
+				it( "longRest() advances the clock by 8 hours and records the rest time", () => {
+					var player = makeRestPlayer();
+					service.longRest( player );
+					expect( player.gameClockSeconds ).toBe( 28800 );
+					expect( player.lastLongRestSeconds ).toBe( 28800 );
+				} );
+
+				it( "longRest() is blocked within 24 in-game hours of the previous one", () => {
+					var player = makeRestPlayer( { "gameClockSeconds": 10000, "lastLongRestSeconds": 5000 } );
+					var result = service.longRest( player );
+					expect( result.success ).toBeFalse();
+					expect( result.hoursUntilNext ).toBeGT( 0 );
+					// Nothing should have changed on a blocked attempt.
+					expect( player.hitPoints ).toBe( 5 );
+					expect( player.gameClockSeconds ).toBe( 10000 );
+				} );
+
+				it( "longRest() with ignoreCooldown=true heals even within the 24-hour cooldown", () => {
+					// Regression: default.bx's onMount() auto-heals a character who
+					// loaded at 0 HP (persisted from a defeat) so they're never
+					// stuck — that must work even if they rested recently.
+					var player = makeRestPlayer( { "gameClockSeconds": 10000, "lastLongRestSeconds": 5000, "hitPoints": 0 } );
+					var result = service.longRest( player, true );
+					expect( result.success ).toBeTrue();
+					expect( player.hitPoints ).toBe( 30 );
+				} );
+
+				it( "longRest() is allowed again once 24 in-game hours have passed", () => {
+					var player = makeRestPlayer( { "gameClockSeconds": 100000, "lastLongRestSeconds": 5000 } );
+					var result = service.longRest( player );
+					expect( result.success ).toBeTrue();
+				} );
+
+				it( "hoursUntilNextLongRest() is 0 when no Long Rest has ever been taken", () => {
+					var player = makeRestPlayer( { "gameClockSeconds": 999999, "lastLongRestSeconds": javaCast( "null", 0 ) } );
+					expect( service.hoursUntilNextLongRest( player ) ).toBe( 0 );
+				} );
+
+				it( "hoursUntilNextLongRest() reflects the remaining cooldown", () => {
+					var player = makeRestPlayer( { "gameClockSeconds": 5000, "lastLongRestSeconds": 0 } );
+					expect( service.hoursUntilNextLongRest( player ) ).toBe( ceiling( ( 86400 - 5000 ) / 3600 ) );
+				} );
 			} );
 
 			describe( "playerDecideAndAct() with Extra Attack", () => {
@@ -1121,6 +1519,62 @@ class extends="testbox.system.BaseSpec" {
 				} );
 			} );
 
+			describe( "grantChosenFeat() / availableLevelUpFeats() (feat-instead-of-ASI)", () => {
+				function makePendingFeatState( extra = {} ){
+					var player = makeCombatant( 0, 0, {
+						"pendingAbilityScoreImprovements": 1, "feats": [], "skillProficiencies": []
+					}.append( arguments.extra ) );
+					return { "player": player, "log": [] };
+				}
+
+				it( "availableLevelUpFeats() excludes a non-repeatable feat already held, but keeps repeatable ones", () => {
+					var player = makeCombatant( 0, 0, { "feats": [ "Alert", "Skilled" ] } );
+					var available = service.availableLevelUpFeats( player );
+					expect( arrayFindNoCase( available, "Alert" ) ).toBe( 0 );
+					expect( arrayFindNoCase( available, "Skilled" ) ).toBeGT( 0 );
+					expect( arrayFindNoCase( available, "Grappler" ) ).toBeGT( 0 );
+				} );
+
+				it( "is a no-op when there's no pending improvement", () => {
+					var state = makePendingFeatState( { "pendingAbilityScoreImprovements": 0 } );
+					service.grantChosenFeat( state, "Alert" );
+					expect( state.player.feats.len() ).toBe( 0 );
+					expect( state.log.len() ).toBe( 0 );
+				} );
+
+				it( "grants the named feat and consumes the pending improvement", () => {
+					var state = makePendingFeatState();
+					service.grantChosenFeat( state, "Alert" );
+					expect( arrayFindNoCase( state.player.feats, "Alert" ) ).toBeGT( 0 );
+					expect( state.player.pendingAbilityScoreImprovements ).toBe( 0 );
+					expect( state.log.len() ).toBe( 1 );
+				} );
+
+				it( "is a no-op for an unrecognized feat name", () => {
+					var state = makePendingFeatState();
+					service.grantChosenFeat( state, "Not A Real Feat" );
+					expect( state.player.feats.len() ).toBe( 0 );
+					expect( state.player.pendingAbilityScoreImprovements ).toBe( 1 );
+				} );
+
+				it( "Skilled grants the 3 player-chosen skills not already held", () => {
+					var state = makePendingFeatState( { "skillProficiencies": [ "Perception" ] } );
+					service.grantChosenFeat( state, "Skilled", [ "Athletics", "Stealth", "Arcana" ] );
+					expect( state.player.skillProficiencies.len() ).toBe( 4 );
+					expect( arrayFindNoCase( state.player.skillProficiencies, "Perception" ) ).toBeGT( 0 );
+					expect( arrayFindNoCase( state.player.skillProficiencies, "Athletics" ) ).toBeGT( 0 );
+					expect( arrayFindNoCase( state.player.skillProficiencies, "Stealth" ) ).toBeGT( 0 );
+					expect( arrayFindNoCase( state.player.skillProficiencies, "Arcana" ) ).toBeGT( 0 );
+				} );
+
+				it( "Skilled is a no-op without exactly 3 chosen skills", () => {
+					var state = makePendingFeatState();
+					service.grantChosenFeat( state, "Skilled", [ "Athletics", "Stealth" ] );
+					expect( state.player.feats.len() ).toBe( 0 );
+					expect( state.player.pendingAbilityScoreImprovements ).toBe( 1 );
+				} );
+			} );
+
 			describe( "isFullCasterClass()", () => {
 				it( "is true for each of the six full-caster classes", () => {
 					for ( var className in [ "Bard", "Cleric", "Druid", "Sorcerer", "Warlock", "Wizard" ] ) {
@@ -1132,6 +1586,567 @@ class extends="testbox.system.BaseSpec" {
 					for ( var className in [ "Paladin", "Ranger", "Fighter", "Barbarian", "Rogue", "Monk" ] ) {
 						expect( service.isFullCasterClass( className ) ).toBeFalse();
 					}
+				} );
+			} );
+
+			describe( "castCantrip() / castLeveledSpell() (multi-spell known lists)", () => {
+				function makeCaster( extra = {} ){
+					return makeCombatant( 0, 0, {
+						"name": "Caster", "spellcastingAbility": "int", "modifiers": { "int": 5 },
+						"proficiencyBonus": 2, "spellSlots": { "1": 1, "3": 1 }, "knownCantrips": [], "knownLeveledSpells": []
+					}.append( arguments.extra ) );
+				}
+
+				function makeSpellState( player, extra = {} ){
+					return { "player": player, "opponent": makeCombatant( 1, 0 ), "log": [], "actionUsed": false }.append( arguments.extra );
+				}
+
+				it( "castCantrip() with no name casts the first known cantrip", () => {
+					var player = makeCaster( { "knownCantrips": [
+						{ "type": "attack", "name": "First Bolt", "damageType": "Fire", "rangeSquares": 24, "level": 0, "concentration": false },
+						{ "type": "attack", "name": "Second Bolt", "damageType": "Cold", "rangeSquares": 24, "level": 0, "concentration": false }
+					] } );
+					var state = makeSpellState( player );
+					service.castCantrip( state );
+					expect( state.log[ 1 ] ).toInclude( "First Bolt" );
+				} );
+
+				it( "castCantrip() with a name casts that specific known cantrip", () => {
+					var player = makeCaster( { "knownCantrips": [
+						{ "type": "attack", "name": "First Bolt", "damageType": "Fire", "rangeSquares": 24, "level": 0, "concentration": false },
+						{ "type": "attack", "name": "Second Bolt", "damageType": "Cold", "rangeSquares": 24, "level": 0, "concentration": false }
+					] } );
+					var state = makeSpellState( player );
+					service.castCantrip( state, "Second Bolt" );
+					expect( state.log[ 1 ] ).toInclude( "Second Bolt" );
+				} );
+
+				it( "castCantrip() is a no-op for an unknown cantrip name", () => {
+					var player = makeCaster( { "knownCantrips": [
+						{ "type": "attack", "name": "First Bolt", "damageType": "Fire", "rangeSquares": 24, "level": 0, "concentration": false }
+					] } );
+					var state = makeSpellState( player );
+					service.castCantrip( state, "Not A Real Cantrip" );
+					expect( state.log.len() ).toBe( 0 );
+					expect( state.actionUsed ).toBeFalse();
+				} );
+
+				it( "castLeveledSpell() spends a slot at the cast spell's own level, not always level 1", () => {
+					var player = makeCaster( { "knownLeveledSpells": [
+						{ "type": "attack", "name": "Low Bolt", "damageType": "Force", "rangeSquares": 24, "level": 1, "concentration": false, "diceCount": 1, "diceSides": 4 },
+						{ "type": "attack", "name": "High Bolt", "damageType": "Force", "rangeSquares": 24, "level": 3, "concentration": false, "diceCount": 1, "diceSides": 4 }
+					] } );
+					var state = makeSpellState( player );
+					service.castLeveledSpell( state, "High Bolt" );
+					expect( player.spellSlots[ 3 ] ).toBe( 0 );
+					expect( player.spellSlots[ 1 ] ).toBe( 1 );
+					expect( player.spentSpellSlots[ "3" ] ).toBe( 1 );
+				} );
+
+				it( "castLeveledSpell() starts concentration when the cast spell requires it", () => {
+					var player = makeCaster( { "knownLeveledSpells": [
+						{ "type": "attack", "name": "Sustained Bolt", "damageType": "Force", "rangeSquares": 24, "level": 1, "concentration": true, "diceCount": 1, "diceSides": 4 }
+					] } );
+					var state = makeSpellState( player );
+					service.castLeveledSpell( state );
+					expect( player.concentratingOn ).toBe( "Sustained Bolt" );
+				} );
+
+				it( "castLeveledSpell() does not start concentration for a non-concentration spell", () => {
+					var player = makeCaster( { "knownLeveledSpells": [
+						{ "type": "attack", "name": "Instant Bolt", "damageType": "Force", "rangeSquares": 24, "level": 1, "concentration": false, "diceCount": 1, "diceSides": 4 }
+					] } );
+					var state = makeSpellState( player );
+					service.castLeveledSpell( state );
+					expect( structKeyExists( player, "concentratingOn" ) ? player.concentratingOn : "" ).toBe( "" );
+				} );
+
+				it( "castLeveledSpell() is a no-op with no known spells and no Magic Initiate", () => {
+					var player = makeCaster();
+					var state = makeSpellState( player );
+					service.castLeveledSpell( state );
+					expect( state.log.len() ).toBe( 0 );
+					expect( state.actionUsed ).toBeFalse();
+				} );
+			} );
+
+			describe( "concentration checks (resolveAttack())", () => {
+				it( "maintains concentration on a successful Constitution save after taking damage", () => {
+					var attacker = { "name": "Attacker" };
+					var weapon = { "name": "Greatsword", "damageDice": "2d6", "damageType": "Slashing", "attackBonus": 100, "damageBonus": 2 };
+					var damageTaken = 0;
+					var defender = {};
+					for ( var i = 1; i <= 20 && damageTaken == 0; i++ ) {
+						defender = makeCombatant( 0, 0, { "armorClass": 1, "modifiers": { "con": 50 }, "concentratingOn": "Test Spell" } );
+						var log = [];
+						service.resolveAttack( log, attacker, defender, weapon, false );
+						damageTaken = 500 - defender.hitPoints;
+					}
+					expect( damageTaken ).toBeGT( 0 );
+					expect( defender.concentratingOn ).toBe( "Test Spell" );
+				} );
+
+				it( "loses concentration on a failed Constitution save after taking damage", () => {
+					var attacker = { "name": "Attacker" };
+					var weapon = { "name": "Greatsword", "damageDice": "2d6", "damageType": "Slashing", "attackBonus": 100, "damageBonus": 2 };
+					var damageTaken = 0;
+					var defender = {};
+					for ( var i = 1; i <= 20 && damageTaken == 0; i++ ) {
+						defender = makeCombatant( 0, 0, { "armorClass": 1, "modifiers": { "con": -50 }, "concentratingOn": "Test Spell" } );
+						var log = [];
+						service.resolveAttack( log, attacker, defender, weapon, false );
+						damageTaken = 500 - defender.hitPoints;
+					}
+					expect( damageTaken ).toBeGT( 0 );
+					expect( defender.concentratingOn ).toBe( "" );
+				} );
+
+				it( "does nothing when the defender isn't concentrating on anything", () => {
+					var attacker = { "name": "Attacker" };
+					var weapon = { "name": "Greatsword", "damageDice": "2d6", "damageType": "Slashing", "attackBonus": 100, "damageBonus": 2 };
+					var defender = makeCombatant( 0, 0, { "armorClass": 1 } );
+					var log = [];
+					service.resolveAttack( log, attacker, defender, weapon, false );
+					expect( structKeyExists( defender, "concentratingOn" ) ).toBeFalse();
+				} );
+			} );
+
+			describe( "pendingCantripChoice() / pendingSpellChoice() safe defaults", () => {
+				it( "pendingCantripChoice() is not pending for a nonexistent character", () => {
+					var result = service.pendingCantripChoice( -1 );
+					expect( result.pending ).toBeFalse();
+					expect( result.availableCantrips.len() ).toBe( 0 );
+				} );
+
+				it( "pendingSpellChoice() is not pending for a nonexistent character", () => {
+					var result = service.pendingSpellChoice( -1 );
+					expect( result.pending ).toBeFalse();
+					expect( result.availableSpells.len() ).toBe( 0 );
+				} );
+			} );
+
+			describe( "pendingExpertiseChoice() safe defaults", () => {
+				it( "is not pending for a nonexistent character", () => {
+					var result = service.pendingExpertiseChoice( -1 );
+					expect( result.pending ).toBeFalse();
+					expect( result.availableSkills.len() ).toBe( 0 );
+				} );
+			} );
+
+			describe( "Expertise (doubled skill Proficiency Bonus)", () => {
+				it( "skillCheckBonus() doubles Proficiency Bonus for an Expertise skill", () => {
+					var combatant = makeCombatant( 0, 0, {
+						"modifiers": { "wis": 1 }, "proficiencyBonus": 4,
+						"skillProficiencies": [ "Perception" ], "expertiseSkills": [ "Perception" ]
+					} );
+					expect( service.skillCheckBonus( combatant, "Perception" ) ).toBe( 1 + 8 );
+				} );
+
+				it( "skillCheckBonus() applies normal Proficiency Bonus without Expertise", () => {
+					var combatant = makeCombatant( 0, 0, {
+						"modifiers": { "wis": 1 }, "proficiencyBonus": 4,
+						"skillProficiencies": [ "Perception" ], "expertiseSkills": []
+					} );
+					expect( service.skillCheckBonus( combatant, "Perception" ) ).toBe( 1 + 4 );
+				} );
+
+				it( "does not double Proficiency Bonus for a skill the combatant isn't proficient in", () => {
+					var combatant = makeCombatant( 0, 0, {
+						"modifiers": { "wis": 1 }, "proficiencyBonus": 4,
+						"skillProficiencies": [], "expertiseSkills": [ "Perception" ]
+					} );
+					expect( service.skillCheckBonus( combatant, "Perception" ) ).toBe( 1 );
+				} );
+			} );
+
+			describe( "Second Wind (Fighter 1)", () => {
+				function makeFighterState( extra = {} ){
+					var player = makeCombatant( 0, 0, {
+						"name": "Fighter", "level": 3, "hitPoints": 5, "maxHitPoints": 50,
+						"features": [ "Second Wind" ], "usedSecondWind": false
+					}.append( arguments.extra ) );
+					return { "player": player, "opponent": makeCombatant( 1, 0 ), "log": [], "bonusActionUsed": false };
+				}
+
+				it( "heals 1d10 + level Hit Points and spends the bonus action", () => {
+					var state = makeFighterState();
+					service.useSecondWind( state );
+					expect( state.player.hitPoints ).toBeGT( 5 );
+					expect( state.player.hitPoints ).toBeLTE( 5 + 10 + 3 );
+					expect( state.player.usedSecondWind ).toBeTrue();
+					expect( state.bonusActionUsed ).toBeTrue();
+				} );
+
+				it( "is a no-op once already used this encounter", () => {
+					var state = makeFighterState( { "usedSecondWind": true } );
+					service.useSecondWind( state );
+					expect( state.player.hitPoints ).toBe( 5 );
+					expect( state.bonusActionUsed ).toBeFalse();
+				} );
+
+				it( "is a no-op without the Second Wind feature", () => {
+					var state = makeFighterState( { "features": [] } );
+					service.useSecondWind( state );
+					expect( state.player.hitPoints ).toBe( 5 );
+				} );
+			} );
+
+			describe( "Rage (Barbarian 1)", () => {
+				function makeBarbarianState( extra = {} ){
+					var player = makeCombatant( 0, 0, {
+						"name": "Barbarian", "level": 3, "features": [ "Rage" ], "modifiers": { "str": 0, "dex": 0, "con": 0 },
+						"ragesRemaining": 3, "isRaging": false, "resistances": [],
+						"inventory": [ { "name": "Greataxe", "category": "melee", "damageDice": "1d12", "damageType": "Slashing", "attackBonus": 100, "damageBonus": 0, "equipped": true } ]
+					}.append( arguments.extra ) );
+					return { "player": player, "opponent": makeCombatant( 1, 0 ), "log": [], "bonusActionUsed": false };
+				}
+
+				it( "startRage() consumes a use, sets isRaging, and grants physical resistance", () => {
+					var state = makeBarbarianState();
+					service.startRage( state );
+					expect( state.player.isRaging ).toBeTrue();
+					expect( state.player.ragesRemaining ).toBe( 2 );
+					expect( state.bonusActionUsed ).toBeTrue();
+					for ( var damageType in [ "Bludgeoning", "Piercing", "Slashing" ] ) {
+						expect( arrayFindNoCase( state.player.resistances, damageType ) ).toBeGT( 0 );
+					}
+				} );
+
+				it( "is a no-op with no uses remaining", () => {
+					var state = makeBarbarianState( { "ragesRemaining": 0 } );
+					service.startRage( state );
+					expect( state.player.isRaging ).toBeFalse();
+				} );
+
+				it( "endRage() clears isRaging and removes the physical resistance", () => {
+					var state = makeBarbarianState();
+					service.startRage( state );
+					service.endRage( state );
+					expect( state.player.isRaging ).toBeFalse();
+					expect( state.player.resistances.len() ).toBe( 0 );
+				} );
+
+				it( "adds the level-based damage bonus to a melee weapon hit while raging", () => {
+					// A natural 1 always misses regardless of attack bonus, so
+					// retry on that rare fumble rather than risk a ~5% flake.
+					var state = makeBarbarianState();
+					service.startRage( state );
+					var log = [ "" ];
+					for ( var i = 1; i <= 20 && !log[ 1 ].findNoCase( "Rage" ); i++ ) {
+						log = [];
+						service.resolveAttack( log, state.player, state.opponent, state.player.inventory[ 1 ], false, false, false, 0, state );
+					}
+					expect( log[ 1 ] ).toInclude( "+2 Rage" );
+				} );
+
+				it( "does not add the damage bonus when not raging", () => {
+					var state = makeBarbarianState();
+					var log = [];
+					service.resolveAttack( log, state.player, state.opponent, state.player.inventory[ 1 ], false, false, false, 0, state );
+					expect( log[ 1 ] ).notToInclude( "Rage" );
+				} );
+
+				it( "grants Advantage on Strength saving throws while raging", () => {
+					var state = makeBarbarianState();
+					service.startRage( state );
+					// DC 100 fails without Advantage almost always; with the -50/-50
+					// double-roll-take-higher of Advantage this is still near-certain
+					// to fail, so instead assert the roll metadata directly.
+					var result = service.rollSavingThrow( state.player, "str", 10 );
+					expect( result.hadAdvantage ).toBeTrue();
+				} );
+			} );
+
+			describe( "Paladin's Smite (Paladin 2)", () => {
+				function makePaladinState( extra = {} ){
+					var player = makeCombatant( 0, 0, {
+						"name": "Paladin", "level": 5, "features": [ "Paladin's Smite" ],
+						"spellSlots": { "1": 2, "2": 1 }, "spentSpellSlots": {},
+						"inventory": [ { "name": "Longsword", "category": "melee", "damageDice": "1d8", "damageType": "Slashing", "attackBonus": 100, "damageBonus": 0, "equipped": true } ]
+					}.append( arguments.extra ) );
+					return {
+						"player": player, "opponent": makeCombatant( 1, 0, { "hitPoints": 100, "maxHitPoints": 100 } ),
+						"log": [], "gameOver": false, "outcome": "", "attacksUsedThisTurn": 0
+					};
+				}
+
+				it( "spends a slot and adds bonus Radiant damage on a hit", () => {
+					// attackBonus 100 vs AC 10 only misses on a natural 1 fumble, so
+					// retry on that rare case rather than risk a ~5% flake.
+					var state = {};
+					for ( var i = 1; i <= 20; i++ ) {
+						state = makePaladinState();
+						service.smiteAttack( state, 1 );
+						if ( state.player.spellSlots[ 1 ] < 2 ) {
+							break;
+						}
+					}
+					expect( state.player.spellSlots[ 1 ] ).toBe( 1 );
+					expect( state.player.spentSpellSlots[ "1" ] ).toBe( 1 );
+					expect( arrayToList( state.log, " | " ) ).toInclude( "Divine Smite" );
+				} );
+
+				it( "deals more dice for a higher-level slot", () => {
+					var state = {};
+					for ( var i = 1; i <= 20; i++ ) {
+						state = makePaladinState();
+						service.smiteAttack( state, 2 );
+						if ( state.player.spellSlots[ 2 ] < 1 ) {
+							break;
+						}
+					}
+					expect( state.player.spellSlots[ 2 ] ).toBe( 0 );
+					expect( state.player.spentSpellSlots[ "2" ] ).toBe( 1 );
+				} );
+
+				it( "does not spend a slot on a miss", () => {
+					var state = makePaladinState();
+					state.player.inventory[ 1 ].attackBonus = -1000;
+					service.smiteAttack( state, 1 );
+					expect( state.player.spellSlots[ 1 ] ).toBe( 2 );
+					expect( structKeyExists( state.player.spentSpellSlots, "1" ) ).toBeFalse();
+				} );
+
+				it( "is a no-op without the Paladin's Smite feature", () => {
+					var state = makePaladinState( { "features": [] } );
+					service.smiteAttack( state, 1 );
+					expect( state.player.spellSlots[ 1 ] ).toBe( 2 );
+				} );
+
+				it( "is a no-op with no slots at that level", () => {
+					var state = makePaladinState( { "spellSlots": { "1": 0 } } );
+					service.smiteAttack( state, 1 );
+					expect( state.log.len() ).toBe( 0 );
+				} );
+
+				it( "is a no-op without an equipped melee weapon", () => {
+					var state = makePaladinState( { "inventory": [] } );
+					service.smiteAttack( state, 1 );
+					expect( state.player.spellSlots[ 1 ] ).toBe( 2 );
+					expect( arrayToList( state.log, " | " ) ).toInclude( "no melee weapon" );
+				} );
+
+				it( "adds an extra die of damage against a Fiend or Undead", () => {
+					var state = {};
+					for ( var i = 1; i <= 20; i++ ) {
+						state = makePaladinState();
+						state.opponent = makeCombatant( 1, 0, { "hitPoints": 100, "maxHitPoints": 100, "creatureType": "Undead" } );
+						service.smiteAttack( state, 1 );
+						if ( state.player.spellSlots[ 1 ] < 2 ) {
+							break;
+						}
+					}
+					expect( arrayToList( state.log, " | " ) ).toInclude( "against the Undead" );
+				} );
+			} );
+
+			describe( "Sneak Attack (Rogue 1)", () => {
+				it( "adds extra damage on an Advantage hit with a Finesse weapon", () => {
+					var attacker = makeCombatant( 0, 0, { "name": "Rogue", "level": 3, "features": [ "Sneak Attack" ], "usedSneakAttackThisTurn": false } );
+					var defender = makeCombatant( 0, 0, { "armorClass": 1 } );
+					var weapon = { "name": "Rapier", "category": "melee", "damageDice": "1d8", "damageType": "Piercing", "attackBonus": 100, "damageBonus": 0, "properties": [ "Finesse" ] };
+					var log = [];
+					service.resolveAttack( log, attacker, defender, weapon, false, true, false, 0, {} );
+					expect( log[ 1 ] ).toInclude( "Sneak Attack" );
+					expect( attacker.usedSneakAttackThisTurn ).toBeTrue();
+				} );
+
+				it( "only applies once per turn", () => {
+					var attacker = makeCombatant( 0, 0, { "name": "Rogue", "level": 3, "features": [ "Sneak Attack" ], "usedSneakAttackThisTurn": false } );
+					var defender = makeCombatant( 0, 0, { "armorClass": 1 } );
+					var weapon = { "name": "Rapier", "category": "melee", "damageDice": "1d8", "damageType": "Piercing", "attackBonus": 100, "damageBonus": 0, "properties": [ "Finesse" ] };
+					service.resolveAttack( [], attacker, defender, weapon, false, true, false, 0, {} );
+					var log = [];
+					service.resolveAttack( log, attacker, defender, weapon, false, true, false, 0, {} );
+					expect( log[ 1 ] ).notToInclude( "Sneak Attack" );
+				} );
+
+				it( "does not apply without Advantage", () => {
+					var attacker = makeCombatant( 0, 0, { "name": "Rogue", "level": 3, "features": [ "Sneak Attack" ], "usedSneakAttackThisTurn": false } );
+					var defender = makeCombatant( 0, 0, { "armorClass": 1 } );
+					var weapon = { "name": "Rapier", "category": "melee", "damageDice": "1d8", "damageType": "Piercing", "attackBonus": 100, "damageBonus": 0, "properties": [ "Finesse" ] };
+					var log = [];
+					service.resolveAttack( log, attacker, defender, weapon, false, false, false, 0, {} );
+					expect( log[ 1 ] ).notToInclude( "Sneak Attack" );
+				} );
+
+				it( "does not apply with a non-Finesse melee weapon", () => {
+					var attacker = makeCombatant( 0, 0, { "name": "Rogue", "level": 3, "features": [ "Sneak Attack" ], "usedSneakAttackThisTurn": false } );
+					var defender = makeCombatant( 0, 0, { "armorClass": 1 } );
+					var weapon = { "name": "Greatclub", "category": "melee", "damageDice": "1d8", "damageType": "Bludgeoning", "attackBonus": 100, "damageBonus": 0, "properties": [] };
+					var log = [];
+					service.resolveAttack( log, attacker, defender, weapon, false, true, false, 0, {} );
+					expect( log[ 1 ] ).notToInclude( "Sneak Attack" );
+				} );
+			} );
+
+			describe( "Weapon Mastery", () => {
+				function makeMasteryAttacker( mastery, extra = {} ){
+					return makeCombatant( 0, 0, {
+						"name": "Fighter", "level": 5, "features": [ "Weapon Mastery" ],
+						"inventory": [ { "name": "TestWeapon", "category": "melee", "damageDice": "1d8", "damageType": "Slashing", "attackBonus": 100, "damageBonus": 0, "mastery": arguments.mastery, "properties": [] } ]
+					}.append( arguments.extra ) );
+				}
+
+				it( "Vex grants Advantage on the attacker's next attack against the same target", () => {
+					// A natural 1 always misses regardless of attack bonus, so
+					// retry on that rare fumble rather than risk a ~5% flake.
+					var attacker = makeMasteryAttacker( "Vex" );
+					var defender = makeCombatant( 5, 5, { "name": "Target", "armorClass": 1 } );
+					for ( var i = 1; i <= 20; i++ ) {
+						var log = [];
+						service.resolveAttack( log, attacker, defender, attacker.inventory[ 1 ], false, false, false, 0, {} );
+						if ( structKeyExists( attacker, "vexAdvantageTarget" ) && len( attacker.vexAdvantageTarget ) ) {
+							break;
+						}
+					}
+					expect( attacker.vexAdvantageTarget ).toBe( "Target" );
+
+					// Use a non-mastery weapon for the confirming attack so a second
+					// Vex proc doesn't immediately re-queue the flag this check is
+					// looking for it to consume.
+					var secondLog = [];
+					var plainWeapon = { "name": "Fists", "category": "melee", "damageDice": "1d4", "damageType": "Bludgeoning", "attackBonus": 100, "damageBonus": 0, "properties": [] };
+					service.resolveAttack( secondLog, attacker, defender, plainWeapon, false, false, false, 0, {} );
+					expect( arrayToList( secondLog, " | " ) ).toInclude( "(Advantage)" );
+					expect( attacker.vexAdvantageTarget ).toBe( "" );
+				} );
+
+				it( "Sap gives the defender Disadvantage on their next attack roll", () => {
+					// A natural 1 always misses regardless of attack bonus, so
+					// retry on that rare fumble rather than risk a ~5% flake.
+					var attacker = makeMasteryAttacker( "Sap" );
+					var defender = {};
+					for ( var i = 1; i <= 20; i++ ) {
+						defender = makeCombatant( 5, 5, { "name": "Target", "armorClass": 1 } );
+						service.resolveAttack( [], attacker, defender, attacker.inventory[ 1 ], false, false, false, 0, {} );
+						if ( structKeyExists( defender, "sapped" ) && defender.sapped ) {
+							break;
+						}
+					}
+					expect( defender.sapped ).toBeTrue();
+
+					var counterWeapon = { "name": "Claw", "category": "melee", "damageDice": "1d4", "damageType": "Slashing", "attackBonus": 100, "damageBonus": 0 };
+					var log = [];
+					service.resolveAttack( log, defender, attacker, counterWeapon, false, false, false, 0, {} );
+					expect( log[ 1 ] ).toInclude( "(Disadvantage)" );
+					expect( defender.sapped ).toBeFalse();
+				} );
+
+				it( "Slow reduces the defender's Speed by 10 on a damaging hit", () => {
+					// A natural 1 always misses regardless of attack bonus, so
+					// retry on that rare fumble rather than risk a ~5% flake.
+					var attacker = makeMasteryAttacker( "Slow" );
+					var defender = {};
+					for ( var i = 1; i <= 20; i++ ) {
+						defender = makeCombatant( 5, 5, { "name": "Target", "armorClass": 1, "speed": 30 } );
+						service.resolveAttack( [], attacker, defender, attacker.inventory[ 1 ], false, false, false, 0, {} );
+						if ( structKeyExists( defender, "speedPenalty" ) && defender.speedPenalty > 0 ) {
+							break;
+						}
+					}
+					expect( defender.speedPenalty ).toBe( 10 );
+				} );
+
+				it( "Topple forces a Constitution save or the defender falls Prone", () => {
+					// A natural 1 always misses regardless of attack bonus, so
+					// retry on that rare fumble rather than risk a ~5% flake.
+					var attacker = makeMasteryAttacker( "Topple", { "modifiers": { "str": 100 }, "proficiencyBonus": 100 } );
+					var defender = {};
+					for ( var i = 1; i <= 20; i++ ) {
+						defender = makeCombatant( 5, 5, { "name": "Target", "armorClass": 1, "modifiers": { "con": -50 } } );
+						service.resolveAttack( [], attacker, defender, attacker.inventory[ 1 ], false, false, false, 0, {} );
+						if ( service.hasCondition( defender, "Prone" ) ) {
+							break;
+						}
+					}
+					expect( service.hasCondition( defender, "Prone" ) ).toBeTrue();
+				} );
+
+				it( "Graze deals ability-modifier damage even on a miss", () => {
+					// A natural 20 always hits regardless of attack bonus, so retry
+					// on the rare crit (a real hit, not the miss this test targets)
+					// rather than risk a ~5% flake.
+					var attacker = makeMasteryAttacker( "Graze", { "modifiers": { "str": 5 } } );
+					var weapon = attacker.inventory[ 1 ];
+					weapon.attackBonus = -50;
+					var defender = {};
+					var grazed = false;
+					for ( var i = 1; i <= 30 && !grazed; i++ ) {
+						defender = makeCombatant( 5, 5, { "name": "Target", "armorClass": 30 } );
+						service.resolveAttack( [], attacker, defender, weapon, false, false, false, 0, {} );
+						grazed = ( defender.hitPoints == 495 );
+					}
+					expect( grazed ).toBeTrue();
+				} );
+
+				it( "Cleave also strikes a second adjacent hostile for the same damage", () => {
+					// A natural 1 always misses regardless of attack bonus, so
+					// retry on that rare fumble rather than risk a ~5% flake.
+					var mobA = {};
+					var mobB = {};
+					for ( var i = 1; i <= 20; i++ ) {
+						var attacker = makeCombatant( 1, 1, {
+							"name": "Test Hero", "level": 5, "features": [ "Weapon Mastery" ],
+							"inventory": [ { "name": "Greataxe", "category": "melee", "damageDice": "1d1", "damageType": "Slashing", "attackBonus": 100, "damageBonus": 0, "mastery": "Cleave", "properties": [] } ]
+						} );
+						mobA = makeCombatant( 2, 1, { "name": "Mob A" } );
+						mobB = makeCombatant( 1, 2, { "name": "Mob B" } );
+						var state = { "player": attacker, "opponents": [ mobA, mobB ], "opponent": mobA, "log": [], "gameOver": false, "outcome": "" };
+						service.resolveAttack( state.log, attacker, mobA, attacker.inventory[ 1 ], false, false, false, 0, state );
+						if ( mobA.hitPoints < 500 ) {
+							break;
+						}
+					}
+					// A natural 20 doubles the primary target's damage dice, so
+					// compare the two targets against each other (Cleave always
+					// deals the same number to both) instead of a hardcoded value.
+					expect( mobA.hitPoints ).toBeLT( 500 );
+					expect( mobB.hitPoints ).toBe( mobA.hitPoints );
+				} );
+
+				it( "Push moves the defender away from the attacker on open floor", () => {
+					// attackBonus 100 vs AC 1 only misses on a natural 1 fumble, so
+					// retry on that rare case rather than risk a ~5% flake.
+					var attacker = makeMasteryAttacker( "Push" );
+					attacker.position = { "x": 1, "y": 1 };
+					var grid = makeWallGrid( -1, -1 );
+					var state = { "grid": grid };
+					var defender = {};
+					for ( var i = 1; i <= 20; i++ ) {
+						defender = makeCombatant( 2, 1, { "name": "Target", "armorClass": 1 } );
+						service.resolveAttack( [], attacker, defender, attacker.inventory[ 1 ], false, false, false, 0, state );
+						if ( defender.position.x != 2 ) {
+							break;
+						}
+					}
+					expect( defender.position.x ).toBe( 4 );
+					expect( defender.position.y ).toBe( 1 );
+				} );
+
+				it( "Nick lets the off-hand attack skip the bonus action, once per turn", () => {
+					var player = makeCombatant( 0, 0, {
+						"name": "Rogue", "level": 3, "features": [ "Weapon Mastery" ], "usedNickThisTurn": false,
+						"inventory": [
+							{ "id": 1, "name": "Dagger", "category": "melee", "damageDice": "1d4", "damageType": "Piercing", "attackBonus": 100, "damageBonus": 0, "mastery": "Nick", "properties": [ "Light" ], "equipped": true },
+							{ "id": 2, "name": "Dagger", "category": "melee", "damageDice": "1d4", "damageType": "Piercing", "attackBonus": 100, "damageBonus": 0, "properties": [ "Light" ], "equipped": false, "quantity": 1 }
+						]
+					} );
+					var state = { "player": player, "opponent": makeCombatant( 1, 0 ), "log": [], "bonusActionUsed": true };
+					service.offHandAttack( state );
+					expect( player.usedNickThisTurn ).toBeTrue();
+					expect( state.bonusActionUsed ).toBeTrue();
+					expect( state.log.len() ).toBeGT( 0 );
+				} );
+
+				it( "does not apply any mastery without the Weapon Mastery feature", () => {
+					var attacker = makeCombatant( 0, 0, {
+						"name": "NoFeature", "level": 5, "features": [],
+						"inventory": [ { "name": "TestWeapon", "category": "melee", "damageDice": "1d8", "damageType": "Slashing", "attackBonus": 100, "damageBonus": 0, "mastery": "Vex", "properties": [] } ]
+					} );
+					var defender = makeCombatant( 5, 5, { "name": "Target", "armorClass": 1 } );
+					service.resolveAttack( [], attacker, defender, attacker.inventory[ 1 ], false, false, false, 0, {} );
+					expect( structKeyExists( attacker, "vexAdvantageTarget" ) ).toBeFalse();
 				} );
 			} );
 

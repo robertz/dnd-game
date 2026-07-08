@@ -8,11 +8,91 @@
 				<h2 class="fantasy-heading" style="margin: 0 0 0.3rem;">#character.name#</h2>
 				<p class="stat-subtitle" style="margin: 0;">
 					Level #character.level# #character.species# #character.className#
+					<bx:if len( character.subclassName )> (#character.subclassName#)</bx:if>
 					<bx:if len( character.background )> &bull; #character.background#</bx:if>
 					<bx:if len( character.alignment )> &bull; #character.alignment#</bx:if>
 					&bull; #character.experiencePoints# XP &bull; Hit Die: #character.hitDie#
 				</p>
 			</div>
+
+			<bx:if character.subclassChoice.pending>
+				<div class="parchment-panel asi-panel" style="margin-bottom: 1rem;">
+					<h3 class="fantasy-heading" style="margin: 0 0 0.3rem;">Choose Your Subclass</h3>
+					<p class="stat-subtitle" style="margin: 0 0 0.5rem;">You may pick this now, or come back later.</p>
+					<div class="creation-grid">
+						<bx:loop array="#character.subclassChoice.availableSubclasses#" index="pendingSubclassOption">
+							<div
+								class="creation-card creation-card-compact"
+								wire:click="chooseSubclass(#pendingSubclassOption.id#)"
+								title="#pendingSubclassOption.tagline#"
+							>#pendingSubclassOption.name#</div>
+						</bx:loop>
+					</div>
+				</div>
+			</bx:if>
+
+			<bx:if character.fightingStyleChoice.pending>
+				<div class="parchment-panel asi-panel" style="margin-bottom: 1rem;">
+					<h3 class="fantasy-heading" style="margin: 0 0 0.3rem;">Choose Your Fighting Style</h3>
+					<p class="stat-subtitle" style="margin: 0 0 0.5rem;">You may pick this now, or come back later.</p>
+					<div class="creation-grid">
+						<bx:loop array="#character.fightingStyleChoice.availableStyles#" index="pendingStyleOption">
+							<div
+								class="creation-card creation-card-compact"
+								wire:click="chooseFightingStyle('#pendingStyleOption#')"
+								title="#featDescription( pendingStyleOption )#"
+							>#pendingStyleOption#</div>
+						</bx:loop>
+					</div>
+				</div>
+			</bx:if>
+
+			<bx:if cantripChoice.pending>
+				<div class="parchment-panel asi-panel" style="margin-bottom: 1rem;">
+					<h3 class="fantasy-heading" style="margin: 0 0 0.3rem;">Learn a Cantrip</h3>
+					<p class="stat-subtitle" style="margin: 0 0 0.5rem;">You may pick this now, or come back later.</p>
+					<div class="creation-grid">
+						<bx:loop array="#cantripChoice.availableCantrips#" index="pendingCantripOption">
+							<div
+								class="creation-card creation-card-compact"
+								wire:click="chooseCantrip('#pendingCantripOption.name#')"
+								title="#describeSpell( pendingCantripOption )#"
+							>#pendingCantripOption.name#</div>
+						</bx:loop>
+					</div>
+				</div>
+			</bx:if>
+
+			<bx:if spellChoice.pending>
+				<div class="parchment-panel asi-panel" style="margin-bottom: 1rem;">
+					<h3 class="fantasy-heading" style="margin: 0 0 0.3rem;">Learn a Level #spellChoice.level# Spell</h3>
+					<p class="stat-subtitle" style="margin: 0 0 0.5rem;">You may pick this now, or come back later.</p>
+					<div class="creation-grid">
+						<bx:loop array="#spellChoice.availableSpells#" index="pendingSpellOption">
+							<div
+								class="creation-card creation-card-compact"
+								wire:click="chooseSpell('#pendingSpellOption.name#')"
+								title="#describeSpell( pendingSpellOption )#"
+							>#pendingSpellOption.name#</div>
+						</bx:loop>
+					</div>
+				</div>
+			</bx:if>
+
+			<bx:if expertiseChoice.pending>
+				<div class="parchment-panel asi-panel" style="margin-bottom: 1rem;">
+					<h3 class="fantasy-heading" style="margin: 0 0 0.3rem;">Choose Expertise</h3>
+					<p class="stat-subtitle" style="margin: 0 0 0.5rem;">Pick a skill you're proficient in to double its Proficiency Bonus. You may pick this now, or come back later.</p>
+					<div class="creation-grid">
+						<bx:loop array="#expertiseChoice.availableSkills#" index="pendingExpertiseOption">
+							<div
+								class="creation-card creation-card-compact"
+								wire:click="chooseExpertise('#pendingExpertiseOption#')"
+							>#pendingExpertiseOption#</div>
+						</bx:loop>
+					</div>
+				</div>
+			</bx:if>
 
 			<div class="ability-grid">
 				<bx:loop array="#['str','dex','con','int','wis','cha']#" index="abbrev">
@@ -52,11 +132,19 @@
 					<strong>Saving Throw Proficiencies:</strong>
 					#arrayToList( character.savingThrowProficiencies, ", " )#
 				</p>
+				<bx:if character.skillProficiencies.len()>
+					<p class="stat-subtitle" style="margin: 0 0 0.4rem;"><strong>Skill Proficiencies</strong></p>
+					<div class="sheet-features" style="margin-bottom: 0.5rem;">
+						<bx:loop array="#character.skillProficiencies#" index="sheetSkill">
+							<span class="feature-chip" title="#skillAbility( sheetSkill )# — #modLabel( skillCheckBonus( sheetSkill ) )# to #sheetSkill# checks#( arrayFindNoCase( character.expertiseSkills, sheetSkill ) ? ' (Expertise)' : '' )#">#sheetSkill##( arrayFindNoCase( character.expertiseSkills, sheetSkill ) ? '*' : '' )#</span>
+						</bx:loop>
+					</div>
+				</bx:if>
 				<bx:if character.features.len()>
 					<p class="stat-subtitle" style="margin: 0.75rem 0 0.4rem;"><strong>Features</strong></p>
 					<div class="sheet-features">
 						<bx:loop array="#character.features#" index="sheetFeature">
-							<span class="feature-chip">Lv #sheetFeature.level# — #sheetFeature.name#</span>
+							<span class="feature-chip" title="#htmlEditFormat( featureDescription( sheetFeature.name ) )#">Lv #sheetFeature.level# — #sheetFeature.name#</span>
 						</bx:loop>
 					</div>
 				</bx:if>
@@ -64,8 +152,22 @@
 					<p class="stat-subtitle" style="margin: 0.75rem 0 0.4rem;"><strong>Feats</strong></p>
 					<div class="sheet-features">
 						<bx:loop array="#character.feats#" index="sheetFeat">
-							<span class="feature-chip">#sheetFeat#</span>
+							<span class="feature-chip" title="#htmlEditFormat( featDescription( sheetFeat ) )#">#sheetFeat#</span>
 						</bx:loop>
+					</div>
+				</bx:if>
+				<bx:if character.speciesDetail.traits.len()>
+					<p class="stat-subtitle" style="margin: 0.75rem 0 0.4rem;"><strong>Species Traits</strong></p>
+					<div class="sheet-features">
+						<bx:loop array="#character.speciesDetail.traits#" index="speciesTrait">
+							<span class="feature-chip" title="#htmlEditFormat( speciesTrait.description )#">#speciesTrait.name#</span>
+						</bx:loop>
+					</div>
+				</bx:if>
+				<bx:if len( character.backgroundDetail.featureName )>
+					<p class="stat-subtitle" style="margin: 0.75rem 0 0.4rem;"><strong>Background Feature</strong></p>
+					<div class="sheet-features">
+						<span class="feature-chip" title="#htmlEditFormat( character.backgroundDetail.featureDescription )#">#character.backgroundDetail.featureName#</span>
 					</div>
 				</bx:if>
 			</div>
@@ -252,8 +354,20 @@
 
 			<bx:if tab == 'spells'>
 				<div class="sheet-tab-panel">
+					<bx:if character.knownCantripNames.len() || character.knownSpellNames.len()>
+						<h3 class="fantasy-heading">Known Spells</h3>
+						<p class="stat-subtitle" style="margin: 0 0 0.75rem;">
+							<bx:if character.knownCantripNames.len()>
+								Cantrips: #arrayToList( character.knownCantripNames, ", " )#<br>
+							</bx:if>
+							<bx:if character.knownSpellNames.len()>
+								Spells: #arrayToList( character.knownSpellNames, ", " )#
+							</bx:if>
+						</p>
+					</bx:if>
+
 					<bx:if cantripOptions.len()>
-						<h3 class="fantasy-heading">Cantrip</h3>
+						<h3 class="fantasy-heading">Starting Cantrip</h3>
 						<div class="creation-grid">
 							<bx:loop array="#cantripOptions#" index="cantripOption">
 								<div
@@ -268,7 +382,7 @@
 					</bx:if>
 
 					<bx:if spellOptions.len()>
-						<h3 class="fantasy-heading">1st-Level Spell</h3>
+						<h3 class="fantasy-heading">Starting 1st-Level Spell</h3>
 						<div class="creation-grid">
 							<bx:loop array="#spellOptions#" index="spellOption">
 								<div

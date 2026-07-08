@@ -15,28 +15,53 @@
 					<div class="turn-actions">
 						<button type="button" class="btn#( asiMode == "single" ? " btn-auto-battle" : "" )#" wire:click="setAsiMode('single')">+2 to one ability</button>
 						<button type="button" class="btn#( asiMode == "double" ? " btn-auto-battle" : "" )#" wire:click="setAsiMode('double')">+1 to two abilities</button>
+						<button type="button" class="btn#( asiMode == "feat" ? " btn-auto-battle" : "" )#" wire:click="setAsiMode('feat')">Take a feat instead</button>
 					</div>
-					<div class="creation-scores">
-						<label>
-							Ability <bx:if asiMode == "double">1</bx:if>:
-							<select class="creation-input" wire:model="asiAbility1">
-								<bx:loop array="#abilityAbbreviations#" index="abbrev">
-									<option value="#abbrev#" #( asiAbility1 == abbrev ? "selected" : "" )#>#uCase( abbrev )# (#player.abilityScores[ abbrev ]#)</option>
-								</bx:loop>
-							</select>
-						</label>
-						<bx:if asiMode == "double">
+					<bx:if asiMode != "feat">
+						<div class="creation-scores">
 							<label>
-								Ability 2:
-								<select class="creation-input" wire:model="asiAbility2">
+								Ability <bx:if asiMode == "double">1</bx:if>:
+								<select class="creation-input" wire:model="asiAbility1">
 									<bx:loop array="#abilityAbbreviations#" index="abbrev">
-										<option value="#abbrev#" #( asiAbility2 == abbrev ? "selected" : "" )#>#uCase( abbrev )# (#player.abilityScores[ abbrev ]#)</option>
+										<option value="#abbrev#" #( asiAbility1 == abbrev ? "selected" : "" )#>#uCase( abbrev )# (#player.abilityScores[ abbrev ]#)</option>
 									</bx:loop>
 								</select>
 							</label>
+							<bx:if asiMode == "double">
+								<label>
+									Ability 2:
+									<select class="creation-input" wire:model="asiAbility2">
+										<bx:loop array="#abilityAbbreviations#" index="abbrev">
+											<option value="#abbrev#" #( asiAbility2 == abbrev ? "selected" : "" )#>#uCase( abbrev )# (#player.abilityScores[ abbrev ]#)</option>
+										</bx:loop>
+									</select>
+								</label>
+							</bx:if>
+						</div>
+						<button type="button" class="btn btn-attack" wire:click="confirmAbilityScoreImprovement()">Confirm</button>
+					<bx:else>
+						<div class="creation-grid">
+							<bx:loop array="#availableLevelUpFeats()#" index="featOption">
+								<div
+									class="creation-card creation-card-compact#( asiSelectedFeat == featOption ? ' creation-card-selected' : '' )#"
+									wire:click="selectAsiFeat('#featOption#')"
+									title="#featDescription( featOption )#"
+								>#featOption#</div>
+							</bx:loop>
+						</div>
+						<bx:if asiSelectedFeat == "Skilled">
+							<p class="stat-subtitle">Choose 3 skills (#asiSelectedSkills.len()# of 3 chosen)</p>
+							<div class="creation-grid">
+								<bx:loop array="#allSkillNames()#" index="skilledSkillOption">
+									<div
+										class="creation-card creation-card-compact#( arrayFindNoCase( asiSelectedSkills, skilledSkillOption ) ? ' creation-card-selected' : '' )#"
+										wire:click="toggleAsiSkill('#skilledSkillOption#')"
+									>#skilledSkillOption#</div>
+								</bx:loop>
+							</div>
 						</bx:if>
-					</div>
-					<button type="button" class="btn btn-attack" wire:click="confirmAbilityScoreImprovement()">Confirm</button>
+						<button type="button" class="btn btn-attack" wire:click="confirmFeatChoice()" #( ( len( asiSelectedFeat ) && ( asiSelectedFeat != "Skilled" || asiSelectedSkills.len() == 3 ) ) ? "" : "disabled" )#>Confirm</button>
+					</bx:if>
 				</div>
 			</bx:if>
 			<bx:if outcome == "victory">
@@ -60,6 +85,8 @@
 
 		<bx:if canRest()>
 		<bx:set hitDiceRemaining = player.hitDiceMax - player.hitDiceSpent>
+		<bx:set restDiceMax = maxRestDice()>
+		<bx:set longRestWait = hoursUntilNextLongRest()>
 		<div class="parchment-panel rest-panel">
 			<h2 class="fantasy-heading">Rest</h2>
 			<div class="stat-inline">
@@ -69,14 +96,27 @@
 					<span><strong>Slots</strong> <bx:loop collection="#player.spellSlots#" item="sl">L#sl#:#player.spellSlots[ sl ]# </bx:loop></span>
 				</bx:if>
 			</div>
-			<div class="turn-actions">
+			<p class="stat-subtitle" style="margin: 0.3rem 0 0;">#gameClockLabel()#</p>
+			<div class="turn-actions" style="align-items: center;">
+				<label class="stat-subtitle" style="margin: 0;">
+					Hit Dice to spend
+					<button type="button" class="btn" wire:click="adjustRestDice(-1)" #( restDiceCount lte 0 ? "disabled" : "" )#>-</button>
+					<strong>#restDiceCount#</strong>
+					<button type="button" class="btn" wire:click="adjustRestDice(1)" #( restDiceCount gte restDiceMax ? "disabled" : "" )#>+</button>
+				</label>
 				<button
 					type="button"
 					class="btn btn-attack"
-					wire:click="spendHitDie()"
-					#( hitDiceRemaining lte 0 || player.hitPoints gte player.maxHitPoints ? "disabled" : "" )#
-				>Short Rest — Spend Hit Die</button>
-				<button type="button" class="btn" wire:click="takeLongRest()">Long Rest — Full Recovery</button>
+					wire:click="takeShortRest()"
+					title="Advances the clock by 1 hour; recovers Second Wind and one Rage use."
+				>Short Rest (1 hr)</button>
+				<button
+					type="button"
+					class="btn"
+					wire:click="takeLongRest()"
+					#( longRestWait gt 0 ? "disabled" : "" )#
+					title="Advances the clock by 8 hours; full recovery.#( longRestWait gt 0 ? ' Available in about ' & longRestWait & ' more hour(s) of in-game time.' : '' )#"
+				>Long Rest (8 hr)#( longRestWait gt 0 ? " — available in ~#longRestWait#h" : "" )#</button>
 			</div>
 		</div>
 		</bx:if>
@@ -133,6 +173,13 @@
 							<bx:set remainingAttacks = attacksRemaining()>
 							<bx:if remainingAttacks gt 0 && ( !actionUsed || attacksUsedThisTurn gt 0 )>
 								<button type="button" class="btn btn-attack" wire:click="attack()">Attack#( remainingAttacks gt 1 ? " (#remainingAttacks# left)" : "" )#</button>
+								<bx:if structKeyExists( player, "features" ) && arrayFindNoCase( player.features, "Paladin's Smite" ) && structKeyExists( player, "spellSlots" )>
+									<bx:loop collection="#player.spellSlots#" item="smiteSlotLevel">
+										<bx:if player.spellSlots[ smiteSlotLevel ] gt 0>
+											<button type="button" class="btn btn-attack" wire:click="smite(#smiteSlotLevel#)">Smite (Lv #smiteSlotLevel#)</button>
+										</bx:if>
+									</bx:loop>
+								</bx:if>
 							</bx:if>
 							<bx:if !actionUsed>
 								<bx:if structKeyExists( player, "hasGrapplerFeat" ) && player.hasGrapplerFeat>
@@ -142,15 +189,30 @@
 								<bx:if structKeyExists( player, "hasBreathWeapon" ) && player.hasBreathWeapon && !player.usedBreathWeapon>
 									<button type="button" class="btn btn-attack" wire:click="useBreathWeapon()">Breath Weapon</button>
 								</bx:if>
-								<bx:if structKeyExists( player, "knownCantrip" ) && !isNull( player.knownCantrip )>
-									<button type="button" class="btn btn-attack" wire:click="castCantrip()">Cast #player.knownCantrip.name#</button>
+								<bx:if structKeyExists( player, "knownCantrips" )>
+									<bx:loop array="#player.knownCantrips#" index="knownCantrip">
+										<button type="button" class="btn btn-attack" wire:click="castCantrip('#knownCantrip.name#')">Cast #knownCantrip.name#</button>
+									</bx:loop>
 								</bx:if>
-								<bx:if structKeyExists( player, "knownLeveledSpell" ) && !isNull( player.knownLeveledSpell )>
-									<button type="button" class="btn btn-attack" wire:click="castLeveledSpell()">Cast #player.knownLeveledSpell.name#</button>
+								<bx:if structKeyExists( player, "knownLeveledSpells" )>
+									<bx:loop array="#player.knownLeveledSpells#" index="knownSpell">
+										<button type="button" class="btn btn-attack" wire:click="castLeveledSpell('#knownSpell.name#')">Cast #knownSpell.name#</button>
+									</bx:loop>
 								</bx:if>
 							</bx:if>
-							<bx:if !bonusActionUsed>
+							<bx:if canOffHandAttack()>
 								<button type="button" class="btn btn-attack" wire:click="offHandAttack()">Off-Hand Attack</button>
+							</bx:if>
+							<bx:if !bonusActionUsed>
+								<bx:if structKeyExists( player, "features" ) && arrayFindNoCase( player.features, "Second Wind" ) && !player.usedSecondWind>
+									<button type="button" class="btn btn-attack" wire:click="useSecondWind()">Second Wind</button>
+								</bx:if>
+								<bx:if structKeyExists( player, "features" ) && arrayFindNoCase( player.features, "Rage" ) && !player.isRaging && player.ragesRemaining gt 0>
+									<button type="button" class="btn btn-attack" wire:click="startRage()">Rage (#player.ragesRemaining# left)</button>
+								</bx:if>
+							</bx:if>
+							<bx:if structKeyExists( player, "isRaging" ) && player.isRaging>
+								<button type="button" class="btn btn-attack" wire:click="endRage()">End Rage</button>
 							</bx:if>
 							<button type="button" class="btn btn-end-turn" wire:click="endTurn()">End Turn</button>
 						</bx:if>
@@ -185,7 +247,28 @@
 					<p class="stat-note"><strong>Death Saves</strong> ✓#min( player.deathSaveSuccesses, 3 )# ✗#min( player.deathSaveFailures, 3 )#</p>
 				</bx:if>
 				<bx:if structKeyExists( player, "conditions" ) && structCount( player.conditions ) gt 0>
-					<p class="stat-note"><strong>Conditions</strong> #arrayToList( structKeyArray( player.conditions ), ", " )#</p>
+					<p class="stat-note">
+						<strong>Conditions</strong>
+						<bx:loop array="#structKeyArray( player.conditions )#" index="conditionName">
+							<span class="condition-chip" title="#htmlEditFormat( conditionDescription( conditionName ) )#">#conditionName#</span>
+						</bx:loop>
+					</p>
+				</bx:if>
+				<bx:if structKeyExists( player, "features" ) && player.features.len()>
+					<p class="stat-note">
+						<strong>Features</strong>
+						<bx:loop array="#player.features#" index="playerFeatureName">
+							<span class="condition-chip" title="#htmlEditFormat( featureDescription( playerFeatureName ) )#">#playerFeatureName#</span>
+						</bx:loop>
+					</p>
+				</bx:if>
+				<bx:if structKeyExists( player, "feats" ) && player.feats.len()>
+					<p class="stat-note">
+						<strong>Feats</strong>
+						<bx:loop array="#player.feats#" index="playerFeatName">
+							<span class="condition-chip" title="#htmlEditFormat( featDescription( playerFeatName ) )#">#playerFeatName#</span>
+						</bx:loop>
+					</p>
 				</bx:if>
 				<bx:if player.inventory.len() gt 0>
 					<ul class="attack-list">
@@ -217,11 +300,16 @@
 			</div>
 
 			<bx:loop array="#opponents#" index="foe">
-				<bx:if foe.visible>
+				<!--- A defeated foe's card stays visible (with the blink-then-fade
+				      mob-defeated animation, see Main.bxm) only for the remainder
+				      of the round it died in, then drops out of the sidebar
+				      entirely once the round advances — see
+				      CombatService._checkDefenderDefeated()'s defeatedAtRound. --->
+				<bx:if foe.visible && ( foe.hitPoints gt 0 || ( structKeyExists( foe, "defeatedAtRound" ) && foe.defeatedAtRound == round ) )>
 					<bx:set foeBloodied = ( foe.hitPoints > 0 && foe.hitPoints <= foe.maxHitPoints / 2 )>
 					<bx:set foeTargeted = ( foe.mobIndex == selectedOpponentIndex )>
 					<div
-						class="stat-card stat-card-opponent#( foe.hitPoints <= 0 ? ' stat-card-down' : '' )##( foeTargeted && foe.hitPoints gt 0 ? ' stat-card-targeted' : '' )#"
+						class="stat-card stat-card-opponent#( foe.hitPoints <= 0 ? ' stat-card-down stat-card-defeated' : '' )##( foeTargeted && foe.hitPoints gt 0 ? ' stat-card-targeted' : '' )#"
 						wire:click="selectTarget(#foe.mobIndex#)"
 					>
 						<h2 class="fantasy-heading">#foe.name##( foeTargeted && foe.hitPoints gt 0 ? ' 🎯' : '' )#</h2>
@@ -233,7 +321,12 @@
 							<span><strong>Spd</strong> #foe.speed# ft.</span>
 						</div>
 						<bx:if structKeyExists( foe, "conditions" ) && structCount( foe.conditions ) gt 0>
-							<p class="stat-note"><strong>Conditions</strong> #arrayToList( structKeyArray( foe.conditions ), ", " )#</p>
+							<p class="stat-note">
+								<strong>Conditions</strong>
+								<bx:loop array="#structKeyArray( foe.conditions )#" index="conditionName">
+									<span class="condition-chip" title="#htmlEditFormat( conditionDescription( conditionName ) )#">#conditionName#</span>
+								</bx:loop>
+							</p>
 						</bx:if>
 						<bx:if foe.inventory.len() gt 0>
 							<ul class="attack-list">

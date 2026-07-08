@@ -37,6 +37,23 @@ class singleton {
 
 	FULL_CASTER_CLASSES = [ "Bard", "Cleric", "Druid", "Sorcerer", "Warlock", "Wizard" ];
 	HALF_CASTER_CLASSES = [ "Paladin", "Ranger" ];
+
+	// Rage (Barbarian 1) uses per long rest, by level — see startRage(). Reset
+	// fully every encounter (no long-rest tracking across encounters exists
+	// in this app), same simplification as spell slots.
+	RAGE_USES_BY_LEVEL = [
+		2, 2, 3, 3, 3, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 6, 6, 6
+	];
+
+	// In-game clock (see startNewRound()'s per-round tick and shortRest()/
+	// longRest()'s hour-sized jumps) — a combat round is about 6 seconds per
+	// the SRD; a Short Rest is a minimum 1-hour activity, a Long Rest 8
+	// hours, and a character can't benefit from more than one Long Rest in
+	// any 24-hour span.
+	SECONDS_PER_ROUND = 6;
+	SHORT_REST_SECONDS = 60 * 60;
+	LONG_REST_SECONDS = 8 * 60 * 60;
+	LONG_REST_COOLDOWN_SECONDS = 24 * 60 * 60;
 	SPELLCASTING_ABILITY_BY_CLASS = {
 		"Bard": "cha", "Cleric": "wis", "Druid": "wis", "Sorcerer": "cha", "Warlock": "cha", "Wizard": "int",
 		"Paladin": "cha", "Ranger": "wis"
@@ -64,6 +81,53 @@ class singleton {
 	// than Guiding Bolt as their one prepared leveled spell), not a rule from
 	// the SRD itself.
 	HEAL_PREFERRING_CLASSES = [ "Bard", "Cleric", "Druid", "Paladin", "Ranger" ];
+
+	// The SRD's eighteen skills, each tied to the ability its checks use.
+	SKILL_ABILITIES = {
+		"Athletics": "str",
+		"Acrobatics": "dex", "Sleight of Hand": "dex", "Stealth": "dex",
+		"Arcana": "int", "History": "int", "Investigation": "int", "Nature": "int", "Religion": "int",
+		"Animal Handling": "wis", "Insight": "wis", "Medicine": "wis", "Perception": "wis", "Survival": "wis",
+		"Deception": "cha", "Intimidation": "cha", "Performance": "cha", "Persuasion": "cha"
+	};
+
+	// Species traits (see species_traits.name) that grant a fixed skill
+	// proficiency, for _resolveSkillProficiencies().
+	TRAIT_SKILL_GRANTS = {
+		"Keen Senses": [ "Perception" ],
+		"Menacing": [ "Intimidation" ]
+	};
+
+	// Species traits that grant "N skills of your choice" rather than a
+	// fixed skill — e.g. Half-Elf's Skill Versatility. The player picks
+	// which via characterCreation.bx's Origin step (see
+	// speciesSkillChoiceCount()); the choice is stored the same way a
+	// class's chosen skills are (characters.chosen_skill_proficiencies).
+	TRAIT_SKILL_CHOICE_COUNTS = { "Skill Versatility": 2 };
+
+	/**
+	 * Total "skills of your choice" a species' traits grant (e.g. 2 for
+	 * Half-Elf's Skill Versatility) — see TRAIT_SKILL_CHOICE_COUNTS.
+	 */
+	function speciesSkillChoiceCount( traitNames ) {
+		var count = 0;
+		for ( var traitName in TRAIT_SKILL_CHOICE_COUNTS ) {
+			if ( arrayFindNoCase( arguments.traitNames, traitName ) > 0 ) {
+				count += TRAIT_SKILL_CHOICE_COUNTS[ traitName ];
+			}
+		}
+		return count;
+	}
+
+	/**
+	 * Every SRD skill name, alphabetically — for a skill-choice picker (e.g.
+	 * Skill Versatility, the Skilled feat) to loop over.
+	 */
+	function allSkillNames() {
+		var names = structKeyArray( SKILL_ABILITIES );
+		arraySort( names, "textnocase" );
+		return names;
+	}
 
 	/**
 	 * Decides and performs the player's action for one turn: move toward the
@@ -131,7 +195,7 @@ class singleton {
 	function playerAttack( state, weapon, disadvantage = false ) {
 		var player = arguments.state.player;
 		var opponent = arguments.state.opponent;
-		resolveAttack( arguments.state.log, player, opponent, arguments.weapon, arguments.disadvantage, false, false, coverBonus( arguments.state, player, opponent ) );
+		resolveAttack( arguments.state.log, player, opponent, arguments.weapon, arguments.disadvantage, false, false, coverBonus( arguments.state, player, opponent ), arguments.state );
 		_checkDefenderDefeated( arguments.state, player, opponent, false );
 	}
 
@@ -166,13 +230,31 @@ class singleton {
 	 * @state The encounter's full mutable game state struct.
 	 */
 	function startNewRound( state ) {
-		arguments.state.movementRemaining = int( arguments.state.player.speed / 5 );
+		// The in-game clock ticks forward by one round (~6 seconds, per the
+		// SRD) — this is what Short/Long Rest's hour-sized jumps are
+		// measured against (see SECONDS_PER_ROUND/shortRest()/longRest()).
+		if ( structKeyExists( arguments.state.player, "gameClockSeconds" ) ) {
+			arguments.state.player.gameClockSeconds += SECONDS_PER_ROUND;
+		}
+		// Weapon Mastery — Slow: a hit reduces the target's Speed by 10 ft.
+		// until the start of the attacker's next turn — approximated here as
+		// "until the start of the next round," since this app has exactly one
+		// player turn per round. Reset (not reapplied) every round.
+		arguments.state.player.speedPenalty = 0;
+		arguments.state.movementRemaining = max( 0, int( arguments.state.player.speed / 5 ) );
 		arguments.state.actionUsed = false;
 		arguments.state.bonusActionUsed = false;
 		arguments.state.attacksUsedThisTurn = 0;
 		arguments.state.player.reactionUsed = false;
+		// Sneak Attack (Rogue) and Weapon Mastery — Vex are each limited to
+		// "once per turn"/"until your next attack lands"; both reset here so a
+		// leftover flag from last round can't linger indefinitely if unused.
+		arguments.state.player.usedSneakAttackThisTurn = false;
+		arguments.state.player.vexAdvantageTarget = "";
+		arguments.state.player.usedNickThisTurn = false;
 		for ( var opponent in _stateOpponents( arguments.state ) ) {
 			opponent.reactionUsed = false;
+			opponent.speedPenalty = 0;
 		}
 	}
 
@@ -225,6 +307,7 @@ class singleton {
 			if (
 				hostile.hitPoints <= 0 ||
 				( structKeyExists( hostile, "reactionUsed" ) && hostile.reactionUsed ) ||
+				isIncapacitated( hostile ) ||
 				chebyshev( moverAtStart, hostile ) > 1 ||
 				chebyshev( arguments.mover, hostile ) <= 1
 			) {
@@ -236,7 +319,7 @@ class singleton {
 			}
 			hostile.reactionUsed = true;
 			arguments.state.log.prepend( "#hostile.name# makes an opportunity attack as #arguments.mover.name# moves away!" );
-			resolveAttack( arguments.state.log, hostile, arguments.mover, melee, false, false, false, coverBonus( arguments.state, hostile, arguments.mover ) );
+			resolveAttack( arguments.state.log, hostile, arguments.mover, melee, false, false, false, coverBonus( arguments.state, hostile, arguments.mover ), arguments.state );
 			_checkDefenderDefeated( arguments.state, hostile, arguments.mover, arguments.moverIsPlayer );
 			if ( arguments.state.gameOver ) {
 				return;
@@ -316,6 +399,14 @@ class singleton {
 			}
 		}
 
+		// Incapacitated (or Paralyzed/Petrified/Stunned/Unconscious, which
+		// all include it): can't take actions or Reactions — no movement,
+		// no attack, no spell, this turn.
+		if ( isIncapacitated( arguments.opponent ) ) {
+			arguments.state.log.prepend( "#arguments.opponent.name# is incapacitated and can't act." );
+			return;
+		}
+
 		// A player at 0 HP — dying, or merely stabilized — is Unconscious and
 		// helpless: an aware opponent just finishes them off rather than
 		// rolling a normal attack. This always lands, and counts as 2 failed
@@ -329,8 +420,10 @@ class singleton {
 			return;
 		}
 
+		// Weapon Mastery — Slow: see startNewRound()'s note on timing.
+		var opponentSpeedPenalty = structKeyExists( arguments.opponent, "speedPenalty" ) ? arguments.opponent.speedPenalty : 0;
 		var steps = moveToward(
-			arguments.opponent, player, int( arguments.opponent.speed / 5 ), grid,
+			arguments.opponent, player, int( max( 0, arguments.opponent.speed - opponentSpeedPenalty ) / 5 ), grid,
 			_otherLivingPositions( arguments.state, arguments.opponent, player )
 		);
 
@@ -343,7 +436,7 @@ class singleton {
 			arguments.opponent.knownLeveledSpell.type == "heal" && arguments.opponent.hitPoints <= arguments.opponent.maxHitPoints / 2 &&
 			_hasSpellResource( arguments.opponent, 1 )
 		) {
-			_castLeveledSpellFor( arguments.state, arguments.opponent, player, true );
+			_castLeveledSpellFor( arguments.state, arguments.opponent, player, true, arguments.opponent.knownLeveledSpell );
 			return;
 		}
 
@@ -352,14 +445,14 @@ class singleton {
 			arguments.opponent.knownLeveledSpell.type == "damage" && _hasSpellResource( arguments.opponent, 1 ) &&
 			_isSpellTargetValid( arguments.state, arguments.opponent, player, arguments.opponent.knownLeveledSpell )
 		) {
-			_castLeveledSpellFor( arguments.state, arguments.opponent, player, true );
+			_castLeveledSpellFor( arguments.state, arguments.opponent, player, true, arguments.opponent.knownLeveledSpell );
 			return;
 		}
 		if (
 			structKeyExists( arguments.opponent, "knownCantrip" ) && !isNull( arguments.opponent.knownCantrip ) &&
 			_isSpellTargetValid( arguments.state, arguments.opponent, player, arguments.opponent.knownCantrip )
 		) {
-			_castCantripFor( arguments.state, arguments.opponent, player, true );
+			_castCantripFor( arguments.state, arguments.opponent, player, true, arguments.opponent.knownCantrip );
 			return;
 		}
 
@@ -393,7 +486,7 @@ class singleton {
 				break;
 			}
 			var packAdvantage = _hasPackTacticsAdvantage( arguments.state, arguments.opponent, player );
-			resolveAttack( arguments.state.log, arguments.opponent, player, choice.weapon, choice.disadvantage, packAdvantage, false, coverBonus( arguments.state, arguments.opponent, player ) );
+			resolveAttack( arguments.state.log, arguments.opponent, player, choice.weapon, choice.disadvantage, packAdvantage, false, coverBonus( arguments.state, arguments.opponent, player ), arguments.state );
 			_checkDefenderDefeated( arguments.state, arguments.opponent, player, true );
 		}
 	}
@@ -437,6 +530,7 @@ class singleton {
 		damage = _applyDamageModifiers( arguments.player, damage, special.damageType );
 
 		arguments.player.hitPoints = max( 0, arguments.player.hitPoints - damage );
+		_checkConcentration( arguments.state.log, arguments.player, damage );
 		arguments.state.log.prepend(
 			"#arguments.opponent.name# uses #special.name#! #arguments.player.name# rolls a DC #special.saveDC# #special.saveAbilityLabel# save: #saveResult.total# — " &
 			( saveResult.success ? "succeeds, takes half damage. " : "fails! " ) &
@@ -513,7 +607,7 @@ class singleton {
 				// and _useLegendaryHeal() get for free from their single combined message.
 				resolveAttack(
 					arguments.state.log, arguments.opponent, arguments.player, reused, false, false, false,
-					coverBonus( arguments.state, arguments.opponent, arguments.player )
+					coverBonus( arguments.state, arguments.opponent, arguments.player ), arguments.state
 				);
 				arguments.state.log.prepend( "#arguments.opponent.name# takes a legendary action: #entry.name#!" );
 				_checkDefenderDefeated( arguments.state, arguments.opponent, arguments.player, true );
@@ -541,6 +635,7 @@ class singleton {
 		damage = _applyDamageModifiers( arguments.player, damage, arguments.entry.damageType );
 
 		arguments.player.hitPoints = max( 0, arguments.player.hitPoints - damage );
+		_checkConcentration( arguments.state.log, arguments.player, damage );
 		arguments.state.log.prepend(
 			"#arguments.opponent.name# takes a legendary action: #arguments.entry.name#! #arguments.player.name# rolls a DC #arguments.entry.saveDC# #arguments.entry.saveAbilityLabel# save: #saveResult.total# — " &
 			( saveResult.success ? "succeeds, takes half damage. " : "fails! " ) &
@@ -593,8 +688,9 @@ class singleton {
 	 * @occupiedPositions Optional array of `{x, y}` — other living combatants' positions (never the mover's own or the target's), treated as impassable alongside walls, so two combatants never end up sharing a tile. Only applies with a `grid`; ignored for the no-grid straight-line stepper (only ever used by callers with no map at all — real gameplay always has one).
 	 */
 	function moveToward( mover, target, maxSteps, grid = javaCast( "null", 0 ), occupiedPositions = [] ) {
-		// Restrained: speed is 0, per the condition's own rules.
-		if ( hasCondition( arguments.mover, "Restrained" ) ) {
+		// Restrained/Paralyzed/Petrified/Stunned/Unconscious: speed is
+		// effectively 0 — see cantMove().
+		if ( cantMove( arguments.mover ) ) {
 			return 0;
 		}
 		if ( isNull( arguments.grid ) ) {
@@ -1015,6 +1111,121 @@ class singleton {
 	}
 
 	/**
+	 * True if `combatant` can't take actions or Reactions — Incapacitated
+	 * itself, or any condition whose own rules text says "incapacitated"
+	 * (Paralyzed, Petrified, Stunned, Unconscious). Gates the player's
+	 * manual actions (default.bx), the enemy AI's turn (_runOneOpponentTurn()),
+	 * and Reactions (checkOpportunityAttacks()).
+	 */
+	function isIncapacitated( combatant ) {
+		return (
+			hasCondition( arguments.combatant, "Incapacitated" ) ||
+			isHelpless( arguments.combatant )
+		);
+	}
+
+	/**
+	 * True for Paralyzed, Petrified, Stunned, or Unconscious specifically —
+	 * unlike plain Incapacitated, these also grant attackers Advantage,
+	 * auto-fail the defender's Strength/Dexterity saves, and (Paralyzed/
+	 * Unconscious only, checked separately in resolveAttack()) auto-crit a
+	 * melee hit. Plain Incapacitated alone grants none of that.
+	 */
+	function isHelpless( combatant ) {
+		return (
+			hasCondition( arguments.combatant, "Paralyzed" ) ||
+			hasCondition( arguments.combatant, "Petrified" ) ||
+			hasCondition( arguments.combatant, "Stunned" ) ||
+			hasCondition( arguments.combatant, "Unconscious" )
+		);
+	}
+
+	/**
+	 * True if `combatant`'s Speed is effectively 0 — Restrained (already
+	 * modeled), or Paralyzed/Petrified/Stunned/Unconscious, each of which
+	 * separately says "can't move" on top of being incapacitated. Plain
+	 * Incapacitated does *not* restrict movement by itself, per its own SRD
+	 * definition — only these specific conditions do.
+	 */
+	function cantMove( combatant ) {
+		return hasCondition( arguments.combatant, "Restrained" ) || isHelpless( arguments.combatant );
+	}
+
+	/**
+	 * The SRD rules text for a condition (e.g. "Prone"), from the
+	 * `conditions` table — for a tooltip on the combat log's condition chips,
+	 * so a player can see what "Restrained" or "Frightened" actually does
+	 * without leaving the encounter. Empty string for a name with no matching
+	 * row (there's no source of untrusted/free-text condition names today,
+	 * but addCondition() doesn't validate against the table, so this stays
+	 * graceful rather than throwing).
+	 */
+	function conditionDescription( name ) {
+		var rows = queryExecute(
+			"SELECT description FROM conditions WHERE name = :name",
+			{ "name": arguments.name },
+			{ datasource: "gameserver" }
+		);
+		return ( rows.recordCount > 0 && !isNull( rows.description[ 1 ] ) ) ? rows.description[ 1 ] : "";
+	}
+
+	/**
+	 * The full ability name a skill's checks use (e.g. "Perception" ->
+	 * "Wisdom"), from SKILL_ABILITIES — for a tooltip on skill proficiency
+	 * chips, same idea as conditionDescription(). Empty string for an
+	 * unrecognized skill name.
+	 */
+	function skillAbility( name ) {
+		return structKeyExists( SKILL_ABILITIES, arguments.name ) ? _abilityFullName( SKILL_ABILITIES[ arguments.name ] ) : "";
+	}
+
+	/**
+	 * The actual total bonus `combatant` rolls for a `skill` check right now
+	 * (ability modifier + Proficiency Bonus, the latter only if they're
+	 * proficient — see _skillProficiencyBonus()) — this is "the benefit" a
+	 * skill proficiency chip's tooltip should show, not just which ability
+	 * it uses.
+	 */
+	function skillCheckBonus( combatant, skill ) {
+		var ability = SKILL_ABILITIES[ arguments.skill ];
+		var abilityMod = structKeyExists( arguments.combatant, "modifiers" )
+			? arguments.combatant.modifiers[ ability ]
+			: abilityModifier( arguments.combatant.abilityScores[ ability ] );
+		return abilityMod + _skillProficiencyBonus( arguments.combatant, arguments.skill );
+	}
+
+	/**
+	 * The SRD rules text for a feat — same idea as conditionDescription(),
+	 * for a tooltip on the level-up screen's feat picker.
+	 */
+	function featDescription( name ) {
+		var rows = queryExecute(
+			"SELECT description FROM feats WHERE name = :name",
+			{ "name": arguments.name },
+			{ datasource: "gameserver" }
+		);
+		return ( rows.recordCount > 0 && !isNull( rows.description[ 1 ] ) ) ? rows.description[ 1 ] : "";
+	}
+
+	/**
+	 * The SRD rules text for a class feature — same idea as featDescription(),
+	 * for a tooltip on a Features chip (character creation, character sheet,
+	 * and the combat screen's player stat card). A feature name can exist
+	 * against more than one class (e.g. "Ability Score Improvement" is
+	 * granted by every class); this just returns whichever row comes first,
+	 * since this app doesn't track which class granted a given chip in the
+	 * caller's plain name array.
+	 */
+	function featureDescription( name ) {
+		var rows = queryExecute(
+			"SELECT description FROM class_features WHERE name = :name LIMIT 1",
+			{ "name": arguments.name },
+			{ datasource: "gameserver" }
+		);
+		return ( rows.recordCount > 0 && !isNull( rows.description[ 1 ] ) ) ? rows.description[ 1 ] : "";
+	}
+
+	/**
 	 * Returns `combatant`'s equipped weapon of the given category ("melee" or
 	 * "ranged"), or null if they aren't carrying one.
 	 */
@@ -1179,13 +1390,22 @@ class singleton {
 	 * (`defender.parryBonus`, see _structuredParryBonus()) can turn a
 	 * non-critical melee hit into a miss.
 	 *
+	 * `state` is optional (defaults to `{}`, as every existing unit test call
+	 * omits it) — it's only used for the Weapon Mastery properties that need
+	 * more battlefield context than a single attacker/defender pair (Push's
+	 * grid, Cleave's second target from `state.opponents`). Every real
+	 * combat call site passes the full encounter state; only Weapon Mastery
+	 * is gated behind it (see the "Weapon Mastery" section below), and only
+	 * ever for a combatant with the "Weapon Mastery" class feature, which in
+	 * this dataset is always the player.
+	 *
 	 * @log The encounter's combat log array — a new entry is prepended.
 	 * @attacker The attacker's stat struct (has a `name`).
 	 * @defender The defender's stat struct — mutated in place with the result.
 	 * @weapon The weapon item being used for this attack (from inventory).
 	 * @disadvantage Whether this attack roll has Disadvantage.
 	 */
-	function resolveAttack( log, attacker, defender, weapon, disadvantage = false, advantage = false, omitDamageBonus = false, coverBonus = 0 ) {
+	function resolveAttack( log, attacker, defender, weapon, disadvantage = false, advantage = false, omitDamageBonus = false, coverBonus = 0, state = {} ) {
 		// Grappler: attacks against a creature you've grappled have Advantage,
 		// even if the caller didn't ask for it explicitly.
 		var autoAdvantage = (
@@ -1200,11 +1420,17 @@ class singleton {
 		// Disadvantage on your own attacks, same as being Poisoned or
 		// Frightened (simplified here to apply regardless of whether the
 		// source of the fear is in sight, since this app doesn't track that).
+		// Blinded: your own attacks have Disadvantage. Invisible: your own
+		// attacks have Advantage (the mirror image of Blinded).
 		var autoDisadvantage = (
 			hasCondition( arguments.attacker, "Restrained" ) ||
 			hasCondition( arguments.attacker, "Poisoned" ) ||
-			hasCondition( arguments.attacker, "Frightened" )
+			hasCondition( arguments.attacker, "Frightened" ) ||
+			hasCondition( arguments.attacker, "Blinded" )
 		);
+		if ( hasCondition( arguments.attacker, "Invisible" ) ) {
+			autoAdvantage = true;
+		}
 		if ( hasCondition( arguments.defender, "Prone" ) ) {
 			if ( arguments.weapon.category == "melee" ) {
 				autoAdvantage = true;
@@ -1212,8 +1438,36 @@ class singleton {
 				autoDisadvantage = true;
 			}
 		}
-		if ( hasCondition( arguments.defender, "Restrained" ) ) {
+		// Restrained, Blinded (can't see to defend), and Paralyzed/Petrified/
+		// Stunned/Unconscious (helpless) all give attacks against the
+		// defender Advantage. Invisible is the opposite: attacks against an
+		// Invisible defender have Disadvantage.
+		if (
+			hasCondition( arguments.defender, "Restrained" ) ||
+			hasCondition( arguments.defender, "Blinded" ) ||
+			isHelpless( arguments.defender )
+		) {
 			autoAdvantage = true;
+		}
+		if ( hasCondition( arguments.defender, "Invisible" ) ) {
+			autoDisadvantage = true;
+		}
+		// Weapon Mastery — Vex: a prior hit against this same target with a
+		// Vex weapon grants Advantage on this attack (consumed either way).
+		var usedVex = (
+			structKeyExists( arguments.attacker, "vexAdvantageTarget" ) && len( arguments.attacker.vexAdvantageTarget ) &&
+			arguments.attacker.vexAdvantageTarget == arguments.defender.name
+		);
+		if ( usedVex ) {
+			autoAdvantage = true;
+			arguments.attacker.vexAdvantageTarget = "";
+		}
+		// Weapon Mastery — Sap: a prior hit against the attacker with a Sap
+		// weapon gives Disadvantage on this attack (consumed either way).
+		var usedSap = structKeyExists( arguments.attacker, "sapped" ) && arguments.attacker.sapped;
+		if ( usedSap ) {
+			autoDisadvantage = true;
+			arguments.attacker.sapped = false;
 		}
 		// Advantage and Disadvantage on the same roll cancel out, per the rules.
 		var useAdvantage = ( arguments.advantage || autoAdvantage ) && !( arguments.disadvantage || autoDisadvantage );
@@ -1255,6 +1509,17 @@ class singleton {
 			hits = !isFumble && ( isCrit || total >= effectiveAC );
 		}
 
+		// Paralyzed/Unconscious: any melee hit against them is a Critical
+		// Hit — simplified from the SRD's "within 5 feet" to "any melee
+		// attack", since this app doesn't model reach weapons, so melee
+		// already implies adjacency.
+		if (
+			hits && !isCrit && structKeyExists( arguments.weapon, "category" ) && arguments.weapon.category == "melee" &&
+			( hasCondition( arguments.defender, "Paralyzed" ) || hasCondition( arguments.defender, "Unconscious" ) )
+		) {
+			isCrit = true;
+		}
+
 		// Parry (e.g. Bandit Captain/Erinyes): if adding the defender's parry
 		// bonus to their AC would turn this hit into a miss, they spend their
 		// Reaction to do so — can't help against a natural 20, which always
@@ -1274,6 +1539,16 @@ class singleton {
 			hits = false;
 		}
 
+		// Weapon Mastery (Barbarian/Fighter/Paladin/Ranger/Rogue 1): only
+		// usable with the class feature, and only if the weapon actually has
+		// one of the 8 mastery properties (weapons.mastery — see
+		// loadCharacter()'s inventory query).
+		var hasWeaponMastery = (
+			structKeyExists( arguments.attacker, "features" ) && arrayFindNoCase( arguments.attacker.features, "Weapon Mastery" ) > 0 &&
+			structKeyExists( arguments.weapon, "mastery" ) && len( arguments.weapon.mastery )
+		);
+		var mastery = hasWeaponMastery ? arguments.weapon.mastery : "";
+
 		var disadvantageNote = useDisadvantage ? " (Disadvantage)" : ( useAdvantage ? " (Advantage)" : "" );
 		var luckNote = usedLuck ? " (Lucky reroll)" : "";
 		var styleNote = ( styleBonus > 0 ) ? " (Archery)" : "";
@@ -1292,11 +1567,31 @@ class singleton {
 			arguments.log.prepend(
 				"#actionPhrase#: #roll# + #arguments.weapon.attackBonus + styleBonus# = #total# vs AC #effectiveAC##coverNote##disadvantageNote##luckNote##styleNote##inspirationNote##parryNote#. Miss!"
 			);
+			// Weapon Mastery — Graze: a miss still deals damage equal to the
+			// ability modifier used for the attack (not further modified by
+			// resistance/vulnerability nuance beyond immunity, to keep this a
+			// flat chip of damage as intended).
+			if ( mastery == "Graze" ) {
+				var grazeDamage = max( 0, _weaponAbilityMod( arguments.attacker, arguments.weapon ) );
+				if ( grazeDamage > 0 && !( structKeyExists( arguments.defender, "immunities" ) && arrayFindNoCase( arguments.defender.immunities, arguments.weapon.damageType ) ) ) {
+					arguments.defender.hitPoints = max( 0, arguments.defender.hitPoints - grazeDamage );
+					arguments.log.prepend( "#arguments.attacker.name#'s Graze still grazes #arguments.defender.name# for #grazeDamage# #arguments.weapon.damageType# damage (#arguments.defender.hitPoints#/#arguments.defender.maxHitPoints# HP)." );
+					_checkConcentration( arguments.log, arguments.defender, grazeDamage );
+				}
+			}
 			return;
 		}
 
 		var dice = parseDice( arguments.weapon.damageDice );
 		var diceCount = dice.count * ( isCrit ? 2 : 1 );
+		// Half-Orc Savage Attacks: one extra weapon damage die on a melee crit.
+		var usedSavageAttacks = (
+			isCrit && structKeyExists( arguments.weapon, "category" ) && arguments.weapon.category == "melee" &&
+			structKeyExists( arguments.attacker, "hasSavageAttacks" ) && arguments.attacker.hasSavageAttacks
+		);
+		if ( usedSavageAttacks ) {
+			diceCount += 1;
+		}
 		// Great Weapon Fighting: treat any 1 or 2 rolled on the weapon's damage
 		// dice as a 3, for a Two-Handed or Versatile Melee weapon.
 		var hasGreatWeaponFighting = structKeyExists( arguments.attacker, "feats" ) && arrayFindNoCase( arguments.attacker.feats, "Great Weapon Fighting" ) > 0;
@@ -1318,7 +1613,42 @@ class singleton {
 		// damage unless the attacker has the Two-Weapon Fighting feat.
 		var damage = damageRoll + ( arguments.omitDamageBonus ? 0 : arguments.weapon.damageBonus );
 		var savageNote = usedSavageAttacker ? " (Savage Attacker)" : "";
+		var savageAttacksNote = usedSavageAttacks ? " (Savage Attacks)" : "";
 		var gwfNote = usesGreatWeaponFighting ? " (Great Weapon Fighting)" : "";
+
+		// Sneak Attack (Rogue 1): once per turn, on a hit with a Finesse or
+		// ranged weapon made with Advantage, extra ceil(level/2)d6 damage
+		// (doubled on a Critical Hit, same as the weapon's own dice). RAW also
+		// allows it without Advantage if another of the target's enemies is
+		// within 5 ft. of it — simplified away here (not modeled without
+		// giving resolveAttack full battlefield adjacency), so in practice
+		// this only triggers via an existing Advantage source (a Restrained/
+		// Blinded/helpless/Prone-in-melee target, Pack Tactics, etc.).
+		var hasSneakAttack = structKeyExists( arguments.attacker, "features" ) && arrayFindNoCase( arguments.attacker.features, "Sneak Attack" ) > 0;
+		var usedSneakAttack = (
+			hasSneakAttack && useAdvantage &&
+			!( structKeyExists( arguments.attacker, "usedSneakAttackThisTurn" ) && arguments.attacker.usedSneakAttackThisTurn ) &&
+			( arguments.weapon.category == "ranged" || ( structKeyExists( arguments.weapon, "properties" ) && arrayFindNoCase( arguments.weapon.properties, "Finesse" ) > 0 ) )
+		);
+		var sneakAttackNote = "";
+		if ( usedSneakAttack ) {
+			var sneakDiceCount = ceiling( arguments.attacker.level / 2 ) * ( isCrit ? 2 : 1 );
+			var sneakDamage = rollSum( sneakDiceCount, 6 );
+			damage += sneakDamage;
+			arguments.attacker.usedSneakAttackThisTurn = true;
+			sneakAttackNote = " +#sneakDamage# Sneak Attack";
+		}
+
+		// Rage (Barbarian): +2/+3/+4 (by level) to melee weapon damage while
+		// raging — RAW ties this to Strength-based attacks specifically; this
+		// app doesn't track which ability a Finesse weapon attack actually
+		// used, so it's simplified to "any melee weapon while raging."
+		var rageNote = "";
+		if ( structKeyExists( arguments.attacker, "isRaging" ) && arguments.attacker.isRaging && arguments.weapon.category == "melee" ) {
+			var rageBonus = _rageDamageBonus( arguments.attacker.level );
+			damage += rageBonus;
+			rageNote = " +#rageBonus# Rage";
+		}
 
 		if ( structKeyExists( arguments.defender, "immunities" ) && arrayFindNoCase( arguments.defender.immunities, arguments.weapon.damageType ) ) {
 			damage = 0;
@@ -1329,15 +1659,127 @@ class singleton {
 			if ( structKeyExists( arguments.defender, "resistances" ) && arrayFindNoCase( arguments.defender.resistances, arguments.weapon.damageType ) ) {
 				damage = int( damage / 2 );
 			}
+			// Petrified: resistance to all damage, regardless of type.
+			if ( hasCondition( arguments.defender, "Petrified" ) ) {
+				damage = int( damage / 2 );
+			}
 		}
 
 		arguments.defender.hitPoints = max( 0, arguments.defender.hitPoints - damage );
+		_checkConcentration( arguments.log, arguments.defender, damage );
 
 		arguments.log.prepend(
 			"#actionPhrase#: #roll# + #arguments.weapon.attackBonus + styleBonus# = #total# vs AC #effectiveAC##coverNote##disadvantageNote##luckNote##styleNote##inspirationNote#. " &
 			( isCrit ? "Critical hit! " : "Hit! " ) &
-			"#damage# #arguments.weapon.damageType# damage#savageNote##gwfNote# (#arguments.defender.hitPoints#/#arguments.defender.maxHitPoints# HP)."
+			"#damage# #arguments.weapon.damageType# damage#savageNote##savageAttacksNote##gwfNote##sneakAttackNote##rageNote# (#arguments.defender.hitPoints#/#arguments.defender.maxHitPoints# HP)."
 		);
+
+		// Weapon Mastery — everything below is a post-hit rider that doesn't
+		// change the damage number already logged above.
+		if ( mastery == "Sap" ) {
+			arguments.defender.sapped = true;
+			arguments.log.prepend( "#arguments.defender.name# is Sapped — Disadvantage on their next attack roll." );
+		}
+		if ( mastery == "Vex" ) {
+			arguments.attacker.vexAdvantageTarget = arguments.defender.name;
+			arguments.log.prepend( "#arguments.attacker.name# gains Advantage on their next attack against #arguments.defender.name# (Vex)." );
+		}
+		if ( mastery == "Slow" && damage > 0 ) {
+			arguments.defender.speedPenalty = ( structKeyExists( arguments.defender, "speedPenalty" ) ? arguments.defender.speedPenalty : 0 ) + 10;
+			arguments.log.prepend( "#arguments.defender.name#'s Speed is reduced by 10 ft. (Slow)." );
+		}
+		if ( mastery == "Topple" ) {
+			var toppleDC = 8 + arguments.attacker.proficiencyBonus + _weaponAbilityMod( arguments.attacker, arguments.weapon );
+			var toppleSave = rollSavingThrow( arguments.defender, "con", toppleDC );
+			if ( !toppleSave.success ) {
+				addCondition( arguments.defender, "Prone" );
+				arguments.log.prepend( "#arguments.defender.name# fails a DC #toppleDC# Constitution save and topples Prone!" );
+			} else {
+				arguments.log.prepend( "#arguments.defender.name# succeeds on a DC #toppleDC# Constitution save and stays upright (Topple)." );
+			}
+		}
+		if ( mastery == "Push" && !isNull( _stateGrid( arguments.state ) ) ) {
+			_applyWeaponMasteryPush( arguments.log, arguments.attacker, arguments.defender, _stateGrid( arguments.state ) );
+		}
+		if ( mastery == "Cleave" && arguments.weapon.category == "melee" && ( structKeyExists( arguments.state, "opponent" ) || structKeyExists( arguments.state, "opponents" ) ) ) {
+			_applyWeaponMasteryCleave( arguments.state, arguments.attacker, arguments.defender, arguments.weapon, damage );
+		}
+	}
+
+	/**
+	 * The ability modifier a weapon attack actually uses: Dexterity for a
+	 * ranged weapon, the higher of Strength/Dexterity for a Finesse weapon,
+	 * Strength otherwise. Used by Weapon Mastery's Graze (miss damage) and
+	 * Topple (save DC), which both need the raw modifier rather than the
+	 * already-computed `weapon.attackBonus` (which also bakes in Proficiency
+	 * Bonus and any magic bonus).
+	 */
+	private function _weaponAbilityMod( attacker, weapon ) {
+		if ( !structKeyExists( arguments.attacker, "modifiers" ) ) {
+			return 0;
+		}
+		var mods = arguments.attacker.modifiers;
+		var isFinesse = structKeyExists( arguments.weapon, "properties" ) && arrayFindNoCase( arguments.weapon.properties, "Finesse" ) > 0;
+		if ( isFinesse ) {
+			return max( mods.str, mods.dex );
+		}
+		return ( arguments.weapon.category == "ranged" ) ? mods.dex : mods.str;
+	}
+
+	/**
+	 * Weapon Mastery — Push: shoves `defender` 2 squares (10 ft.) directly
+	 * away from `attacker`, stopping early if a wall or another living
+	 * combatant blocks the path (RAW's "Large or smaller" size restriction
+	 * isn't modeled — this app doesn't track combatant size). A no-op if
+	 * attacker and defender occupy the same square (can't compute a direction).
+	 */
+	private function _applyWeaponMasteryPush( log, attacker, defender, grid ) {
+		var dx = arguments.defender.position.x - arguments.attacker.position.x;
+		var dy = arguments.defender.position.y - arguments.attacker.position.y;
+		if ( dx == 0 && dy == 0 ) {
+			return;
+		}
+		var stepX = ( dx > 0 ) ? 1 : ( dx < 0 ? -1 : 0 );
+		var stepY = ( dy > 0 ) ? 1 : ( dy < 0 ? -1 : 0 );
+		var pushed = 0;
+		for ( var i = 1; i <= 2; i++ ) {
+			var nextX = arguments.defender.position.x + stepX;
+			var nextY = arguments.defender.position.y + stepY;
+			if ( !isWalkable( arguments.grid, nextX, nextY ) ) {
+				break;
+			}
+			arguments.defender.position = { "x": nextX, "y": nextY };
+			pushed += 1;
+		}
+		if ( pushed > 0 ) {
+			arguments.log.prepend( "#arguments.defender.name# is pushed #pushed * 5# ft. away (Push)." );
+		}
+	}
+
+	/**
+	 * Weapon Mastery — Cleave: a melee hit also strikes one other living
+	 * hostile within reach (1 square) of the original target, using the same
+	 * attack roll (no second roll) and the same damage number already dealt
+	 * to the first target, adjusted for the second target's own immunity/
+	 * vulnerability/resistance (see _applyDamageModifiers()).
+	 */
+	private function _applyWeaponMasteryCleave( state, attacker, defender, weapon, damage ) {
+		for ( var other in _stateOpponents( arguments.state ) ) {
+			if (
+				other.hitPoints <= 0 || other.name == arguments.defender.name ||
+				chebyshev( arguments.defender, other ) > 1
+			) {
+				continue;
+			}
+			var cleaveDamage = _applyDamageModifiers( other, arguments.damage, arguments.weapon.damageType );
+			other.hitPoints = max( 0, other.hitPoints - cleaveDamage );
+			arguments.state.log.prepend(
+				"#arguments.attacker.name#'s Cleave also strikes #other.name# for #cleaveDamage# #arguments.weapon.damageType# damage (#other.hitPoints#/#other.maxHitPoints# HP)."
+			);
+			_checkConcentration( arguments.state.log, other, cleaveDamage );
+			_checkDefenderDefeated( arguments.state, arguments.attacker, other, false );
+			return;
+		}
 	}
 
 	/**
@@ -1382,11 +1824,20 @@ class singleton {
 	function offHandAttack( state ) {
 		var attacker = arguments.state.player;
 		var defender = arguments.state.opponent;
-		if ( structKeyExists( arguments.state, "bonusActionUsed" ) && arguments.state.bonusActionUsed ) {
+
+		var mainWeapon = equippedWeapon( attacker, "melee" );
+		// Weapon Mastery — Nick: once per turn, the off-hand attack doesn't
+		// cost the bonus action (still requires the Attack action to have
+		// been taken, and a Light off-hand weapon, same as normal).
+		var usesNick = (
+			!isNull( mainWeapon ) && structKeyExists( mainWeapon, "mastery" ) && mainWeapon.mastery == "Nick" &&
+			structKeyExists( attacker, "features" ) && arrayFindNoCase( attacker.features, "Weapon Mastery" ) > 0 &&
+			!( structKeyExists( attacker, "usedNickThisTurn" ) && attacker.usedNickThisTurn )
+		);
+		if ( !usesNick && structKeyExists( arguments.state, "bonusActionUsed" ) && arguments.state.bonusActionUsed ) {
 			return;
 		}
 
-		var mainWeapon = equippedWeapon( attacker, "melee" );
 		var offhand = offHandWeapon( attacker );
 		if (
 			isNull( mainWeapon ) || isNull( offhand ) ||
@@ -1400,14 +1851,21 @@ class singleton {
 			return;
 		}
 
-		arguments.state.bonusActionUsed = true;
+		if ( usesNick ) {
+			attacker.usedNickThisTurn = true;
+		} else {
+			arguments.state.bonusActionUsed = true;
+		}
 		var hasTwoWeaponFighting = structKeyExists( attacker, "feats" ) && arrayFindNoCase( attacker.feats, "Two-Weapon Fighting" ) > 0;
-		resolveAttack( arguments.state.log, attacker, defender, offhand, false, false, !hasTwoWeaponFighting );
+		resolveAttack( arguments.state.log, attacker, defender, offhand, false, false, !hasTwoWeaponFighting, 0, arguments.state );
 
 		if ( defender.hitPoints <= 0 ) {
 			if ( !structKeyExists( defender, "xpAwarded" ) || !defender.xpAwarded ) {
 				defender.xpAwarded = true;
 				awardExperience( arguments.state, defender.xp );
+				if ( structKeyExists( arguments.state, "round" ) ) {
+					defender.defeatedAtRound = arguments.state.round;
+				}
 			}
 			if ( _allOpponentsDefeated( arguments.state ) ) {
 				arguments.state.gameOver = true;
@@ -1417,6 +1875,64 @@ class singleton {
 				arguments.state.log.prepend( "#defender.name# collapses into a pile of bones!" );
 				_retargetIfCurrentOpponentDefeated( arguments.state );
 			}
+		}
+	}
+
+	/**
+	 * Paladin's Smite (level 2): makes one melee weapon attack (spending the
+	 * Attack action, same as playerAttack()) and, only if it actually hits
+	 * (the opponent's Hit Points went down), spends a spell slot at
+	 * `slotLevel` to add Divine Smite's bonus Radiant damage — 2d8 for a
+	 * 1st-level slot, +1d8 per level above 1st (capped at 5d8), +1 further
+	 * d8 if the target is a Fiend or Undead. No slot is spent on a miss.
+	 *
+	 * Simplified from the real 2024 rule (which lets you decide to smite
+	 * *after* seeing the attack roll, even choosing not to on a miss to
+	 * save the slot) into "commit to smiting before you know if you'll
+	 * hit" — functionally identical in outcome (a miss never costs a slot
+	 * either way), just without a separate post-roll prompt this app's
+	 * turn structure doesn't have anywhere else either.
+	 *
+	 * @state The encounter's full mutable game state struct.
+	 * @slotLevel The spell slot level to spend if the attack hits.
+	 */
+	function smiteAttack( state, slotLevel ) {
+		var player = arguments.state.player;
+		var opponent = arguments.state.opponent;
+		if (
+			player.hitPoints <= 0 || isIncapacitated( player ) ||
+			!structKeyExists( player, "features" ) || arrayFindNoCase( player.features, "Paladin's Smite" ) == 0 ||
+			!structKeyExists( player, "spellSlots" ) || !structKeyExists( player.spellSlots, arguments.slotLevel ) ||
+			player.spellSlots[ arguments.slotLevel ] <= 0
+		) {
+			return;
+		}
+		var weapon = equippedWeapon( player, "melee" );
+		if ( isNull( weapon ) ) {
+			arguments.state.log.prepend( "#player.name# has no melee weapon to Smite with." );
+			return;
+		}
+
+		var hpBefore = opponent.hitPoints;
+		playerAttack( arguments.state, weapon, false );
+
+		if ( !arguments.state.gameOver && opponent.hitPoints < hpBefore ) {
+			player.spellSlots[ arguments.slotLevel ] -= 1;
+			if ( !structKeyExists( player, "spentSpellSlots" ) ) {
+				player.spentSpellSlots = {};
+			}
+			var lvlKey = toString( arguments.slotLevel );
+			player.spentSpellSlots[ lvlKey ] = ( player.spentSpellSlots.keyExists( lvlKey ) ? player.spentSpellSlots[ lvlKey ] : 0 ) + 1;
+
+			var isFiendOrUndead = structKeyExists( opponent, "creatureType" ) && arrayFindNoCase( [ "Fiend", "Undead" ], opponent.creatureType ) > 0;
+			var diceCount = min( arguments.slotLevel + 1, 5 ) + ( isFiendOrUndead ? 1 : 0 );
+			var smiteDamage = _applyDamageModifiers( opponent, rollSum( diceCount, 8 ), "Radiant" );
+			opponent.hitPoints = max( 0, opponent.hitPoints - smiteDamage );
+			arguments.state.log.prepend(
+				"#player.name# calls down Divine Smite (spends a level-#arguments.slotLevel# slot)#( isFiendOrUndead ? ' against the #opponent.creatureType#' : '' )#: " &
+				"#smiteDamage# Radiant damage (#opponent.hitPoints#/#opponent.maxHitPoints# HP)."
+			);
+			_checkDefenderDefeated( arguments.state, player, opponent, false );
 		}
 	}
 
@@ -1433,6 +1949,11 @@ class singleton {
 	 * @isMagical Optional: whether this save is against a magical effect, for Gnomish Cunning.
 	 */
 	function rollSavingThrow( combatant, ability, dc, condition = "", isMagical = false, coverBonus = 0 ) {
+		// Paralyzed/Petrified/Stunned/Unconscious: automatically fails any
+		// Strength or Dexterity saving throw, no roll needed.
+		if ( listFindNoCase( "str,dex", arguments.ability ) && isHelpless( arguments.combatant ) ) {
+			return { "roll": 1, "total": 1, "success": false, "hadAdvantage": false, "hadDisadvantage": false };
+		}
 		// Monsters carry their SRD stat block's saving throw bonus pre-computed
 		// per ability (modifier + proficiency bonus already summed, straight
 		// from the monsters table's str_save/dex_save/etc. columns — see
@@ -1473,6 +1994,10 @@ class singleton {
 		) {
 			hasAdvantage = true;
 		}
+		// Rage: Advantage on Strength saving throws while raging.
+		if ( arguments.ability == "str" && structKeyExists( arguments.combatant, "isRaging" ) && arguments.combatant.isRaging ) {
+			hasAdvantage = true;
+		}
 		// Restrained: Disadvantage specifically on Dexterity saves.
 		var hasDisadvantage = ( arguments.ability == "dex" ) && hasCondition( arguments.combatant, "Restrained" );
 
@@ -1502,14 +2027,16 @@ class singleton {
 	}
 
 	/**
-	 * Attempts to grapple `defender` (a contested Strength (Athletics) check,
-	 * simplified to a flat ability-modifier-plus-proficiency roll vs. the
-	 * defender's better of Strength/Dexterity), spending the attacker's
-	 * action. Requires the attacker to already be adjacent. On success, marks
-	 * `defender.grappledBy` (subsequent attacks by the same attacker get
-	 * Advantage if the attacker has the Grappler feat) and applies the
-	 * Restrained condition — a grappled creature is Restrained per the core
-	 * rules, which also grants Advantage to anyone attacking it, not just the
+	 * Attempts to grapple `defender` (a contested Strength (Athletics) check
+	 * vs. the defender's better of Strength (Athletics) or Dexterity
+	 * (Acrobatics) — Proficiency Bonus applies on either side only if that
+	 * combatant is actually proficient in the relevant skill, per
+	 * _skillProficiencyBonus()), spending the attacker's action. Requires the
+	 * attacker to already be adjacent. On success, marks `defender.
+	 * grappledBy` (subsequent attacks by the same attacker get Advantage if
+	 * the attacker has the Grappler feat) and applies the Restrained
+	 * condition — a grappled creature is Restrained per the core rules,
+	 * which also grants Advantage to anyone attacking it, not just the
 	 * Grappler-feat attacker, and Disadvantage on the grappled creature's own
 	 * attacks and Dexterity saves.
 	 *
@@ -1526,10 +2053,11 @@ class singleton {
 		var attackerStrMod = structKeyExists( arguments.attacker, "modifiers" ) ? arguments.attacker.modifiers.str : abilityModifier( arguments.attacker.abilityScores.str );
 		var defenderStrMod = structKeyExists( arguments.defender, "modifiers" ) ? arguments.defender.modifiers.str : abilityModifier( arguments.defender.abilityScores.str );
 		var defenderDexMod = structKeyExists( arguments.defender, "modifiers" ) ? arguments.defender.modifiers.dex : abilityModifier( arguments.defender.abilityScores.dex );
-		var attackerProficiency = structKeyExists( arguments.attacker, "proficiencyBonus" ) ? arguments.attacker.proficiencyBonus : 0;
 
-		var attackerRoll = randRange( 1, 20 ) + attackerStrMod + attackerProficiency;
-		var defenderRoll = randRange( 1, 20 ) + max( defenderStrMod, defenderDexMod );
+		var attackerRoll = randRange( 1, 20 ) + attackerStrMod + _skillProficiencyBonus( arguments.attacker, "Athletics" );
+		var defenderAthleticsRoll = defenderStrMod + _skillProficiencyBonus( arguments.defender, "Athletics" );
+		var defenderAcrobaticsRoll = defenderDexMod + _skillProficiencyBonus( arguments.defender, "Acrobatics" );
+		var defenderRoll = randRange( 1, 20 ) + max( defenderAthleticsRoll, defenderAcrobaticsRoll );
 		var success = attackerRoll >= defenderRoll;
 
 		arguments.state.actionUsed = true;
@@ -1547,13 +2075,14 @@ class singleton {
 	/**
 	 * Attempts to shove `defender` prone (a contested Strength (Athletics)
 	 * check vs. the defender's better of Strength (Athletics) or Dexterity
-	 * (Acrobatics), simplified the same way as attemptGrapple), spending the
-	 * attacker's action. Requires the attacker to already be adjacent. On
-	 * success, applies the Prone condition — melee attacks against a Prone
-	 * target get Advantage, ranged ones get Disadvantage, and the Prone
-	 * creature's own attacks have Disadvantage until it stands back up (this
-	 * app has no stand-up action yet, so Prone otherwise persists for the
-	 * fight once applied).
+	 * (Acrobatics), simplified the same way as attemptGrapple — Proficiency
+	 * Bonus only applies where each combatant is actually proficient),
+	 * spending the attacker's action. Requires the attacker to already be
+	 * adjacent. On success, applies the Prone condition — melee attacks
+	 * against a Prone target get Advantage, ranged ones get Disadvantage,
+	 * and the Prone creature's own attacks have Disadvantage until it stands
+	 * back up (this app has no stand-up action yet, so Prone otherwise
+	 * persists for the fight once applied).
 	 *
 	 * @state The encounter's full mutable game state struct.
 	 * @attacker The shoving combatant.
@@ -1568,10 +2097,11 @@ class singleton {
 		var attackerStrMod = structKeyExists( arguments.attacker, "modifiers" ) ? arguments.attacker.modifiers.str : abilityModifier( arguments.attacker.abilityScores.str );
 		var defenderStrMod = structKeyExists( arguments.defender, "modifiers" ) ? arguments.defender.modifiers.str : abilityModifier( arguments.defender.abilityScores.str );
 		var defenderDexMod = structKeyExists( arguments.defender, "modifiers" ) ? arguments.defender.modifiers.dex : abilityModifier( arguments.defender.abilityScores.dex );
-		var attackerProficiency = structKeyExists( arguments.attacker, "proficiencyBonus" ) ? arguments.attacker.proficiencyBonus : 0;
 
-		var attackerRoll = randRange( 1, 20 ) + attackerStrMod + attackerProficiency;
-		var defenderRoll = randRange( 1, 20 ) + max( defenderStrMod, defenderDexMod );
+		var attackerRoll = randRange( 1, 20 ) + attackerStrMod + _skillProficiencyBonus( arguments.attacker, "Athletics" );
+		var defenderAthleticsRoll = defenderStrMod + _skillProficiencyBonus( arguments.defender, "Athletics" );
+		var defenderAcrobaticsRoll = defenderDexMod + _skillProficiencyBonus( arguments.defender, "Acrobatics" );
+		var defenderRoll = randRange( 1, 20 ) + max( defenderAthleticsRoll, defenderAcrobaticsRoll );
 		var success = attackerRoll >= defenderRoll;
 
 		arguments.state.actionUsed = true;
@@ -1625,6 +2155,7 @@ class singleton {
 		}
 
 		defender.hitPoints = max( 0, defender.hitPoints - damage );
+		_checkConcentration( arguments.state.log, defender, damage );
 		arguments.state.log.prepend(
 			"#attacker.name# exhales a blast of fire! #defender.name# rolls a DC #dc# Dexterity save: #saveRoll# — " &
 			( saved ? "succeeds, takes half damage. " : "fails! " ) &
@@ -1634,20 +2165,29 @@ class singleton {
 	}
 
 	/**
-	 * Assigns `player`'s spellcasting fields — spellcasting ability, cantrip,
-	 * 1st-level spell, and starting spell slots by level — from its class (via
-	 * ICONIC_CANTRIP_BY_CLASS, _lookupClassSpell(), and the slot tables) plus
-	 * the Magic Initiate feat, if any. Spell slots are computed fresh each time a
-	 * character is loaded — this app has no long-rest tracking between
-	 * encounters, so every encounter starts with a full set, same as HP/other
-	 * once-per-encounter resources elsewhere in this file.
+	 * Assigns `player`'s spellcasting fields — spellcasting ability, known
+	 * cantrips/leveled spells (arrays — see `player.knownCantrips`/
+	 * `knownLeveledSpells`), and starting spell slots by level — from its
+	 * class (via ICONIC_CANTRIP_BY_CLASS, _lookupClassSpell(), and the slot
+	 * tables) plus the Magic Initiate feat, if any. Spell slots are computed
+	 * fresh each time a character is loaded, then reduced by whatever's
+	 * already been spent this rest cycle (`player.spentSpellSlots`, restored
+	 * by loadCharacter() from the persisted column, cleared by longRest()).
 	 *
-	 * If the player chose a cantrip/spell at character creation (stored on
-	 * `player.knownCantripName`/`knownSpellName` by loadCharacter(), from the
-	 * `characters.known_cantrip`/`known_spell` columns), that exact spell is
-	 * used instead of the auto-pick — falling back to the old
-	 * iconic/heal-preferring auto-pick for any character created before this
-	 * choice existed (both columns NULL) or a non-caster with Magic Initiate.
+	 * If the player has chosen cantrips/spells (via character creation or
+	 * chooseCantrip()/chooseSpell() at level-up — stored on `player.
+	 * knownCantripNames`/`knownSpellNames` by loadCharacter(), from the
+	 * `characters.known_cantrips`/`known_spells` columns), those exact
+	 * spells are used instead of the auto-pick — falling back to the old
+	 * iconic/heal-preferring single auto-pick (as this character's only
+	 * known cantrip/spell) only for a full caster with nothing chosen yet
+	 * (character creation always offers a full caster a Spells step, so an
+	 * empty list there only means "created before that step existed") or a
+	 * non-caster with Magic Initiate. A half-caster (Paladin, Ranger) never
+	 * gets a creation-time pick — auto-picking for them here would violate
+	 * the "never auto-assign a player choice" rule, so they're left with an
+	 * empty list until pendingSpellChoice()/chooseSpell() gives them one
+	 * once their first spell slot actually unlocks (level 2).
 	 */
 	private function _assignSpellcasting( player ) {
 		var className = arguments.player.class;
@@ -1665,27 +2205,83 @@ class singleton {
 			arguments.player.spellcastingAbility = ( mods.int >= mods.wis && mods.int >= mods.cha ) ? "int" : ( mods.wis >= mods.cha ? "wis" : "cha" );
 		}
 
-		var chosenCantripName = structKeyExists( arguments.player, "knownCantripName" ) ? arguments.player.knownCantripName : "";
-		var dbCantrip = len( chosenCantripName ) ? lookupSpellByName( chosenCantripName ) : javaCast( "null", 0 );
-		if ( isNull( dbCantrip ) ) {
+		var chosenCantripNames = structKeyExists( arguments.player, "knownCantripNames" ) ? arguments.player.knownCantripNames : [];
+		arguments.player.knownCantrips = [];
+		for ( var cantripName in chosenCantripNames ) {
+			var dbCantrip = lookupSpellByName( cantripName );
+			if ( !isNull( dbCantrip ) ) {
+				arguments.player.knownCantrips.append( dbCantrip );
+			}
+		}
+		if ( !arguments.player.knownCantrips.len() ) {
+			// The auto-pick fallback below only applies to a full caster (whose
+			// character-creation Spells step always makes a choice, so an empty
+			// list here only ever means "a character predating that step") or a
+			// non-caster with Magic Initiate. A half-caster (Paladin, Ranger)
+			// never gets a creation-time pick at all — falling back here would
+			// silently auto-assign their very first spell/cantrip, violating
+			// the "never auto-assign a player choice" rule. They rely entirely
+			// on pendingCantripChoice()/pendingSpellChoice() instead, which
+			// only start reporting anything once they actually reach a level
+			// that grants one — Paladin/Ranger never get cantrips at all, so
+			// pendingCantripChoice() correctly never applies to them either.
 			var preferredCantrip = ICONIC_CANTRIP_BY_CLASS.keyExists( className ) ? ICONIC_CANTRIP_BY_CLASS[ className ] : "";
-			dbCantrip = _lookupClassSpell( className, 0, false, preferredCantrip );
+			var autoCantrip = isFullCaster ? _lookupClassSpell( className, 0, false, preferredCantrip ) : javaCast( "null", 0 );
+			if ( !isNull( autoCantrip ) ) {
+				arguments.player.knownCantrips.append( autoCantrip );
+			} else if ( arguments.player.hasMagicInitiate ) {
+				// Fire Bolt: 120 ft.
+				arguments.player.knownCantrips.append( { "type": "attack", "name": "Fire Bolt", "level": 0, "concentration": false, "damageType": "Fire", "rangeSquares": 24 } );
+			}
 		}
-		arguments.player.knownCantrip = !isNull( dbCantrip )
-			? dbCantrip
-			// Fire Bolt: 120 ft.
-			: ( arguments.player.hasMagicInitiate ? { "type": "attack", "name": "Fire Bolt", "damageType": "Fire", "rangeSquares": 24 } : javaCast( "null", 0 ) );
 
-		var chosenSpellName = structKeyExists( arguments.player, "knownSpellName" ) ? arguments.player.knownSpellName : "";
-		var dbSpell = len( chosenSpellName ) ? lookupSpellByName( chosenSpellName ) : javaCast( "null", 0 );
-		if ( isNull( dbSpell ) ) {
-			var preferHeal = arrayFindNoCase( HEAL_PREFERRING_CLASSES, className ) > 0;
-			dbSpell = _lookupClassSpell( className, 1, preferHeal );
+		var chosenSpellNames = structKeyExists( arguments.player, "knownSpellNames" ) ? arguments.player.knownSpellNames : [];
+		arguments.player.knownLeveledSpells = [];
+		for ( var spellName in chosenSpellNames ) {
+			var dbSpell = lookupSpellByName( spellName );
+			if ( !isNull( dbSpell ) ) {
+				arguments.player.knownLeveledSpells.append( dbSpell );
+			}
 		}
-		arguments.player.knownLeveledSpell = !isNull( dbSpell )
-			? dbSpell
-			// Magic Missile: 120 ft.
-			: ( arguments.player.hasMagicInitiate ? { "type": "damage", "name": "Magic Missile", "rangeSquares": 24 } : javaCast( "null", 0 ) );
+		if ( !arguments.player.knownLeveledSpells.len() ) {
+			// Same reasoning as the cantrip fallback above: only a full caster
+			// (always offered a creation-time pick) or Magic Initiate gets an
+			// auto-pick here. A half-caster with nothing chosen yet is left
+			// with an empty list — pendingSpellChoice() picks it up as soon as
+			// their first spell slot (level 2) unlocks, and stays pending until
+			// they actually choose one via the character sheet.
+			var preferHeal = arrayFindNoCase( HEAL_PREFERRING_CLASSES, className ) > 0;
+			var autoSpell = isFullCaster ? _lookupClassSpell( className, 1, preferHeal ) : javaCast( "null", 0 );
+			if ( !isNull( autoSpell ) ) {
+				arguments.player.knownLeveledSpells.append( autoSpell );
+			} else if ( arguments.player.hasMagicInitiate ) {
+				// Magic Missile: 120 ft.
+				arguments.player.knownLeveledSpells.append( { "type": "damage", "name": "Magic Missile", "level": 1, "concentration": false, "rangeSquares": 24 } );
+			}
+		}
+
+		_recomputeSpellSlots( arguments.player );
+		// Magic Initiate's bonus 1st-level spell is a separate resource, not a
+		// slot — usable even by a class with no slots at all. It recovers on a
+		// Long Rest only (see longRest()); loadCharacter() sets its persisted
+		// used/unused state, so this function leaves it alone rather than
+		// resetting it on every load.
+	}
+
+	/**
+	 * (Re)computes `player.spellSlots` from the full/half-caster slot tables
+	 * at their current level, then subtracts whatever's already been spent
+	 * this rest cycle (`player.spentSpellSlots`). Factored out of
+	 * _assignSpellcasting() so _levelUp() can also call it — a level-up
+	 * happening mid-encounter (a Paladin reaching level 2 by killing the
+	 * monster in front of them, say) needs its new/increased slot count to
+	 * take effect immediately, not just the next time the character is
+	 * loaded fresh into a new encounter.
+	 */
+	private function _recomputeSpellSlots( player ) {
+		var className = arguments.player.class;
+		var isFullCaster = isFullCasterClass( className );
+		var isHalfCaster = arrayFindNoCase( HALF_CASTER_CLASSES, className ) > 0;
 
 		var slotTable = isFullCaster ? SPELL_SLOTS_FULL_CASTER : ( isHalfCaster ? SPELL_SLOTS_HALF_CASTER : [] );
 		var levelIndex = min( arguments.player.level, slotTable.len() );
@@ -1696,7 +2292,7 @@ class singleton {
 				arguments.player.spellSlots[ spellLevel ] = slotsAtLevel[ spellLevel ];
 			}
 		}
-		// Subtract any slots spent in previous encounters (persisted via saveCharacterState).
+		// Subtract any slots already spent this encounter/rest cycle.
 		if ( structKeyExists( arguments.player, "spentSpellSlots" ) ) {
 			for ( var spentLvl in arguments.player.spentSpellSlots ) {
 				if ( structKeyExists( arguments.player.spellSlots, spentLvl ) ) {
@@ -1704,9 +2300,6 @@ class singleton {
 				}
 			}
 		}
-		// Magic Initiate's bonus 1st-level spell is a separate once-per-encounter
-		// resource, not a slot — usable even by a class with no slots at all.
-		arguments.player.usedMagicInitiateSpell = false;
 	}
 
 	/**
@@ -1731,7 +2324,7 @@ class singleton {
 	private function _lookupClassSpell( className, level, preferHeal, preferredName = "" ) {
 		var preferredTypes = arguments.preferHeal ? "'heal'" : "'attack','save'";
 		var rows = queryExecute(
-			"SELECT name, effect_type, attack_type, save_ability, save_effect, damage_dice, damage_type, heal_dice, `range`
+			"SELECT name, level, duration, effect_type, attack_type, save_ability, save_effect, damage_dice, damage_type, heal_dice, `range`
 			 FROM spells
 			 WHERE FIND_IN_SET( :className, REPLACE( classes, ', ', ',' ) ) > 0
 			   AND level = :level
@@ -1751,7 +2344,7 @@ class singleton {
 			// heal-preferring class whose only level-1 option is a damage spell.
 			var fallbackTypes = arguments.preferHeal ? "'attack','save'" : "'heal'";
 			rows = queryExecute(
-				"SELECT name, effect_type, attack_type, save_ability, save_effect, damage_dice, damage_type, heal_dice, `range`
+				"SELECT name, level, duration, effect_type, attack_type, save_ability, save_effect, damage_dice, damage_type, heal_dice, `range`
 				 FROM spells
 				 WHERE FIND_IN_SET( :className, REPLACE( classes, ', ', ',' ) ) > 0
 				   AND level = :level
@@ -1773,29 +2366,37 @@ class singleton {
 
 	/**
 	 * Converts one row of a `spells` query (with the standard SELECT list
-	 * used throughout this file — name, effect_type, attack_type,
-	 * save_ability, save_effect, damage_dice, damage_type, heal_dice,
-	 * `range`) into the discriminated struct shape castCantrip()/
+	 * used throughout this file — name, level, duration, effect_type,
+	 * attack_type, save_ability, save_effect, damage_dice, damage_type,
+	 * heal_dice, `range`) into the discriminated struct shape castCantrip()/
 	 * castLeveledSpell()/_runOneOpponentTurn() all expect. Shared by
 	 * _lookupClassSpell() (picks one row), listCastableSpells() (every
 	 * matching row), and lookupSpellByName() (one row by exact name).
+	 *
+	 * `level` lets castLeveledSpellByName() spend the correct-level slot
+	 * instead of always assuming 1st; `concentration` (derived from the
+	 * `duration` text, e.g. "Concentration, up to 1 minute" — there's no
+	 * dedicated boolean column) drives the single-concentration-spell rule
+	 * in _startConcentrating().
 	 */
 	private function _spellStructFromRow( rows, i ) {
+		var level = arguments.rows.level[ arguments.i ];
+		var concentration = findNoCase( "Concentration", arguments.rows.duration[ arguments.i ] ) > 0;
 		if ( arguments.rows.effect_type[ arguments.i ] == "heal" ) {
 			var healDice = parseDice( arguments.rows.heal_dice[ arguments.i ] );
-			return { "type": "heal", "name": arguments.rows.name[ arguments.i ], "diceCount": healDice.count, "diceSides": healDice.sides };
+			return { "type": "heal", "name": arguments.rows.name[ arguments.i ], "level": level, "concentration": concentration, "diceCount": healDice.count, "diceSides": healDice.sides };
 		}
 
 		var damageDice = parseDice( arguments.rows.damage_dice[ arguments.i ] );
 		var rangeSquares = _parseSpellRangeSquares( arguments.rows.range[ arguments.i ] );
 		if ( arguments.rows.effect_type[ arguments.i ] == "attack" ) {
 			return {
-				"type": "attack", "name": arguments.rows.name[ arguments.i ], "damageType": arguments.rows.damage_type[ arguments.i ],
+				"type": "attack", "name": arguments.rows.name[ arguments.i ], "level": level, "concentration": concentration, "damageType": arguments.rows.damage_type[ arguments.i ],
 				"diceCount": damageDice.count, "diceSides": damageDice.sides, "rangeSquares": rangeSquares
 			};
 		}
 		return {
-			"type": "save", "name": arguments.rows.name[ arguments.i ], "damageType": arguments.rows.damage_type[ arguments.i ],
+			"type": "save", "name": arguments.rows.name[ arguments.i ], "level": level, "concentration": concentration, "damageType": arguments.rows.damage_type[ arguments.i ],
 			"saveAbility": arguments.rows.save_ability[ arguments.i ], "saveEffect": arguments.rows.save_effect[ arguments.i ],
 			"diceCount": damageDice.count, "diceSides": damageDice.sides, "rangeSquares": rangeSquares
 		};
@@ -1813,7 +2414,7 @@ class singleton {
 	 */
 	function listCastableSpells( className, level ) {
 		var rows = queryExecute(
-			"SELECT name, effect_type, attack_type, save_ability, save_effect, damage_dice, damage_type, heal_dice, `range`
+			"SELECT name, level, duration, effect_type, attack_type, save_ability, save_effect, damage_dice, damage_type, heal_dice, `range`
 			 FROM spells
 			 WHERE FIND_IN_SET( :className, REPLACE( classes, ', ', ',' ) ) > 0
 			   AND level = :level
@@ -1833,7 +2434,7 @@ class singleton {
 
 	/**
 	 * Looks up one specific castable spell by its exact name — used to
-	 * resolve a character's stored `known_cantrip`/`known_spell` choice (see
+	 * resolve one of a character's stored `known_cantrips`/`known_spells` choices (see
 	 * loadCharacter()) into full casting mechanics. Returns null if there's
 	 * no such castable spell (e.g. the name doesn't exist, or is a
 	 * utility-only spell this app can't mechanize).
@@ -1842,7 +2443,7 @@ class singleton {
 	 */
 	function lookupSpellByName( name ) {
 		var rows = queryExecute(
-			"SELECT name, effect_type, attack_type, save_ability, save_effect, damage_dice, damage_type, heal_dice, `range`
+			"SELECT name, level, duration, effect_type, attack_type, save_ability, save_effect, damage_dice, damage_type, heal_dice, `range`
 			 FROM spells
 			 WHERE name = :name
 			   AND effect_type IN ( 'attack', 'save', 'heal' )
@@ -1940,6 +2541,49 @@ class singleton {
 	}
 
 	/**
+	 * Starts `combatant` concentrating on `spellName`, ending whatever they
+	 * were concentrating on before — a creature can only concentrate on one
+	 * spell at a time, per the "Concentration" rules. No spell in this
+	 * app's data currently has a sustained combat effect (no ongoing
+	 * buff/debuff like Bless or Hunter's Mark is modeled), so ending a
+	 * prior spell here is bookkeeping and a log line, not an active effect
+	 * removal — see _checkConcentration() for the other half of this rule.
+	 */
+	private function _startConcentrating( state, combatant, spellName ) {
+		if (
+			structKeyExists( arguments.combatant, "concentratingOn" ) && len( arguments.combatant.concentratingOn ) &&
+			arguments.combatant.concentratingOn != arguments.spellName
+		) {
+			arguments.state.log.prepend( "#arguments.combatant.name#'s concentration on #arguments.combatant.concentratingOn# ends." );
+		}
+		arguments.combatant.concentratingOn = arguments.spellName;
+	}
+
+	/**
+	 * Rolls a Constitution saving throw (DC = the higher of 10 or half the
+	 * damage just taken, per the "Concentration" rules) to maintain
+	 * concentration — a no-op if `combatant` isn't concentrating on
+	 * anything, or took no damage. Ends concentration (clearing
+	 * `concentratingOn` and logging it) on a failed save.
+	 */
+	private function _checkConcentration( log, combatant, damageTaken ) {
+		if (
+			!structKeyExists( arguments.combatant, "concentratingOn" ) || !len( arguments.combatant.concentratingOn ) ||
+			arguments.damageTaken <= 0
+		) {
+			return;
+		}
+		var dc = max( 10, int( arguments.damageTaken / 2 ) );
+		var result = rollSavingThrow( arguments.combatant, "con", dc );
+		if ( result.success ) {
+			arguments.log.prepend( "#arguments.combatant.name# maintains concentration on #arguments.combatant.concentratingOn# (DC #dc# Constitution save)." );
+		} else {
+			arguments.log.prepend( "#arguments.combatant.name# loses concentration on #arguments.combatant.concentratingOn# (failed a DC #dc# Constitution save)." );
+			arguments.combatant.concentratingOn = "";
+		}
+	}
+
+	/**
 	 * True if `attacker` could actually reach `defender` with `spell` right
 	 * now — within `spell.rangeSquares` (defaulting to 24/120 ft. if the
 	 * struct doesn't carry one — the hardcoded Magic Initiate/monster
@@ -1960,46 +2604,75 @@ class singleton {
 	}
 
 	/**
-	 * Casts the player's known cantrip at the opponent. Thin wrapper around
-	 * `_castCantripFor()` — see that function for the actual mechanics. Kept
-	 * as its own public entry point since it's what the player's UI actions
-	 * call directly (player is always the attacker, opponent always the target).
+	 * Casts one of the player's known cantrips at the opponent, by name — a
+	 * thin wrapper around `_castCantripFor()`. Defaults to the player's
+	 * first known cantrip if `name` is omitted (the common case while a
+	 * player only knows one).
 	 *
 	 * @state The encounter's full mutable game state struct.
+	 * @name The exact name of a spell in `state.player.knownCantrips`.
 	 */
-	function castCantrip( state ) {
-		_castCantripFor( arguments.state, arguments.state.player, arguments.state.opponent, false );
+	function castCantrip( state, name = "" ) {
+		var cantrip = _findKnownSpell( arguments.state.player, "knownCantrips", arguments.name );
+		if ( !isNull( cantrip ) ) {
+			_castCantripFor( arguments.state, arguments.state.player, arguments.state.opponent, false, cantrip );
+		}
 	}
 
 	/**
-	 * Casts the player's known 1st-level spell. Thin wrapper around
-	 * `_castLeveledSpellFor()` — see that function for the actual mechanics.
+	 * Casts one of the player's known leveled spells at the opponent, by
+	 * name — a thin wrapper around `_castLeveledSpellFor()`. Same
+	 * defaults-to-first-known behavior as castCantrip().
 	 *
 	 * @state The encounter's full mutable game state struct.
+	 * @name The exact name of a spell in `state.player.knownLeveledSpells`.
 	 */
-	function castLeveledSpell( state ) {
-		_castLeveledSpellFor( arguments.state, arguments.state.player, arguments.state.opponent, false );
+	function castLeveledSpell( state, name = "" ) {
+		var spell = _findKnownSpell( arguments.state.player, "knownLeveledSpells", arguments.name );
+		if ( !isNull( spell ) ) {
+			_castLeveledSpellFor( arguments.state, arguments.state.player, arguments.state.opponent, false, spell );
+		}
 	}
 
 	/**
-	 * Casts `attacker`'s known cantrip at `defender` — an attack-roll damage
-	 * cantrip (e.g. Fire Bolt) or a saving-throw damage cantrip (e.g. Sacred
-	 * Flame) per `attacker.knownCantrip.type`. Spends the attacker's action.
-	 * A no-op if the attacker has no known cantrip. Used for both the player
-	 * (via castCantrip()) and any spellcasting monster (via runEnemyTurn()).
+	 * Finds `name` in `combatant[arrayKey]` (an array of spell structs, e.g.
+	 * `knownCantrips`) — or, if `name` is blank, returns the array's first
+	 * entry (the common case while a caster only knows one). Returns null
+	 * if `arrayKey` is missing/empty, or `name` isn't found in it.
+	 */
+	private function _findKnownSpell( combatant, arrayKey, name ) {
+		if ( !structKeyExists( arguments.combatant, arguments.arrayKey ) || !arguments.combatant[ arguments.arrayKey ].len() ) {
+			return javaCast( "null", 0 );
+		}
+		var spells = arguments.combatant[ arguments.arrayKey ];
+		if ( !len( arguments.name ) ) {
+			return spells[ 1 ];
+		}
+		for ( var spell in spells ) {
+			if ( spell.name == arguments.name ) {
+				return spell;
+			}
+		}
+		return javaCast( "null", 0 );
+	}
+
+	/**
+	 * Casts `cantrip` (from `attacker.knownCantrips`, or a monster's own
+	 * `attacker.knownCantrip`) at `defender` — an attack-roll damage cantrip
+	 * (e.g. Fire Bolt) or a saving-throw damage cantrip (e.g. Sacred Flame)
+	 * per `cantrip.type`. Spends the attacker's action. Used for both the
+	 * player (via castCantrip()) and any spellcasting monster (via
+	 * runEnemyTurn(), which still passes its own single `knownCantrip`).
 	 *
 	 * @state The encounter's full mutable game state struct.
 	 * @attacker The casting combatant.
 	 * @defender The combatant being targeted.
 	 * @defenderIsPlayer Whether `defender` is `state.player` — decides whether reaching 0 HP means defeat (with Relentless Endurance) or victory/XP.
+	 * @cantrip The cantrip struct to cast (see _spellStructFromRow()).
 	 */
-	private function _castCantripFor( state, attacker, defender, defenderIsPlayer ) {
-		if ( !structKeyExists( arguments.attacker, "knownCantrip" ) || isNull( arguments.attacker.knownCantrip ) ) {
-			return;
-		}
-		var cantrip = arguments.attacker.knownCantrip;
-		if ( !_isSpellTargetValid( arguments.state, arguments.attacker, arguments.defender, cantrip ) ) {
-			arguments.state.log.prepend( "#arguments.attacker.name# doesn't have a clear shot at #arguments.defender.name# for #cantrip.name#." );
+	private function _castCantripFor( state, attacker, defender, defenderIsPlayer, cantrip ) {
+		if ( !_isSpellTargetValid( arguments.state, arguments.attacker, arguments.defender, arguments.cantrip ) ) {
+			arguments.state.log.prepend( "#arguments.attacker.name# doesn't have a clear shot at #arguments.defender.name# for #arguments.cantrip.name#." );
 			return;
 		}
 
@@ -2007,48 +2680,49 @@ class singleton {
 		// Dice default to 1d8 (save) / 1d10 (attack), matching the classes'
 		// cantrips — but a monster's own signature cantrip (e.g. a Priest's
 		// Radiant Flame, 2d6) can override with its own diceCount/diceSides.
-		var diceCount = cantrip.keyExists( "diceCount" ) ? cantrip.diceCount : 1;
-		if ( cantrip.type == "save" ) {
-			var diceSides = cantrip.keyExists( "diceSides" ) ? cantrip.diceSides : 8;
+		var diceCount = arguments.cantrip.keyExists( "diceCount" ) ? arguments.cantrip.diceCount : 1;
+		if ( arguments.cantrip.type == "save" ) {
+			var diceSides = arguments.cantrip.keyExists( "diceSides" ) ? arguments.cantrip.diceSides : 8;
 			// Some save cantrips (Sacred Flame, Vicious Mockery) deal no damage
 			// at all on a success, not half — real per-spell data from the
 			// spells table carries its own saveEffect; the hardcoded fallback
 			// cantrips (if _lookupClassSpell() found nothing for the class)
 			// don't, so default to "half" same as before.
-			var saveEffect = cantrip.keyExists( "saveEffect" ) ? cantrip.saveEffect : "half";
-			_castSaveDamageSpell( arguments.state, arguments.attacker, arguments.defender, arguments.defenderIsPlayer, cantrip.name, cantrip.saveAbility, diceCount, diceSides, cantrip.damageType, saveEffect );
+			var saveEffect = arguments.cantrip.keyExists( "saveEffect" ) ? arguments.cantrip.saveEffect : "half";
+			_castSaveDamageSpell( arguments.state, arguments.attacker, arguments.defender, arguments.defenderIsPlayer, arguments.cantrip.name, arguments.cantrip.saveAbility, diceCount, diceSides, arguments.cantrip.damageType, saveEffect );
 		} else {
-			var diceSides = cantrip.keyExists( "diceSides" ) ? cantrip.diceSides : 10;
-			_castAttackSpell( arguments.state, arguments.attacker, arguments.defender, arguments.defenderIsPlayer, cantrip.name, diceCount, diceSides, cantrip.damageType );
+			var diceSides = arguments.cantrip.keyExists( "diceSides" ) ? arguments.cantrip.diceSides : 10;
+			_castAttackSpell( arguments.state, arguments.attacker, arguments.defender, arguments.defenderIsPlayer, arguments.cantrip.name, diceCount, diceSides, arguments.cantrip.damageType );
 		}
 	}
 
 	/**
-	 * Casts `attacker`'s known 1st-level spell — either at `defender` (a
-	 * damage spell like Magic Missile) or on `attacker` themself (a healing
-	 * spell like Cure Wounds/Healing Word), per `attacker.knownLeveledSpell.type`.
-	 * Spends a 1st-level spell slot if the caster has one; otherwise falls
-	 * back to Magic Initiate's separate once-per-encounter bonus spell, if
-	 * available and unused. A no-op if neither resource is available. Used
-	 * for both the player (via castLeveledSpell()) and any spellcasting
-	 * monster (via runEnemyTurn()).
+	 * Casts `spell` (from `attacker.knownLeveledSpells`, or a monster's own
+	 * `attacker.knownLeveledSpell`) — either at `defender` (a damage spell
+	 * like Magic Missile) or on `attacker` themself (a healing spell like
+	 * Cure Wounds/Healing Word), per `spell.type`. Spends a slot at
+	 * `spell.level` if the caster has one; otherwise falls back to Magic
+	 * Initiate's separate once-per-encounter bonus spell, if available and
+	 * unused. A no-op if neither resource is available. If `spell.
+	 * concentration` is true and the cast goes through, starts
+	 * concentrating on it (see _startConcentrating()), dropping whatever the
+	 * caster was concentrating on before. Used for both the player (via
+	 * castLeveledSpell()) and any spellcasting monster (via runEnemyTurn()).
 	 *
 	 * @state The encounter's full mutable game state struct.
 	 * @attacker The casting combatant.
 	 * @defender The combatant targeted if this turns out to be a damage spell.
 	 * @defenderIsPlayer Whether `defender` is `state.player` — decides whether reaching 0 HP means defeat (with Relentless Endurance) or victory/XP.
+	 * @spell The spell struct to cast (see _spellStructFromRow()).
 	 */
-	private function _castLeveledSpellFor( state, attacker, defender, defenderIsPlayer ) {
-		if ( !structKeyExists( arguments.attacker, "knownLeveledSpell" ) || isNull( arguments.attacker.knownLeveledSpell ) ) {
-			return;
-		}
-		var spell = arguments.attacker.knownLeveledSpell;
-		if ( !_isSpellTargetValid( arguments.state, arguments.attacker, arguments.defender, spell ) ) {
-			arguments.state.log.prepend( "#arguments.attacker.name# doesn't have a clear shot at #arguments.defender.name# for #spell.name#." );
+	private function _castLeveledSpellFor( state, attacker, defender, defenderIsPlayer, spell ) {
+		if ( !_isSpellTargetValid( arguments.state, arguments.attacker, arguments.defender, arguments.spell ) ) {
+			arguments.state.log.prepend( "#arguments.attacker.name# doesn't have a clear shot at #arguments.defender.name# for #arguments.spell.name#." );
 			return;
 		}
 
-		var slotSpent = _spendSpellSlot( arguments.attacker, 1 );
+		var spellLevel = arguments.spell.keyExists( "level" ) ? arguments.spell.level : 1;
+		var slotSpent = _spendSpellSlot( arguments.attacker, spellLevel );
 		var usedMagicInitiate = false;
 		if (
 			slotSpent == 0 && structKeyExists( arguments.attacker, "hasMagicInitiate" ) && arguments.attacker.hasMagicInitiate &&
@@ -2057,11 +2731,15 @@ class singleton {
 			arguments.attacker.usedMagicInitiateSpell = true;
 			usedMagicInitiate = true;
 		} else if ( slotSpent == 0 ) {
-			arguments.state.log.prepend( "#arguments.attacker.name# has no spell slots left to cast #arguments.attacker.knownLeveledSpell.name#." );
+			arguments.state.log.prepend( "#arguments.attacker.name# has no spell slots left to cast #arguments.spell.name#." );
 			return;
 		}
 
 		arguments.state.actionUsed = true;
+		if ( arguments.spell.keyExists( "concentration" ) && arguments.spell.concentration ) {
+			_startConcentrating( arguments.state, arguments.attacker, arguments.spell.name );
+		}
+		var spell = arguments.spell;
 		var resourceNote = usedMagicInitiate ? " (Magic Initiate's bonus spell)" : " (spends a level-#slotSpent# slot)";
 		if ( spell.type == "heal" ) {
 			_castHealSpell( arguments.state, arguments.attacker, spell.name, resourceNote, spell.diceCount, spell.diceSides );
@@ -2103,6 +2781,7 @@ class singleton {
 		damage = _applyDamageModifiers( arguments.defender, damage, arguments.damageType );
 
 		arguments.defender.hitPoints = max( 0, arguments.defender.hitPoints - damage );
+		_checkConcentration( arguments.state.log, arguments.defender, damage );
 		arguments.state.log.prepend(
 			"#arguments.attacker.name# casts #arguments.spellName##arguments.resourceNote# at #arguments.defender.name#: #roll# + #arguments.attacker.proficiencyBonus + spellMod# = #total# vs AC #effectiveAC##coverNote#. " &
 			( isCrit ? "Critical hit! " : "Hit! " ) &
@@ -2135,6 +2814,7 @@ class singleton {
 		damage = _applyDamageModifiers( arguments.defender, damage, arguments.damageType );
 
 		arguments.defender.hitPoints = max( 0, arguments.defender.hitPoints - damage );
+		_checkConcentration( arguments.state.log, arguments.defender, damage );
 		arguments.state.log.prepend(
 			"#arguments.attacker.name# casts #arguments.spellName##arguments.resourceNote# at #arguments.defender.name#: DC #dc# #uCase( arguments.saveAbility )# save — #arguments.defender.name# rolls #saveResult.total#" &
 			( saveResult.hadAdvantage ? " (Advantage)" : "" ) & " — " &
@@ -2154,6 +2834,7 @@ class singleton {
 		damage = _applyDamageModifiers( arguments.defender, damage, "Force" );
 
 		arguments.defender.hitPoints = max( 0, arguments.defender.hitPoints - damage );
+		_checkConcentration( arguments.state.log, arguments.defender, damage );
 		arguments.state.log.prepend(
 			"#arguments.attacker.name# casts Magic Missile#arguments.resourceNote# — three darts automatically strike #arguments.defender.name# for #damage# Force damage (#arguments.defender.hitPoints#/#arguments.defender.maxHitPoints# HP)."
 		);
@@ -2231,6 +2912,13 @@ class singleton {
 			arguments.defender.xpAwarded = true;
 			awardExperience( arguments.state, arguments.defender.xp );
 			_grantMonsterLoot( arguments.state, arguments.defender );
+			// The round this opponent died — the sidebar keeps showing its
+			// (blinking-then-fading, via CSS) defeated card through the rest of
+			// this round, then drops it from the roster entirely once the round
+			// advances (see default.bxm's foe-card visibility check).
+			if ( structKeyExists( arguments.state, "round" ) ) {
+				arguments.defender.defeatedAtRound = arguments.state.round;
+			}
 		}
 
 		if ( _allOpponentsDefeated( arguments.state ) ) {
@@ -2579,6 +3267,14 @@ class singleton {
 		var player = arguments.state.player;
 		player.level += 1;
 
+		// A caster's slot count is level-dependent (and a half-caster's very
+		// first slot unlocks at level 2) — recompute immediately so a level-up
+		// mid-encounter doesn't leave them with a stale (often empty)
+		// spellSlots table until their next fresh character load. Same idea
+		// for a Barbarian's max Rage uses, which also increases with level.
+		_recomputeSpellSlots( player );
+		_recomputeRagesRemaining( player );
+
 		// Dwarven Toughness adds +1 per level on top of the normal Hit Die gain.
 		var hpBonusPerLevel = structKeyExists( player, "hpBonusPerLevel" ) ? player.hpBonusPerLevel : 0;
 		var hpGain = max( 1, player.hitPointsPerLevel + player.modifiers.con ) + hpBonusPerLevel;
@@ -2608,21 +3304,99 @@ class singleton {
 	}
 
 	/**
+	 * Every class in the current dataset unlocks its (sole) subclass at
+	 * level 3 — see class_features rows with a non-null subclass_id.
+	 * Returns `{ pending, availableSubclasses }`: `pending` is true once
+	 * `characterId` has reached that level without a subclass chosen yet
+	 * (this doesn't auto-assign it — the player chooses via chooseSubclass(),
+	 * from the character sheet, and can leave it pending indefinitely);
+	 * `availableSubclasses` is `[{id, name, tagline}]` for the character's
+	 * class (currently always exactly one, but shaped for a class ever
+	 * having more).
+	 */
+	function pendingSubclassChoice( characterId ) {
+		var charRow = queryExecute(
+			"SELECT class_id, subclass_id, level FROM characters WHERE id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		if ( charRow.recordCount == 0 || !isNull( charRow.subclass_id[ 1 ] ) ) {
+			return { "pending": false, "availableSubclasses": [] };
+		}
+
+		var subclassRows = queryExecute(
+			"SELECT s.id, s.name, s.tagline, MIN(cf.level) AS unlockLevel
+			 FROM subclasses s JOIN class_features cf ON cf.subclass_id = s.id
+			 WHERE s.class_id = :classId
+			 GROUP BY s.id, s.name, s.tagline",
+			{ "classId": charRow.class_id[ 1 ] },
+			{ datasource: "gameserver" }
+		);
+		if ( subclassRows.recordCount == 0 || subclassRows.unlockLevel[ 1 ] > charRow.level[ 1 ] ) {
+			return { "pending": false, "availableSubclasses": [] };
+		}
+
+		var availableSubclasses = [];
+		for ( var row in subclassRows ) {
+			availableSubclasses.append( { "id": row.id, "name": row.name, "tagline": row.tagline } );
+		}
+		return { "pending": true, "availableSubclasses": availableSubclasses };
+	}
+
+	/**
+	 * Assigns `characterId`'s subclass and retroactively grants every
+	 * subclass feature at or below their current level (in case they leveled
+	 * past the unlock level before choosing) — the character sheet's
+	 * "Choose Your Subclass" panel's action, per pendingSubclassChoice().
+	 */
+	function chooseSubclass( characterId, subclassId ) {
+		var charRow = queryExecute(
+			"SELECT level FROM characters WHERE id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		if ( charRow.recordCount == 0 ) {
+			return;
+		}
+		queryExecute(
+			"UPDATE characters SET subclass_id = :subclassId WHERE id = :characterId",
+			{ "subclassId": arguments.subclassId, "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		var featureRows = queryExecute(
+			"SELECT id FROM class_features WHERE subclass_id = :subclassId AND level <= :level",
+			{ "subclassId": arguments.subclassId, "level": charRow.level[ 1 ] },
+			{ datasource: "gameserver" }
+		);
+		for ( var row in featureRows ) {
+			queryExecute(
+				"INSERT IGNORE INTO character_features (character_id, class_feature_id) VALUES (:characterId, :featureId)",
+				{ "characterId": arguments.characterId, "featureId": row.id },
+				{ datasource: "gameserver" }
+			);
+		}
+	}
+
+	/**
 	 * Grants `player` any class features for their (already incremented)
 	 * level, from the gameserver rule set — adding them to `player.features`
-	 * and recording them against the persisted character. Returns the names
-	 * of any features gained.
+	 * and recording them against the persisted character. A subclass
+	 * feature is only included once the player has actually chosen a
+	 * subclass (see chooseSubclass()) — reaching the unlock level alone
+	 * doesn't grant them. Returns the names of any features gained.
 	 */
 	private function _grantNewFeatures( player ) {
+		var names = [];
+
 		var rows = queryExecute(
 			"SELECT cf.id, cf.name FROM class_features cf
 			 JOIN characters c ON c.class_id = cf.class_id
-			 WHERE c.id = :characterId AND cf.level = :level AND cf.subclass_id IS NULL",
+			 WHERE c.id = :characterId AND cf.level = :level
+			   AND ( cf.subclass_id IS NULL OR cf.subclass_id = c.subclass_id )",
 			{ "characterId": arguments.player.characterId, "level": arguments.player.level },
 			{ datasource: "gameserver" }
 		);
 
-		var names = [];
 		for ( var row in rows ) {
 			arrayAppend( names, row.name );
 			arrayAppend( arguments.player.features, row.name );
@@ -2632,18 +3406,11 @@ class singleton {
 				{ datasource: "gameserver" }
 			);
 
-			// Fighting Style (Fighter 1/7, Paladin/Ranger 2): auto-pick and
-			// grant one, since this app has no UI for the player to choose.
-			if ( row.name == "Fighting Style" || row.name == "Additional Fighting Style" ) {
-				var chosenStyle = grantFightingStyle( arguments.player.characterId, arguments.player.feats, arguments.player.inventory );
-				if ( len( chosenStyle ) ) {
-					arrayAppend( arguments.player.feats, chosenStyle );
-					arrayAppend( names, "the #chosenStyle# fighting style" );
-					if ( chosenStyle == "Defense" ) {
-						arguments.player.armorClass += 1;
-					}
-				}
-			}
+			// Fighting Style (Fighter 1/7, Paladin/Ranger 2): the class
+			// feature itself is recorded above like any other; the specific
+			// style is a player choice made afterward on the character
+			// sheet (see pendingFightingStyleChoice()/grantFightingStyle()),
+			// not auto-picked.
 
 			// Ability Score Improvement: queue it instead of auto-applying —
 			// the player chooses which ability/abilities to raise via the
@@ -2752,61 +3519,564 @@ class singleton {
 		return abilityFullNames[ arguments.abbrev ];
 	}
 
+	// The non-Fighting-Style feats with a real mechanical hook elsewhere in
+	// this file (Alert: initiative, Grappler: Advantage vs. a Grappled
+	// target, Magic Initiate: a simple attack cantrip, Savage Attacker: roll
+	// damage twice, Skilled: skill proficiencies via _grantSkilledSkills())
+	// — offered at an Ability Score Improvement level-up as the alternative
+	// to raising ability scores. The other ~10 feats in the `feats` table
+	// (the "Boon of ..." epic boons, plain "Ability Score Improvement" as a
+	// feat) have no mechanical hook anywhere and aren't offered.
+	LEVEL_UP_FEAT_NAMES = [ "Alert", "Grappler", "Magic Initiate", "Savage Attacker", "Skilled" ];
+
 	/**
-	 * Auto-picks a Fighting Style feat (Archery if the character has an
-	 * equipped ranged weapon, Great Weapon Fighting if they have an equipped
-	 * Two-Handed/Versatile melee weapon, Defense otherwise) and grants it,
-	 * favoring a style not already held. Returns the style name granted, or
-	 * "" if every style is already held or the feat row can't be found.
+	 * The subset of LEVEL_UP_FEAT_NAMES `player` can still pick — every
+	 * repeatable feat (Magic Initiate, Skilled — feats.repeatable), plus any
+	 * non-repeatable one they don't already have.
+	 */
+	function availableLevelUpFeats( player ) {
+		var repeatableRows = queryExecute(
+			"SELECT name FROM feats WHERE repeatable = 1", {}, { datasource: "gameserver" }
+		);
+		var repeatableNames = [];
+		for ( var row in repeatableRows ) {
+			repeatableNames.append( row.name );
+		}
+
+		var available = [];
+		for ( var featName in LEVEL_UP_FEAT_NAMES ) {
+			var alreadyHas = structKeyExists( arguments.player, "feats" ) && arrayFindNoCase( arguments.player.feats, featName ) > 0;
+			if ( !alreadyHas || arrayFindNoCase( repeatableNames, featName ) > 0 ) {
+				available.append( featName );
+			}
+		}
+		return available;
+	}
+
+	/**
+	 * Grants `featName` (one of LEVEL_UP_FEAT_NAMES) to the player in place
+	 * of an Ability Score Improvement, consuming one of their
+	 * pendingAbilityScoreImprovements — the level-up screen's other choice,
+	 * alongside applyAbilityScoreImprovement(). A no-op if there's no
+	 * pending improvement to spend, or `featName` isn't a real feat.
+	 *
+	 * Re-picking a repeatable feat (Magic Initiate, Skilled) still applies
+	 * its mechanical effect (e.g. Skilled grants 3 more skills) even though
+	 * `character_feats` has a UNIQUE(character_id, feat_id) constraint that
+	 * silently no-ops the second row — this app doesn't track how many
+	 * times a feat's been taken, just whether it's held at all.
+	 *
+	 * @state The encounter's full mutable game state struct.
+	 * @featName One of LEVEL_UP_FEAT_NAMES.
+	 * @chosenSkills For "Skilled" only: up to 3 skill names the player picked
+	 *  (see the level-up screen's secondary skill picker) — ignored for any
+	 *  other feat.
+	 */
+	function grantChosenFeat( state, featName, chosenSkills = [] ) {
+		var player = arguments.state.player;
+		if ( !structKeyExists( player, "pendingAbilityScoreImprovements" ) || player.pendingAbilityScoreImprovements <= 0 ) {
+			return;
+		}
+		if ( arguments.featName == "Skilled" && arguments.chosenSkills.len() != 3 ) {
+			return;
+		}
+		var featRows = queryExecute(
+			"SELECT id FROM feats WHERE name = :name",
+			{ "name": arguments.featName },
+			{ datasource: "gameserver" }
+		);
+		if ( featRows.recordCount == 0 ) {
+			return;
+		}
+
+		if ( structKeyExists( player, "characterId" ) ) {
+			queryExecute(
+				"INSERT IGNORE INTO character_feats (character_id, feat_id) VALUES (:characterId, :featId)",
+				{ "characterId": player.characterId, "featId": featRows.id[ 1 ] },
+				{ datasource: "gameserver" }
+			);
+		}
+		if ( arrayFindNoCase( player.feats, arguments.featName ) == 0 ) {
+			arrayAppend( player.feats, arguments.featName );
+		}
+		player.pendingAbilityScoreImprovements -= 1;
+
+		if ( arguments.featName == "Skilled" ) {
+			_grantSkilledSkills( player, arguments.chosenSkills );
+		}
+
+		arguments.state.log.prepend( "#player.name# takes the #arguments.featName# feat instead of an Ability Score Improvement." );
+	}
+
+	/**
+	 * Skilled: grants proficiency in the (up to 3) player-chosen `skills` the
+	 * character doesn't already have — persisted the same way a class's
+	 * chosen skills are (characters.chosen_skill_proficiencies).
+	 */
+	private function _grantSkilledSkills( player, skills ) {
+		var newSkills = [];
+		for ( var skill in arguments.skills ) {
+			if ( arrayFindNoCase( arguments.player.skillProficiencies, skill ) == 0 && arrayFindNoCase( newSkills, skill ) == 0 ) {
+				newSkills.append( skill );
+				arrayAppend( arguments.player.skillProficiencies, skill );
+			}
+		}
+		if ( !newSkills.len() || !structKeyExists( arguments.player, "characterId" ) ) {
+			return;
+		}
+
+		var charRow = queryExecute(
+			"SELECT chosen_skill_proficiencies FROM characters WHERE id = :characterId",
+			{ "characterId": arguments.player.characterId },
+			{ datasource: "gameserver" }
+		);
+		var storedSkills = ( charRow.recordCount > 0 && len( charRow.chosen_skill_proficiencies[ 1 ] ) )
+			? listToArray( charRow.chosen_skill_proficiencies[ 1 ], "," )
+			: [];
+		for ( var skill in newSkills ) {
+			storedSkills.append( skill );
+		}
+		queryExecute(
+			"UPDATE characters SET chosen_skill_proficiencies = :skills WHERE id = :characterId",
+			{ "skills": arrayToList( storedSkills, "," ), "characterId": arguments.player.characterId },
+			{ datasource: "gameserver" }
+		);
+	}
+
+	// The 4 Fighting Style feats with a mechanical hook in this file —
+	// Archery (attack roll bonus), Great Weapon Fighting (reroll low damage
+	// dice), Defense (+1 AC), Two-Weapon Fighting (ability mod on off-hand
+	// damage). Chosen by the player, never auto-picked — see
+	// grantFightingStyle()/pendingFightingStyleChoice().
+	FIGHTING_STYLE_NAMES = [ "Archery", "Defense", "Great Weapon Fighting", "Two-Weapon Fighting" ];
+
+	/**
+	 * The pickable Fighting Style names — see FIGHTING_STYLE_NAMES.
+	 */
+	function fightingStyleNames() {
+		return FIGHTING_STYLE_NAMES;
+	}
+
+	/**
+	 * Grants a specific, player-chosen Fighting Style feat. Returns true if
+	 * granted, false for an unrecognized style name or missing feat row.
 	 *
 	 * @characterId characters.id to grant the feat to.
-	 * @existingFeatNames Feat names the character already has.
-	 * @inventory The character's in-memory inventory (from loadCharacter()).
+	 * @styleName One of FIGHTING_STYLE_NAMES.
 	 */
-	function grantFightingStyle( characterId, existingFeatNames, inventory ) {
-		var hasRanged = false;
-		var hasTwoHandedMelee = false;
-		for ( var item in arguments.inventory ) {
-			if ( !item.equipped ) {
-				continue;
-			}
-			if ( item.category == "ranged" ) {
-				hasRanged = true;
-			}
-			if (
-				item.category == "melee" && structKeyExists( item, "properties" ) &&
-				( arrayFindNoCase( item.properties, "Two-Handed" ) > 0 || arrayFindNoCase( item.properties, "Versatile" ) > 0 )
-			) {
-				hasTwoHandedMelee = true;
-			}
+	function grantFightingStyle( characterId, styleName ) {
+		if ( arrayFindNoCase( FIGHTING_STYLE_NAMES, arguments.styleName ) == 0 ) {
+			return false;
 		}
-
-		var choice = hasRanged ? "Archery" : ( hasTwoHandedMelee ? "Great Weapon Fighting" : "Defense" );
-		if ( arrayFindNoCase( arguments.existingFeatNames, choice ) > 0 ) {
-			var fallbacks = [ "Archery", "Great Weapon Fighting", "Defense" ];
-			choice = "";
-			for ( var fallback in fallbacks ) {
-				if ( arrayFindNoCase( arguments.existingFeatNames, fallback ) == 0 ) {
-					choice = fallback;
-					break;
-				}
-			}
-			if ( !len( choice ) ) {
-				return "";
-			}
-		}
-
-		var featRows = queryExecute( "SELECT id FROM feats WHERE name = :name", { "name": choice }, { datasource: "gameserver" } );
+		var featRows = queryExecute(
+			"SELECT id FROM feats WHERE name = :name",
+			{ "name": arguments.styleName },
+			{ datasource: "gameserver" }
+		);
 		if ( featRows.recordCount == 0 ) {
-			return "";
+			return false;
 		}
-
 		queryExecute(
 			"INSERT IGNORE INTO character_feats (character_id, feat_id) VALUES (:characterId, :featId)",
 			{ "characterId": arguments.characterId, "featId": featRows.id[ 1 ] },
 			{ datasource: "gameserver" }
 		);
-		return choice;
+		return true;
+	}
+
+	/**
+	 * Whether `characterId` has an un-chosen Fighting Style waiting (Fighter
+	 * gets one at level 1 and a second, "Additional Fighting Style", at
+	 * level 7; Paladin/Ranger get one at level 2) — compares how many
+	 * Fighting-Style-granting class features have been recorded against how
+	 * many Fighting Style feats have actually been chosen, since a
+	 * character can be due more than one over their career. Returns
+	 * `{ pending, availableStyles }` — `availableStyles` excludes any style
+	 * already held (can't pick the same one twice).
+	 */
+	function pendingFightingStyleChoice( characterId ) {
+		var unlockedRows = queryExecute(
+			"SELECT COUNT(*) AS unlockedCount FROM character_features chf
+			 JOIN class_features cf ON cf.id = chf.class_feature_id
+			 WHERE chf.character_id = :characterId AND cf.name IN ('Fighting Style', 'Additional Fighting Style')",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		var chosenRows = queryExecute(
+			"SELECT f.name FROM character_feats chf JOIN feats f ON f.id = chf.feat_id WHERE chf.character_id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		var chosenNames = [];
+		var chosenStyleCount = 0;
+		for ( var row in chosenRows ) {
+			chosenNames.append( row.name );
+			if ( arrayFindNoCase( FIGHTING_STYLE_NAMES, row.name ) > 0 ) {
+				chosenStyleCount += 1;
+			}
+		}
+
+		var pending = unlockedRows.unlockedCount[ 1 ] > chosenStyleCount;
+		var availableStyles = [];
+		if ( pending ) {
+			for ( var style in FIGHTING_STYLE_NAMES ) {
+				if ( arrayFindNoCase( chosenNames, style ) == 0 ) {
+					availableStyles.append( style );
+				}
+			}
+		}
+		return { "pending": pending, "availableStyles": availableStyles };
+	}
+
+	/**
+	 * Second Wind (Fighter 1): once per encounter, a bonus action heal of
+	 * 1d10 + Fighter level Hit Points. A no-op if the bonus action is
+	 * already spent, the feature isn't held, it's already been used this
+	 * encounter, or the player is down/incapacitated.
+	 */
+	function useSecondWind( state ) {
+		var player = arguments.state.player;
+		if (
+			( structKeyExists( arguments.state, "bonusActionUsed" ) && arguments.state.bonusActionUsed ) ||
+			player.hitPoints <= 0 || isIncapacitated( player ) ||
+			!structKeyExists( player, "features" ) || arrayFindNoCase( player.features, "Second Wind" ) == 0 ||
+			player.usedSecondWind
+		) {
+			return;
+		}
+		arguments.state.bonusActionUsed = true;
+		player.usedSecondWind = true;
+		var healing = rollSum( 1, 10 ) + player.level;
+		player.hitPoints = min( player.maxHitPoints, player.hitPoints + healing );
+		arguments.state.log.prepend( "#player.name# uses Second Wind, healing #healing# Hit Points (#player.hitPoints#/#player.maxHitPoints# HP)." );
+	}
+
+	/**
+	 * Rage (Barbarian 1) uses per long rest, from RAGE_USES_BY_LEVEL.
+	 */
+	private function _rageUsesForLevel( level ) {
+		return RAGE_USES_BY_LEVEL[ min( max( arguments.level, 1 ), RAGE_USES_BY_LEVEL.len() ) ];
+	}
+
+	/**
+	 * Derives `player.ragesRemaining` from the persisted `player.ragesUsed`
+	 * (like spentSpellSlots, the actual source of truth) and the level-based
+	 * max (_rageUsesForLevel()) — 0 for a non-Barbarian. Called on load, on
+	 * level-up (a higher level can raise the max mid-encounter), and after
+	 * startRage()/shortRest()/longRest() change `ragesUsed`.
+	 */
+	private function _recomputeRagesRemaining( player ) {
+		if ( !structKeyExists( arguments.player, "features" ) || arrayFindNoCase( arguments.player.features, "Rage" ) == 0 ) {
+			arguments.player.ragesRemaining = 0;
+			return;
+		}
+		var used = structKeyExists( arguments.player, "ragesUsed" ) ? arguments.player.ragesUsed : 0;
+		arguments.player.ragesRemaining = max( 0, _rageUsesForLevel( arguments.player.level ) - used );
+	}
+
+	/**
+	 * Rage's melee weapon damage bonus by level: +2 (1-8), +3 (9-15), +4 (16-20).
+	 */
+	private function _rageDamageBonus( level ) {
+		if ( arguments.level >= 16 ) {
+			return 4;
+		} else if ( arguments.level >= 9 ) {
+			return 3;
+		}
+		return 2;
+	}
+
+	/**
+	 * Enters a Rage (Barbarian 1): a bonus action, consuming one of
+	 * `player.ragesRemaining`. While raging (`player.isRaging`), melee
+	 * weapon attacks deal bonus damage (see resolveAttack()'s Rage note),
+	 * Strength saving throws have Advantage (see rollSavingThrow()), and the
+	 * character gains resistance to Bludgeoning/Piercing/Slashing damage.
+	 * A no-op if the feature isn't held, no uses remain, already raging, or
+	 * the bonus action is already spent.
+	 *
+	 * Simplified from the full SRD rule: rage here lasts until endRage() is
+	 * called or the encounter ends, rather than RAW's "ends early if you
+	 * don't attack a hostile creature or take damage on your turn" — that
+	 * nuance isn't tracked, matching this app's general pattern of not
+	 * modeling turn-by-turn upkeep conditions it can't verify cheaply.
+	 */
+	function startRage( state ) {
+		var player = arguments.state.player;
+		if (
+			( structKeyExists( arguments.state, "bonusActionUsed" ) && arguments.state.bonusActionUsed ) ||
+			player.hitPoints <= 0 || isIncapacitated( player ) ||
+			!structKeyExists( player, "features" ) || arrayFindNoCase( player.features, "Rage" ) == 0 ||
+			player.isRaging || !structKeyExists( player, "ragesRemaining" ) || player.ragesRemaining <= 0
+		) {
+			return;
+		}
+		arguments.state.bonusActionUsed = true;
+		player.ragesUsed = ( structKeyExists( player, "ragesUsed" ) ? player.ragesUsed : 0 ) + 1;
+		_recomputeRagesRemaining( player );
+		player.isRaging = true;
+		for ( var damageType in [ "Bludgeoning", "Piercing", "Slashing" ] ) {
+			if ( arrayFindNoCase( player.resistances, damageType ) == 0 ) {
+				player.resistances.append( damageType );
+			}
+		}
+		arguments.state.log.prepend( "#player.name# flies into a Rage! (#player.ragesRemaining# use#( player.ragesRemaining == 1 ? '' : 's' )# left)" );
+	}
+
+	/**
+	 * Ends an active Rage early (no action cost, matching the SRD's "you can
+	 * end your Rage on your turn as a free action") — removes the
+	 * Bludgeoning/Piercing/Slashing resistance startRage() granted. A no-op
+	 * if not currently raging.
+	 */
+	function endRage( state ) {
+		var player = arguments.state.player;
+		if ( !structKeyExists( player, "isRaging" ) || !player.isRaging ) {
+			return;
+		}
+		player.isRaging = false;
+		for ( var damageType in [ "Bludgeoning", "Piercing", "Slashing" ] ) {
+			arrayDelete( player.resistances, damageType, "textnocase" );
+		}
+		arguments.state.log.prepend( "#player.name#'s Rage ends." );
+	}
+
+	/**
+	 * Whether `characterId` has an Expertise pick waiting (Rogue 1, Bard 2,
+	 * Ranger 9 in this dataset — each grants exactly one "choose 2 skills"
+	 * Expertise, not stacking further) — compares how many Expertise-granting
+	 * class features have been recorded (each worth 2 skills) against how
+	 * many Expertise skills have actually been chosen. Returns
+	 * `{ pending, availableSkills }` — `availableSkills` is the character's
+	 * own skill proficiencies not already given Expertise (Expertise can
+	 * only be applied to a skill you're already proficient in).
+	 */
+	function pendingExpertiseChoice( characterId ) {
+		var charRow = queryExecute(
+			"SELECT chosen_skill_proficiencies, expertise_skills, species, background FROM characters WHERE id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		if ( charRow.recordCount == 0 ) {
+			return { "pending": false, "availableSkills": [] };
+		}
+		var unlockedRows = queryExecute(
+			"SELECT COUNT(*) AS unlockedCount FROM character_features chf
+			 JOIN class_features cf ON cf.id = chf.class_feature_id
+			 WHERE chf.character_id = :characterId AND cf.name = 'Expertise'",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		var expertiseSkills = len( charRow.expertise_skills[ 1 ] ) ? listToArray( charRow.expertise_skills[ 1 ] ) : [];
+		var pending = ( unlockedRows.unlockedCount[ 1 ] * 2 ) > expertiseSkills.len();
+		var availableSkills = [];
+		if ( pending ) {
+			var speciesMechanics = _resolveSpeciesMechanics( len( charRow.species[ 1 ] ) ? charRow.species[ 1 ] : "" );
+			var skillProficiencies = _skillProficienciesFromTraits( speciesMechanics.traitNames, charRow.background[ 1 ] );
+			if ( len( charRow.chosen_skill_proficiencies[ 1 ] ) ) {
+				for ( var chosenSkill in listToArray( charRow.chosen_skill_proficiencies[ 1 ], "," ) ) {
+					if ( arrayFindNoCase( skillProficiencies, chosenSkill ) == 0 ) {
+						skillProficiencies.append( chosenSkill );
+					}
+				}
+			}
+			for ( var skill in skillProficiencies ) {
+				if ( arrayFindNoCase( expertiseSkills, skill ) == 0 ) {
+					availableSkills.append( skill );
+				}
+			}
+		}
+		return { "pending": pending, "availableSkills": availableSkills };
+	}
+
+	/**
+	 * Grants Expertise in one already-proficient skill, per
+	 * pendingExpertiseChoice() — the character sheet's "Choose Expertise"
+	 * panel's action. A no-op if the skill is already an Expertise pick.
+	 */
+	function chooseExpertise( characterId, skillName ) {
+		var current = queryExecute(
+			"SELECT expertise_skills FROM characters WHERE id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		if ( current.recordCount == 0 ) {
+			return;
+		}
+		var expertiseSkills = len( current.expertise_skills[ 1 ] ) ? listToArray( current.expertise_skills[ 1 ] ) : [];
+		if ( arrayFindNoCase( expertiseSkills, arguments.skillName ) > 0 ) {
+			return;
+		}
+		expertiseSkills.append( arguments.skillName );
+		queryExecute(
+			"UPDATE characters SET expertise_skills = :skills WHERE id = :characterId",
+			{ "skills": arrayToList( expertiseSkills, "," ), "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+	}
+
+	/**
+	 * Simplified cantrips-known-by-level rule shared by every full-caster
+	 * class (the SRD's actual per-class tables vary slightly — e.g. Cleric
+	 * gains its 4th cantrip at level 4, Warlock's tables differ further
+	 * still — collapsed here to one curve, a deliberate simplification
+	 * matching how this app already treats "spells known" more broadly).
+	 * Half-casters (Paladin, Ranger) and Magic Initiate don't grow their
+	 * cantrip count at all, so this only applies to FULL_CASTER_CLASSES.
+	 */
+	private function _expectedCantripCount( level ) {
+		if ( arguments.level >= 10 ) {
+			return 4;
+		} else if ( arguments.level >= 4 ) {
+			return 3;
+		}
+		return 2;
+	}
+
+	/**
+	 * Whether `characterId` (a full-caster class) has fewer known cantrips
+	 * than their level should grant (see _expectedCantripCount()) —
+	 * compares that expected count against `known_cantrips`' actual length,
+	 * never auto-granting the difference. Returns
+	 * `{ pending, availableCantrips }`; `availableCantrips` is every
+	 * castable cantrip for the class not already known.
+	 */
+	function pendingCantripChoice( characterId ) {
+		var charRow = queryExecute(
+			"SELECT cl.name AS className, c.level, c.known_cantrips
+			 FROM characters c JOIN classes cl ON cl.id = c.class_id
+			 WHERE c.id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		if ( charRow.recordCount == 0 || arrayFindNoCase( FULL_CASTER_CLASSES, charRow.className[ 1 ] ) == 0 ) {
+			return { "pending": false, "availableCantrips": [] };
+		}
+
+		var knownNames = len( charRow.known_cantrips[ 1 ] ) ? listToArray( charRow.known_cantrips[ 1 ] ) : [];
+		var pending = knownNames.len() < _expectedCantripCount( charRow.level[ 1 ] );
+		var availableCantrips = [];
+		if ( pending ) {
+			for ( var cantrip in listCastableSpells( charRow.className[ 1 ], 0 ) ) {
+				if ( arrayFindNoCase( knownNames, cantrip.name ) == 0 ) {
+					availableCantrips.append( cantrip );
+				}
+			}
+		}
+		return { "pending": pending, "availableCantrips": availableCantrips };
+	}
+
+	/**
+	 * Records a player-chosen new cantrip against `characterId`, per
+	 * pendingCantripChoice() — the character sheet's "Learn a Cantrip"
+	 * panel's action. A no-op if the cantrip is already known.
+	 */
+	function chooseCantrip( characterId, cantripName ) {
+		_appendKnownSpellName( arguments.characterId, "known_cantrips", arguments.cantripName );
+	}
+
+	/**
+	 * Whether `characterId` has unlocked a new maximum spell-slot level
+	 * (via the SPELL_SLOTS_FULL_CASTER/HALF_CASTER tables) that they don't
+	 * yet have a known spell of — e.g. reaching level 3 unlocks 2nd-level
+	 * slots, so they're due a 2nd-level spell pick. Only ever grants one
+	 * spell per unlocked level, matching how a level-1 character starts
+	 * with exactly one 1st-level spell. Returns
+	 * `{ pending, availableSpells, level }` — `level` is the highest
+	 * spell level they're due a pick for; `availableSpells` excludes any
+	 * spell of that level already known.
+	 */
+	function pendingSpellChoice( characterId ) {
+		var charRow = queryExecute(
+			"SELECT cl.name AS className, c.level, c.known_spells
+			 FROM characters c JOIN classes cl ON cl.id = c.class_id
+			 WHERE c.id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		if ( charRow.recordCount == 0 ) {
+			return { "pending": false, "availableSpells": [], "level": 0 };
+		}
+		var className = charRow.className[ 1 ];
+		var isFullCaster = isFullCasterClass( className );
+		var isHalfCaster = arrayFindNoCase( HALF_CASTER_CLASSES, className ) > 0;
+		if ( !isFullCaster && !isHalfCaster ) {
+			return { "pending": false, "availableSpells": [], "level": 0 };
+		}
+
+		var slotTable = isFullCaster ? SPELL_SLOTS_FULL_CASTER : SPELL_SLOTS_HALF_CASTER;
+		var levelIndex = min( charRow.level[ 1 ], slotTable.len() );
+		var maxSlotLevel = 0;
+		if ( levelIndex > 0 ) {
+			var slotsAtLevel = slotTable[ levelIndex ];
+			for ( var spellLevel = 1; spellLevel <= slotsAtLevel.len(); spellLevel++ ) {
+				if ( slotsAtLevel[ spellLevel ] > 0 ) {
+					maxSlotLevel = spellLevel;
+				}
+			}
+		}
+		if ( maxSlotLevel == 0 ) {
+			return { "pending": false, "availableSpells": [], "level": 0 };
+		}
+
+		var knownNames = len( charRow.known_spells[ 1 ] ) ? listToArray( charRow.known_spells[ 1 ] ) : [];
+		var availableSpellsByLevel = listCastableSpells( className, maxSlotLevel );
+		var spellNamesAtMaxLevel = [];
+		for ( var spell in availableSpellsByLevel ) {
+			spellNamesAtMaxLevel.append( spell.name );
+		}
+		var knownAtMaxLevel = 0;
+		for ( var name in knownNames ) {
+			if ( arrayFindNoCase( spellNamesAtMaxLevel, name ) > 0 ) {
+				knownAtMaxLevel += 1;
+			}
+		}
+		var pending = knownAtMaxLevel == 0;
+		var availableSpells = [];
+		if ( pending ) {
+			for ( var spell in availableSpellsByLevel ) {
+				if ( arrayFindNoCase( knownNames, spell.name ) == 0 ) {
+					availableSpells.append( spell );
+				}
+			}
+		}
+		return { "pending": pending, "availableSpells": availableSpells, "level": maxSlotLevel };
+	}
+
+	/**
+	 * Records a player-chosen new leveled spell against `characterId`, per
+	 * pendingSpellChoice() — the character sheet's "Learn a Spell" panel's
+	 * action. A no-op if the spell is already known.
+	 */
+	function chooseSpell( characterId, spellName ) {
+		_appendKnownSpellName( arguments.characterId, "known_spells", arguments.spellName );
+	}
+
+	/**
+	 * Appends `spellName` to a character's comma-separated known_cantrips/
+	 * known_spells column, unless already present. Shared by
+	 * chooseCantrip()/chooseSpell(); `columnName` is always one of those two
+	 * literal, hardcoded column names, never user input.
+	 */
+	private function _appendKnownSpellName( characterId, columnName, spellName ) {
+		var current = queryExecute(
+			"SELECT #arguments.columnName# AS known_list FROM characters WHERE id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		if ( current.recordCount == 0 ) {
+			return;
+		}
+		var known = len( current.known_list[ 1 ] ) ? listToArray( current.known_list[ 1 ] ) : [];
+		if ( arrayFindNoCase( known, arguments.spellName ) > 0 ) {
+			return;
+		}
+		known.append( arguments.spellName );
+		queryExecute(
+			"UPDATE characters SET #arguments.columnName# = :knownList WHERE id = :characterId",
+			{ "characterId": arguments.characterId, "knownList": arrayToList( known ) },
+			{ datasource: "gameserver" }
+		);
 	}
 
 	/**
@@ -2826,11 +4096,26 @@ class singleton {
 	function saveCharacterState( player ) {
 		var spentSlots = structKeyExists( arguments.player, "spentSpellSlots" ) ? arguments.player.spentSpellSlots : {};
 		queryExecute(
-			"UPDATE characters SET hit_points = :hp, hit_dice_spent = :hitDiceSpent, spent_spell_slots = :spentSlots WHERE id = :characterId",
+			"UPDATE characters SET
+			     hit_points = :hp, hit_dice_spent = :hitDiceSpent, spent_spell_slots = :spentSlots,
+			     game_clock_seconds = :gameClockSeconds, last_long_rest_seconds = :lastLongRestSeconds,
+			     rages_used = :ragesUsed, used_second_wind = :usedSecondWind, used_breath_weapon = :usedBreathWeapon,
+			     used_relentless_endurance = :usedRelentlessEndurance, used_heroic_inspiration = :usedHeroicInspiration,
+			     used_magic_initiate_spell = :usedMagicInitiateSpell
+			 WHERE id = :characterId",
 			{
 				"hp":           arguments.player.hitPoints,
 				"hitDiceSpent": arguments.player.hitDiceSpent,
 				"spentSlots":   JSONSerialize( spentSlots ),
+				"gameClockSeconds": structKeyExists( arguments.player, "gameClockSeconds" ) ? arguments.player.gameClockSeconds : 0,
+				"lastLongRestSeconds": ( structKeyExists( arguments.player, "lastLongRestSeconds" ) && !isNull( arguments.player.lastLongRestSeconds ) )
+					? arguments.player.lastLongRestSeconds : javaCast( "null", 0 ),
+				"ragesUsed": structKeyExists( arguments.player, "ragesUsed" ) ? arguments.player.ragesUsed : 0,
+				"usedSecondWind": ( structKeyExists( arguments.player, "usedSecondWind" ) && arguments.player.usedSecondWind ) ? 1 : 0,
+				"usedBreathWeapon": ( structKeyExists( arguments.player, "usedBreathWeapon" ) && arguments.player.usedBreathWeapon ) ? 1 : 0,
+				"usedRelentlessEndurance": ( structKeyExists( arguments.player, "usedRelentlessEndurance" ) && arguments.player.usedRelentlessEndurance ) ? 1 : 0,
+				"usedHeroicInspiration": ( structKeyExists( arguments.player, "usedHeroicInspiration" ) && arguments.player.usedHeroicInspiration ) ? 1 : 0,
+				"usedMagicInitiateSpell": ( structKeyExists( arguments.player, "usedMagicInitiateSpell" ) && arguments.player.usedMagicInitiateSpell ) ? 1 : 0,
 				"characterId":  arguments.player.characterId
 			},
 			{ datasource: "gameserver" }
@@ -2838,29 +4123,103 @@ class singleton {
 	}
 
 	/**
-	 * Short Rest: spends one Hit Die (d[hitDieSize] + CON mod) to recover HP.
-	 * The result struct is returned so the caller can log the roll.
+	 * Short Rest: a minimum 1-hour activity (advances the in-game clock by
+	 * SHORT_REST_SECONDS) during which the character can spend `diceCount`
+	 * Hit Dice (each d[hitDieSize] + CON mod, minimum 0 per die) to recover
+	 * HP — clamped to however many are actually left unspent. Also recovers
+	 * Second Wind and one Rage use, per those features' "regain ... when you
+	 * finish a Short Rest" text. `diceCount` can be 0 (rest without spending
+	 * any dice — still worth taking purely for the Second Wind/Rage
+	 * recovery). Returns `{ rolls, healing }` — `rolls` is one entry per die
+	 * actually spent, so the caller can log each roll.
+	 *
+	 * @player The player struct to rest (mutated in place).
+	 * @diceCount How many Hit Dice to spend as part of this rest (default 1).
 	 */
-	function shortRest( player ) {
-		var roll    = randRange( 1, arguments.player.hitDieSize );
-		var healing = max( 0, roll + arguments.player.modifiers.con );
-		arguments.player.hitDiceSpent = min( arguments.player.hitDiceMax, arguments.player.hitDiceSpent + 1 );
-		arguments.player.hitPoints    = min( arguments.player.maxHitPoints, arguments.player.hitPoints + healing );
+	function shortRest( player, diceCount = 1 ) {
+		var spendable = min( max( 0, arguments.diceCount ), arguments.player.hitDiceMax - arguments.player.hitDiceSpent );
+		var rolls = [];
+		var healing = 0;
+		for ( var i = 1; i <= spendable; i++ ) {
+			var roll = randRange( 1, arguments.player.hitDieSize );
+			rolls.append( roll );
+			healing += max( 0, roll + arguments.player.modifiers.con );
+		}
+		arguments.player.hitDiceSpent = min( arguments.player.hitDiceMax, arguments.player.hitDiceSpent + spendable );
+		arguments.player.hitPoints = min( arguments.player.maxHitPoints, arguments.player.hitPoints + healing );
+
+		arguments.player.gameClockSeconds += SHORT_REST_SECONDS;
+		arguments.player.usedSecondWind = false;
+		if ( structKeyExists( arguments.player, "ragesUsed" ) && arguments.player.ragesUsed > 0 ) {
+			arguments.player.ragesUsed -= 1;
+		}
+		_recomputeRagesRemaining( arguments.player );
+
 		saveCharacterState( arguments.player );
-		return { "roll": roll, "conMod": arguments.player.modifiers.con, "healing": healing };
+		return { "rolls": rolls, "healing": healing, "conMod": arguments.player.modifiers.con };
 	}
 
 	/**
-	 * Long Rest: fully restores HP, recovers up to half the character's max hit
-	 * dice (minimum 1), and resets all spell slots. Saves to DB.
+	 * How many more in-game hours (rounded up) until `player` is allowed
+	 * another Long Rest — 0 if one is allowed right now (including if
+	 * they've never taken one). Doesn't mutate anything; used both by
+	 * longRest() itself and by the UI to show/disable the Long Rest button
+	 * ahead of actually attempting it.
 	 */
-	function longRest( player ) {
+	function hoursUntilNextLongRest( player ) {
+		if ( isNull( arguments.player.lastLongRestSeconds ) ) {
+			return 0;
+		}
+		var elapsed = arguments.player.gameClockSeconds - arguments.player.lastLongRestSeconds;
+		if ( elapsed >= LONG_REST_COOLDOWN_SECONDS ) {
+			return 0;
+		}
+		return ceiling( ( LONG_REST_COOLDOWN_SECONDS - elapsed ) / 3600 );
+	}
+
+	/**
+	 * Long Rest: an 8-hour activity (advances the in-game clock by
+	 * LONG_REST_SECONDS) that fully restores HP, recovers up to half the
+	 * character's max hit dice (minimum 1), resets all spell slots, and
+	 * recovers every other Long-Rest-only resource (Rage uses, Breath
+	 * Weapon, Relentless Endurance, Heroic Inspiration, Magic Initiate's
+	 * bonus spell). Blocked — a no-op, per the "can't benefit from more than
+	 * one Long Rest in a 24-hour period" rule — if one was already completed
+	 * within the last LONG_REST_COOLDOWN_SECONDS of in-game time, unless
+	 * `ignoreCooldown` is true. Returns `{ success, hoursUntilNext }` so the
+	 * caller can show why it was refused; `hoursUntilNext` is 0 when
+	 * `success` is true.
+	 *
+	 * @player The player struct to rest (mutated in place).
+	 * @ignoreCooldown Bypasses the 24-hour gate — used only by
+	 *  default.bx's onMount() to fully heal a character who loaded at 0 HP
+	 *  (persisted from a defeat), so they're never left permanently stuck
+	 *  just because they happened to rest recently. Not exposed to the
+	 *  player-facing Rest panel, which always respects the real cooldown.
+	 */
+	function longRest( player, ignoreCooldown = false ) {
+		var hoursUntilNext = arguments.ignoreCooldown ? 0 : hoursUntilNextLongRest( arguments.player );
+		if ( hoursUntilNext > 0 ) {
+			return { "success": false, "hoursUntilNext": hoursUntilNext };
+		}
+
+		arguments.player.gameClockSeconds += LONG_REST_SECONDS;
+		arguments.player.lastLongRestSeconds = arguments.player.gameClockSeconds;
+
 		arguments.player.hitPoints    = arguments.player.maxHitPoints;
 		var recoverDice               = max( 1, int( arguments.player.hitDiceMax / 2 ) );
 		arguments.player.hitDiceSpent = max( 0, arguments.player.hitDiceSpent - recoverDice );
 		arguments.player.spentSpellSlots = {};
+		arguments.player.ragesUsed = 0;
+		arguments.player.usedSecondWind = false;
+		arguments.player.usedBreathWeapon = false;
+		arguments.player.usedRelentlessEndurance = false;
+		arguments.player.usedHeroicInspiration = false;
+		arguments.player.usedMagicInitiateSpell = false;
 		_assignSpellcasting( arguments.player );
+		_recomputeRagesRemaining( arguments.player );
 		saveCharacterState( arguments.player );
+		return { "success": true, "hoursUntilNext": 0 };
 	}
 
 	/**
@@ -3349,6 +4708,190 @@ class singleton {
 		return true;
 	}
 
+	/**
+	 * Resolves a character's species name (which may be a subrace, e.g. "Hill
+	 * Dwarf") against the `species`/`species_traits` tables, merging in the
+	 * parent race's resistances and traits when the named species is a
+	 * subrace — a Hill Dwarf has both its own trait (Dwarven Toughness) and
+	 * every trait Dwarf grants. Returns { resistances: [], traitNames: [] };
+	 * both are empty for an unrecognized or blank species name (e.g. a
+	 * character created before species was DB-backed).
+	 */
+	private function _resolveSpeciesMechanics( species ) {
+		var result = { "resistances": [], "traitNames": [] };
+		if ( !len( arguments.species ) ) {
+			return result;
+		}
+
+		var speciesRows = queryExecute(
+			"SELECT s.id, s.resistances, s.parent_species_id, p.resistances AS parent_resistances
+			 FROM species s LEFT JOIN species p ON p.id = s.parent_species_id
+			 WHERE s.name = :species",
+			{ "species": arguments.species },
+			{ datasource: "gameserver" }
+		);
+		if ( speciesRows.recordCount == 0 ) {
+			return result;
+		}
+
+		var speciesIds = [ speciesRows.id[ 1 ] ];
+		for ( var resistanceList in [ speciesRows.resistances[ 1 ], speciesRows.parent_resistances[ 1 ] ] ) {
+			if ( !isNull( resistanceList ) && len( resistanceList ) ) {
+				for ( var resistance in listToArray( resistanceList, "," ) ) {
+					result.resistances.append( trim( resistance ) );
+				}
+			}
+		}
+		if ( !isNull( speciesRows.parent_species_id[ 1 ] ) ) {
+			speciesIds.append( speciesRows.parent_species_id[ 1 ] );
+		}
+
+		var traitRows = queryExecute(
+			"SELECT name FROM species_traits WHERE species_id IN (#arrayToList( speciesIds )#)",
+			{}, { datasource: "gameserver" }
+		);
+		for ( var traitRow in traitRows ) {
+			result.traitNames.append( traitRow.name );
+		}
+		return result;
+	}
+
+	/**
+	 * Public entry point for resolving a character's skill proficiencies by
+	 * species/background name alone (for callers, like CharacterService's
+	 * character sheet, that don't already have a _resolveSpeciesMechanics()
+	 * result on hand). loadCharacter() calls _skillProficienciesFromTraits()
+	 * directly instead, to reuse the speciesMechanics it already computed.
+	 */
+	function resolveSkillProficiencies( species, background ) {
+		return _skillProficienciesFromTraits( _resolveSpeciesMechanics( arguments.species ).traitNames, arguments.background );
+	}
+
+	/**
+	 * Parses a `classes.skill_proficiencies` SRD string (e.g. "Choose 2:
+	 * Acrobatics, Animal Handling, Athletics, ... or Survival", or Bard's
+	 * "Choose any 3 skills (see Playing the Game)") into
+	 * { count, options }, for the character creation wizard's skill picker.
+	 * `options` is every one of the SRD's 18 skills when the class allows
+	 * "any" skill rather than a specific list.
+	 */
+	function parseClassSkillChoice( text ) {
+		var countMatch = reFindNoCase( "Choose (?:any )?(\d+)", arguments.text, 1, true );
+		var count = ( structKeyExists( countMatch, "len" ) && countMatch.len.len() >= 2 && countMatch.len[ 2 ] > 0 )
+			? int( mid( arguments.text, countMatch.pos[ 2 ], countMatch.len[ 2 ] ) )
+			: 0;
+
+		var options = [];
+		var colonPos = find( ":", arguments.text );
+		if ( colonPos == 0 ) {
+			// No explicit list (e.g. "Choose any 3 skills ...") — any SRD skill qualifies.
+			for ( var skill in SKILL_ABILITIES ) {
+				options.append( skill );
+			}
+		} else {
+			var listText = mid( arguments.text, colonPos + 1, len( arguments.text ) );
+			listText = reReplaceNoCase( listText, "\(.*?\)", "", "all" );
+			listText = reReplaceNoCase( listText, "\bor\b", ",", "all" );
+			for ( var part in listToArray( listText, "," ) ) {
+				var trimmed = trim( part );
+				if ( len( trimmed ) ) {
+					options.append( trimmed );
+				}
+			}
+		}
+		return { "count": count, "options": options };
+	}
+
+	/**
+	 * Resolves a character's skill proficiencies from their background's
+	 * fixed `skill_proficiencies` list (e.g. Acolyte: Insight, Religion) plus
+	 * any species traits in TRAIT_SKILL_GRANTS (e.g. Elf's Keen Senses ->
+	 * Perception). Doesn't cover a class's own skill choices (`classes.
+	 * skill_proficiencies` is an unparsed "choose 2 of ..." SRD string, and
+	 * character creation has no skill-picker step) — see WIP.md.
+	 *
+	 * @traitNames Species trait names, from _resolveSpeciesMechanics().traitNames.
+	 * @background characters.background.
+	 */
+	private function _skillProficienciesFromTraits( traitNames, background ) {
+		var skills = [];
+		if ( len( arguments.background ) ) {
+			var backgroundRows = queryExecute(
+				"SELECT skill_proficiencies FROM backgrounds WHERE name = :name",
+				{ "name": arguments.background },
+				{ datasource: "gameserver" }
+			);
+			if ( backgroundRows.recordCount > 0 && len( backgroundRows.skill_proficiencies[ 1 ] ) ) {
+				for ( var skill in listToArray( backgroundRows.skill_proficiencies[ 1 ], "," ) ) {
+					skills.append( trim( skill ) );
+				}
+			}
+		}
+		for ( var traitName in TRAIT_SKILL_GRANTS ) {
+			if ( arrayFindNoCase( arguments.traitNames, traitName ) == 0 ) {
+				continue;
+			}
+			for ( var skill in TRAIT_SKILL_GRANTS[ traitName ] ) {
+				if ( arrayFindNoCase( skills, skill ) == 0 ) {
+					skills.append( skill );
+				}
+			}
+		}
+		return skills;
+	}
+
+	/**
+	 * The Proficiency Bonus to add to `combatant`'s check for `skill`, or 0
+	 * if they aren't proficient. Monsters carry no per-skill proficiency
+	 * data (only saving throw bonuses come from their stat block), so a
+	 * combatant with no `skillProficiencies` array is treated as proficient
+	 * in everything — the same always-proficient behavior attemptGrapple()/
+	 * attemptShove() already had for every combatant before skill
+	 * proficiencies existed, preserved here so monster contests don't get
+	 * silently nerfed for lack of data.
+	 */
+	private function _skillProficiencyBonus( combatant, skill ) {
+		if ( !structKeyExists( arguments.combatant, "proficiencyBonus" ) ) {
+			return 0;
+		}
+		if ( !structKeyExists( arguments.combatant, "skillProficiencies" ) ) {
+			return arguments.combatant.proficiencyBonus;
+		}
+		if ( arrayFindNoCase( arguments.combatant.skillProficiencies, arguments.skill ) == 0 ) {
+			return 0;
+		}
+		// Expertise (Rogue 1, Bard 2, Ranger 9): doubled Proficiency Bonus for
+		// a player-chosen skill — see pendingExpertiseChoice()/chooseExpertise().
+		var hasExpertise = (
+			structKeyExists( arguments.combatant, "expertiseSkills" ) &&
+			arrayFindNoCase( arguments.combatant.expertiseSkills, arguments.skill ) > 0
+		);
+		return arguments.combatant.proficiencyBonus * ( hasExpertise ? 2 : 1 );
+	}
+
+	/**
+	 * Rolls a generic skill check: d20 + ability modifier + Proficiency Bonus
+	 * (only if `combatant` is proficient in `skill` — see
+	 * _skillProficiencyBonus()), vs. `dc`. Mirrors rollSavingThrow()'s
+	 * shape; unlike saving throws, no species trait or condition in this
+	 * app currently grants Advantage/Disadvantage on a skill check
+	 * specifically, so there's no such hook here yet.
+	 *
+	 * @combatant The combatant making the check.
+	 * @skill One of the SRD skill names (see SKILL_ABILITIES) — e.g. "Perception".
+	 * @dc The Difficulty Class to meet or beat.
+	 */
+	function rollSkillCheck( combatant, skill, dc ) {
+		var ability = SKILL_ABILITIES[ arguments.skill ];
+		var abilityMod = structKeyExists( arguments.combatant, "modifiers" )
+			? arguments.combatant.modifiers[ ability ]
+			: abilityModifier( arguments.combatant.abilityScores[ ability ] );
+		var proficiencyBonus = _skillProficiencyBonus( arguments.combatant, arguments.skill );
+		var roll = randRange( 1, 20 );
+		var total = roll + abilityMod + proficiencyBonus;
+		return { "roll": roll, "total": total, "success": ( total >= arguments.dc ), "isProficient": proficiencyBonus > 0 };
+	}
+
 	function loadCharacter( characterId ) {
 		var rows = queryExecute(
 			"SELECT c.*, cl.name AS className, cl.hit_die, cl.saving_throw_proficiencies
@@ -3373,6 +4916,15 @@ class singleton {
 		};
 
 		var species = row.species[ 1 ];
+		var speciesMechanics = _resolveSpeciesMechanics( species );
+		var skillProficiencies = _skillProficienciesFromTraits( speciesMechanics.traitNames, row.background[ 1 ] );
+		if ( len( row.chosen_skill_proficiencies[ 1 ] ) ) {
+			for ( var chosenSkill in listToArray( row.chosen_skill_proficiencies[ 1 ], "," ) ) {
+				if ( arrayFindNoCase( skillProficiencies, chosenSkill ) == 0 ) {
+					skillProficiencies.append( chosenSkill );
+				}
+			}
+		}
 
 		var player = {
 			"characterId": row.id[ 1 ],
@@ -3400,44 +4952,84 @@ class singleton {
 			"hitDiceMax": row.level[ 1 ],
 			"hitDiceSpent": row.hit_dice_spent[ 1 ],
 			"hitPointsPerLevel": _fixedHitPointsPerLevel( row.hit_die[ 1 ] ),
-			// Dwarven Toughness: +1 Hit Point maximum per level, on top of the
-			// class's normal per-level gain.
-			"hpBonusPerLevel": ( species == "Dwarf" ) ? 1 : 0,
+			// Dwarven Toughness (Hill Dwarf only): +1 Hit Point maximum per
+			// level, on top of the class's normal per-level gain.
+			"hpBonusPerLevel": arrayFindNoCase( speciesMechanics.traitNames, "Dwarven Toughness" ) > 0 ? 1 : 0,
 			"speed": row.speed[ 1 ],
 			"experiencePoints": row.experience_points[ 1 ],
 			"savingThrowProficiencies": listToArray( row.saving_throw_proficiencies[ 1 ], " and ", false, true ),
-			// Dwarven Resilience / Tiefling: Resistance to Poison / Fire damage.
-			"resistances": ( species == "Dwarf" ) ? [ "Poison" ] : ( ( species == "Tiefling" ) ? [ "Fire" ] : [] ),
-			// Halfling Luck: reroll a natural 1 on the d20 and use the new roll.
-			"hasLuck": ( species == "Halfling" ),
-			// Orc Relentless Endurance: drop to 1 HP instead of 0, once per encounter.
-			"hasRelentlessEndurance": ( species == "Orc" ),
-			"usedRelentlessEndurance": false,
-			// Dragonborn Breath Weapon: once per encounter, an area blast the
-			// opponent can save against for half damage.
-			"hasBreathWeapon": ( species == "Dragonborn" ),
-			"usedBreathWeapon": false,
-			// Elf Fey Ancestry: Advantage on saves vs. the Charmed condition, and
-			// immune to being put to sleep by magic. No current encounter
-			// content attempts to Charm or magically Sleep the player, so
-			// isImmuneToMagicalSleep is tracked but has nothing to interact with
-			// yet; the Advantage hook is real and exercised via rollSavingThrow().
-			"hasFeyAncestry": ( species == "Elf" ),
-			"isImmuneToMagicalSleep": ( species == "Elf" ),
-			// Gnome Gnomish Cunning: Advantage on Intelligence/Wisdom/Charisma
-			// saves against magic. Same caveat as Fey Ancestry above.
-			"hasGnomishCunning": ( species == "Gnome" ),
-			// Human Heroic Inspiration: once per encounter, reroll a missed attack.
-			"hasHeroicInspiration": ( species == "Human" ),
-			"usedHeroicInspiration": false,
+			// From background + species traits (see _resolveSkillProficiencies())
+			// — doesn't include a class's own skill choices, since there's no
+			// skill-picker step in character creation yet.
+			"skillProficiencies": skillProficiencies,
+			// Species mechanics (resistances plus the boolean hooks below) are
+			// derived from the `species`/`species_traits` tables by name, not
+			// hardcoded per species — see _resolveSpeciesMechanics(). A subrace
+			// (e.g. "Hill Dwarf") inherits its parent race's traits too.
+			"resistances": speciesMechanics.resistances,
+			// Halfling Lucky: reroll a natural 1 on the d20 and use the new roll.
+			"hasLuck": arrayFindNoCase( speciesMechanics.traitNames, "Lucky" ) > 0,
+			// Half-Orc Relentless Endurance: drop to 1 HP instead of 0, once per
+			// Long Rest — persisted, not reset by a fresh encounter load.
+			"hasRelentlessEndurance": arrayFindNoCase( speciesMechanics.traitNames, "Relentless Endurance" ) > 0,
+			"usedRelentlessEndurance": row.used_relentless_endurance[ 1 ] == 1,
+			// Dragonborn Breath Weapon: once per Long Rest, an area blast the
+			// opponent can save against for half damage — persisted, not reset
+			// by a fresh encounter load.
+			"hasBreathWeapon": arrayFindNoCase( speciesMechanics.traitNames, "Breath Weapon" ) > 0,
+			"usedBreathWeapon": row.used_breath_weapon[ 1 ] == 1,
+			// Elf/Half-Elf Fey Ancestry: Advantage on saves vs. the Charmed
+			// condition, and immune to being put to sleep by magic. No current
+			// encounter content attempts to Charm or magically Sleep the
+			// player, so isImmuneToMagicalSleep is tracked but has nothing to
+			// interact with yet; the Advantage hook is real and exercised via
+			// rollSavingThrow().
+			"hasFeyAncestry": arrayFindNoCase( speciesMechanics.traitNames, "Fey Ancestry" ) > 0,
+			"isImmuneToMagicalSleep": arrayFindNoCase( speciesMechanics.traitNames, "Fey Ancestry" ) > 0,
+			// Gnome Cunning: Advantage on Intelligence/Wisdom/Charisma saves
+			// against magic. Same caveat as Fey Ancestry above.
+			"hasGnomishCunning": arrayFindNoCase( speciesMechanics.traitNames, "Gnome Cunning" ) > 0,
+			// Half-Orc Savage Attacks: on a critical hit with a melee weapon,
+			// roll one additional weapon damage die — distinct from the Savage
+			// Attacker feat's "roll damage twice, take the higher" (both can
+			// apply to the same attack). See resolveAttack()'s diceCount calc.
+			"hasSavageAttacks": arrayFindNoCase( speciesMechanics.traitNames, "Savage Attacks" ) > 0,
+			// Once-per-Long-Rest reroll of a missed attack — no species in the
+			// current dataset grants this (it was a 2024-ruleset Human trait),
+			// kept as a hook for any future species that does. Persisted, not
+			// reset by a fresh encounter load.
+			"hasHeroicInspiration": arrayFindNoCase( speciesMechanics.traitNames, "Heroic Inspiration" ) > 0,
+			"usedHeroicInspiration": row.used_heroic_inspiration[ 1 ] == 1,
+			// Second Wind (Fighter 1): a bonus action heal of 1d10 + Fighter
+			// level — see useSecondWind(). Recovers on a Short or Long Rest
+			// (shortRest()/longRest()), persisted across encounters.
+			"usedSecondWind": row.used_second_wind[ 1 ] == 1,
+			// Rage (Barbarian 1): see startRage()/endRage(). `ragesUsed` is the
+			// persisted truth (like spentSpellSlots); `ragesRemaining` is
+			// derived from it and the level-based max — see
+			// _recomputeRagesRemaining(), called below once `level`/`features`
+			// are set. One use recovers on a Short Rest, all on a Long Rest.
+			"ragesUsed": row.rages_used[ 1 ],
+			// The in-game clock (see startNewRound()'s +6-sec-per-round tick,
+			// and shortRest()/longRest()'s hour-sized jumps), and the clock
+			// value as of the last completed Long Rest — null until the first
+			// one, so it never wrongly blocks that first rest on the 24-hour
+			// cooldown (see longRest()).
+			"gameClockSeconds": row.game_clock_seconds[ 1 ],
+			"lastLongRestSeconds": isNull( row.last_long_rest_seconds[ 1 ] ) ? javaCast( "null", 0 ) : row.last_long_rest_seconds[ 1 ],
+			// Magic Initiate's bonus spell recovers on a Long Rest only —
+			// persisted, not reset by a fresh encounter load (see
+			// _assignSpellcasting(), which no longer touches this field).
+			"usedMagicInitiateSpell": row.used_magic_initiate_spell[ 1 ] == 1,
+			"isRaging": false,
 			"features": [],
 			"feats": [],
 			"inventory": [],
-			// The player's character-creation spell choices, if any (see
+			// The player's known cantrips/leveled spells, if any (see
 			// _assignSpellcasting()) — empty for a non-caster, or any
 			// character created before this feature existed.
-			"knownCantripName": len( row.known_cantrip[ 1 ] ) ? row.known_cantrip[ 1 ] : "",
-			"knownSpellName": len( row.known_spell[ 1 ] ) ? row.known_spell[ 1 ] : ""
+			"knownCantripNames": len( row.known_cantrips[ 1 ] ) ? listToArray( row.known_cantrips[ 1 ] ) : [],
+			"knownSpellNames": len( row.known_spells[ 1 ] ) ? listToArray( row.known_spells[ 1 ] ) : []
 		};
 
 		var featureRows = queryExecute(
@@ -3475,6 +5067,15 @@ class singleton {
 			player.armorClass += 1;
 		}
 
+		// Rage (Barbarian 1): derives ragesRemaining from the persisted
+		// ragesUsed and the level-based max — 0 for a non-Barbarian.
+		_recomputeRagesRemaining( player );
+		// Expertise (Rogue 1, Bard 2, Ranger 9): the player-chosen skills (from
+		// among their existing proficiencies) that get doubled Proficiency
+		// Bonus — see pendingExpertiseChoice()/chooseExpertise(), never
+		// auto-assigned.
+		player.expertiseSkills = len( row.expertise_skills[ 1 ] ) ? listToArray( row.expertise_skills[ 1 ] ) : [];
+
 		var spentSlotsRaw = row.spent_spell_slots[ 1 ];
 		player.spentSpellSlots = ( len( trim( spentSlotsRaw ) ) && trim( spentSlotsRaw ) != "{}" )
 			? JSONDeserialize( spentSlotsRaw )
@@ -3484,7 +5085,7 @@ class singleton {
 
 		var inventoryRows = queryExecute(
 			"SELECT ci.id, ci.weapon_id, ci.category, ci.equipped, ci.quantity, ci.attack_bonus, ci.damage_bonus,
-			        w.name, w.damage_dice, w.damage_type, w.properties
+			        w.name, w.damage_dice, w.damage_type, w.properties, w.mastery
 			 FROM character_inventory ci
 			 JOIN weapons w ON w.id = ci.weapon_id
 			 WHERE ci.character_id = :characterId",
@@ -3508,7 +5109,12 @@ class singleton {
 				"attackBonus": invRow.attack_bonus,
 				"damageBonus": invRow.damage_bonus,
 				"equipped": invRow.equipped,
-				"quantity": invRow.quantity
+				"quantity": invRow.quantity,
+				// Weapon Mastery property (Cleave/Graze/Nick/Push/Sap/Slow/Topple/
+				// Vex — see resolveAttack()'s "Weapon Mastery" section), only
+				// actually usable by a combatant with the Weapon Mastery class
+				// feature (Barbarian/Fighter/Paladin/Ranger/Rogue at level 1).
+				"mastery": isNull( invRow.mastery ) ? "" : invRow.mastery
 			};
 			if ( item.category == "ranged" ) {
 				var range = _parseWeaponRange( invRow.properties );

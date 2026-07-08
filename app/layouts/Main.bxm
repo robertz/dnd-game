@@ -539,6 +539,20 @@
 			filter: grayscale(0.7);
 		}
 
+		@keyframes mob-defeated {
+			0% { opacity: 1; transform: scale(1); filter: grayscale(0.7); }
+			15% { opacity: 0.15; }
+			30% { opacity: 1; }
+			45% { opacity: 0.15; }
+			60% { opacity: 1; }
+			100% { opacity: 0; transform: scale(0.85) translateY(6px); filter: grayscale(1); }
+		}
+
+		.stat-card-defeated {
+			animation: mob-defeated 1.4s ease-in-out forwards;
+			pointer-events: none;
+		}
+
 		.stat-card-opponent {
 			cursor: pointer;
 		}
@@ -615,6 +629,30 @@
 
 		.stat-note-vuln { color: ##b9922f; }
 		.stat-note-immune { opacity: 0.75; }
+
+		.condition-chip {
+			display: inline-block;
+			background: rgba(110, 20, 20, 0.25);
+			border: 1px solid var(--blood-bright);
+			border-radius: 20px;
+			padding: 0.05rem 0.5rem;
+			margin: 0 0.2rem 0.2rem 0;
+			font-size: 0.78rem;
+			cursor: help;
+		}
+
+		/* Same shape as .condition-chip, neutral gold coloring — for a skill
+		   proficiency tag on a dark card (.feature-chip is parchment-only). */
+		.skill-chip {
+			display: inline-block;
+			background: rgba(185, 146, 47, 0.15);
+			border: 1px solid var(--gold);
+			border-radius: 20px;
+			padding: 0.05rem 0.5rem;
+			margin: 0 0.2rem 0.2rem 0;
+			font-size: 0.78rem;
+			cursor: help;
+		}
 
 		.stat-card-opponent {
 			border-color: var(--blood);

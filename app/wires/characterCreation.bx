@@ -3,9 +3,15 @@ class extends="cbwire.models.Component" {
 	/**
 	 * Character creation wizard, stepping through the SRD's official 5-step
 	 * process (Character Creation): Class, Origin (species/background),
-	 * Ability Scores, Alignment, then Details (name) and creation. Only
-	 * Class and Ability Scores feed real mechanics via CharacterService;
-	 * species/background/alignment are recorded as flavor choices.
+	 * Ability Scores, Alignment, then Details (name) and creation. Species
+	 * is DB-backed (`species`/`species_traits`) and mechanical — it adjusts
+	 * ability scores, Speed, and Hit Points via CharacterService.
+	 * createCharacter()/resolveSpecies(). Background is DB-backed
+	 * (`backgrounds`) and grants skill proficiencies (display + mechanical,
+	 * see CombatService.resolveSkillProficiencies()). Step 1 (Class) also
+	 * has the player pick that class's skill proficiencies, per
+	 * classes.skill_proficiencies (see classSkillChoiceFor()). Alignment
+	 * remains a flavor-only choice.
 	 */
 	property name="characterService" inject="CharacterService";
 	property name="combatService" inject="CombatService";
@@ -16,6 +22,13 @@ class extends="cbwire.models.Component" {
 
 		"classes": [],
 		"selectedClassId": "",
+		// The skills the player picked from the class's skill_proficiencies
+		// choice (e.g. a Fighter's "Choose 2 of Athletics, Insight, ...") —
+		// see classSkillChoiceFor()/toggleClassSkill().
+		"selectedClassSkills": [],
+		// Only relevant for a class with classFightingStyleAtCreation()
+		// (Fighter) — see selectFightingStyle().
+		"selectedFightingStyle": "",
 
 		// Spells step (5): only populated for a full-caster class (see
 		// selectClass()/_refreshSpellOptions()) — half-casters have no spell
@@ -27,30 +40,24 @@ class extends="cbwire.models.Component" {
 		"selectedCantripName": "",
 		"selectedSpellName": "",
 
-		"speciesOptions": [ "Dragonborn", "Dwarf", "Elf", "Gnome", "Goliath", "Halfling", "Human", "Orc", "Tiefling" ],
+		// Loaded in onMount() from CharacterService.listSpeciesOptions(): an
+		// array of { name, subraces: [name, ...] }, sourced from the `species`
+		// table rather than hardcoded.
+		"speciesOptions": [],
 		"selectedSpecies": "",
-		// SRD "Character Origins" species summaries — size/speed plus a short
-		// digest of each species' special traits, for the Origin step's detail panel.
-		"speciesDetails": {
-			"Dragonborn": { "size": "Medium", "speed": "30 ft", "traits": "Draconic Ancestry (choose a dragon type), Breath Weapon (Dex save, 1d10+ damage of that type), Damage Resistance to that type, Darkvision 60 ft, Draconic Flight at level 5." },
-			"Dwarf": { "size": "Medium", "speed": "30 ft", "traits": "Darkvision 120 ft, Dwarven Resilience (Resistance to Poison damage, Advantage vs. Poisoned), Dwarven Toughness (+1 HP max per level), Stonecunning (Tremorsense 60 ft as a Bonus Action)." },
-			"Elf": { "size": "Medium", "speed": "30 ft", "traits": "Darkvision 60 ft, Elven Lineage (Drow/High Elf/Wood Elf grants a cantrip and bonus spells), Fey Ancestry (Advantage vs. Charmed), Keen Senses (a skill proficiency), Trance (4-hour rest)." },
-			"Gnome": { "size": "Small", "speed": "30 ft", "traits": "Darkvision 60 ft, Gnomish Cunning (Advantage on Int/Wis/Cha saves), Gnomish Lineage (Forest or Rock Gnome grants cantrips and a minor supernatural ability)." },
-			"Goliath": { "size": "Medium", "speed": "35 ft", "traits": "Giant Ancestry (choose a Giant boon usable a few times per Long Rest), Large Form at level 5, Powerful Build (Advantage vs. Grappled, counts as one size larger for carrying capacity)." },
-			"Halfling": { "size": "Small", "speed": "30 ft", "traits": "Brave (Advantage vs. Frightened), Halfling Nimbleness (move through larger creatures' spaces), Luck (reroll a natural 1), Naturally Stealthy (Hide behind a larger creature)." },
-			"Human": { "size": "Medium or Small", "speed": "30 ft", "traits": "Resourceful (Heroic Inspiration after a Long Rest), Skillful (one extra skill proficiency), Versatile (a free Origin feat)." },
-			"Orc": { "size": "Medium", "speed": "30 ft", "traits": "Adrenaline Rush (Dash as a Bonus Action, gain Temporary HP), Darkvision 120 ft, Relentless Endurance (drop to 1 HP instead of 0, once per Long Rest)." },
-			"Tiefling": { "size": "Medium or Small", "speed": "30 ft", "traits": "Darkvision 60 ft, Fiendish Legacy (Abyssal/Chthonic/Infernal grants a cantrip, Resistance, and bonus spells), Otherworldly Presence (Thaumaturgy cantrip)." }
-		},
-		"backgroundOptions": [ "Acolyte", "Criminal", "Sage", "Soldier" ],
+		"selectedSubrace": "",
+		// The abilities (e.g. ["str","cha"]) the player has assigned the
+		// species' "N abilities of your choice" bonus to (Half-Elf, etc.) —
+		// only relevant when speciesDetailFor()'s choiceAbilityCount > 0.
+		"selectedChoiceAbilities": [],
+		// The skills the player picked for a species' "N skills of your
+		// choice" trait (Half-Elf's Skill Versatility) — only relevant when
+		// speciesDetailFor()'s choiceSkillCount > 0. See toggleSpeciesSkill().
+		"selectedSpeciesSkills": [],
+
+		// Loaded in onMount() from CharacterService.listBackgroundOptions().
+		"backgroundOptions": [],
 		"selectedBackground": "",
-		// SRD "Character Origins" background summaries for the Origin step's detail panel.
-		"backgroundDetails": {
-			"Acolyte": { "abilityScores": "Intelligence, Wisdom, Charisma", "feat": "Magic Initiate (Cleric)", "skills": "Insight, Religion", "tool": "Calligrapher's Supplies" },
-			"Criminal": { "abilityScores": "Dexterity, Constitution, Intelligence", "feat": "Alert", "skills": "Sleight of Hand, Stealth", "tool": "Thieves' Tools" },
-			"Sage": { "abilityScores": "Constitution, Intelligence, Wisdom", "feat": "Magic Initiate (Wizard)", "skills": "Arcana, History", "tool": "Calligrapher's Supplies" },
-			"Soldier": { "abilityScores": "Strength, Dexterity, Constitution", "feat": "Savage Attacker", "skills": "Athletics, Intimidation", "tool": "Gaming Set (choice)" }
-		},
 
 		// Standard Array (Ability Scores step): each value is assigned to
 		// exactly one ability, in STR/DEX/CON/INT/WIS/CHA order as clicked.
@@ -83,10 +90,106 @@ class extends="cbwire.models.Component" {
 				"primaryAbility": row.primary_ability,
 				"hitDie": row.hit_die,
 				"savingThrows": row.saving_throw_proficiencies,
-				"startingEquipment": row.starting_equipment
+				"startingEquipment": row.starting_equipment,
+				"skillProficiencies": row.skill_proficiencies
 			} );
 		}
 		variables.data.classes = classes;
+		variables.data.speciesOptions = characterService.listSpeciesOptions();
+		variables.data.backgroundOptions = characterService.listBackgroundOptions();
+	}
+
+	/**
+	 * View helper: the effective species name to resolve mechanics for —
+	 * the chosen subrace if there is one, otherwise the base species.
+	 */
+	function effectiveSpeciesName() {
+		return len( variables.data.selectedSubrace ) ? variables.data.selectedSubrace : variables.data.selectedSpecies;
+	}
+
+	/**
+	 * View helper: full mechanical detail for a species/subrace name, for the
+	 * Origin step's detail panel. Public so the template can call it directly
+	 * (CBWIRE exposes every non-computed public method to the view).
+	 */
+	function speciesDetailFor( name ) {
+		return characterService.resolveSpecies( arguments.name );
+	}
+
+	/**
+	 * View helper: a species' subrace list, looked up from the already-loaded
+	 * speciesOptions (avoids a second DB round trip per render).
+	 */
+	function subracesFor( name ) {
+		for ( var option in variables.data.speciesOptions ) {
+			if ( option.name == arguments.name ) {
+				return option.subraces;
+			}
+		}
+		return [];
+	}
+
+	function backgroundDetailFor( name ) {
+		return characterService.getBackgroundDetail( arguments.name );
+	}
+
+	/**
+	 * View helper: a skill's governing ability (e.g. "Perception" ->
+	 * "Wisdom"), for a tooltip on the skill-choice picker's cards.
+	 */
+	function skillAbility( name ) {
+		return combatService.skillAbility( arguments.name );
+	}
+
+	/**
+	 * The actual d20 check bonus for one of the just-created character's
+	 * skill proficiencies — see CombatService.skillCheckBonus(). Only valid
+	 * after createCharacter() has run (createdCharacterSheet() has final
+	 * ability scores + Proficiency Bonus); the pre-creation review step
+	 * shows the ability name only, since scores aren't locked in yet.
+	 */
+	function skillCheckBonus( name ) {
+		return combatService.skillCheckBonus( createdCharacterSheet(), arguments.name );
+	}
+
+	/**
+	 * Formats a modifier/bonus as "+N"/"-N" — same convention as
+	 * characterSheet.bx's modLabel().
+	 */
+	function modLabel( mod ) {
+		return arguments.mod >= 0 ? "+" & arguments.mod : "" & arguments.mod;
+	}
+
+	/**
+	 * View helper: the just-created character's saved sheet (final ability
+	 * scores include the species bonuses createCharacter() applied, unlike
+	 * assignedScores which is what the player assigned before those bonuses).
+	 */
+	function createdCharacterSheet() {
+		return len( variables.data.createdCharacterId ) ? characterService.getCharacterSheet( variables.data.createdCharacterId ) : {};
+	}
+
+	/**
+	 * View helper: formats a resolveSpecies() struct's ability bonuses as a
+	 * short summary, e.g. "Con +2", "Str +2, Cha +1", "All abilities +1", or
+	 * "Cha +2, plus 2 of your choice +1" (Half-Elf).
+	 */
+	function abilityBonusSummary( detail ) {
+		var labels = { "str": "Str", "dex": "Dex", "con": "Con", "int": "Int", "wis": "Wis", "cha": "Cha" };
+		var parts = [];
+		var nonZero = 0;
+		for ( var ability in [ "str", "dex", "con", "int", "wis", "cha" ] ) {
+			if ( arguments.detail.abilityBonuses[ ability ] != 0 ) {
+				nonZero++;
+				parts.append( "#labels[ ability ]# +#arguments.detail.abilityBonuses[ ability ]#" );
+			}
+		}
+		var summary = ( nonZero == 6 ) ? "All abilities +#arguments.detail.abilityBonuses.str#" : arrayToList( parts, ", " );
+		if ( arguments.detail.choiceAbilityCount > 0 ) {
+			var choiceText = "#arguments.detail.choiceAbilityCount# of your choice +#arguments.detail.choiceAbilityBonus#";
+			summary = len( summary ) ? "#summary#, plus #choiceText#" : choiceText;
+		}
+		return summary;
 	}
 
 	/**
@@ -123,8 +226,77 @@ class extends="cbwire.models.Component" {
 	 */
 	function selectClass( classId ) {
 		variables.data.selectedClassId = arguments.classId;
+		variables.data.selectedClassSkills = [];
+		variables.data.selectedFightingStyle = "";
 		variables.data.formError = "";
 		_refreshSpellOptions();
+	}
+
+	/**
+	 * View helper: true if the selected class grants a Fighting Style at
+	 * level 1 (only Fighter, in the current dataset) — see
+	 * CharacterService.classFightingStyleAtCreation().
+	 */
+	function hasFightingStyleAtCreation( classId ) {
+		return len( arguments.classId ) ? characterService.classFightingStyleAtCreation( arguments.classId ) : false;
+	}
+
+	/**
+	 * View helper: the Fighting Style options to pick from — see
+	 * CombatService.FIGHTING_STYLE_NAMES.
+	 */
+	function fightingStyleNames() {
+		return combatService.fightingStyleNames();
+	}
+
+	function selectFightingStyle( name ) {
+		variables.data.selectedFightingStyle = arguments.name;
+		variables.data.formError = "";
+	}
+
+	/**
+	 * View helper: SRD rules text for a Fighting Style feat's tooltip.
+	 */
+	function featDescription( name ) {
+		return combatService.featDescription( arguments.name );
+	}
+
+	/**
+	 * View helper: SRD rules text for a class feature's tooltip.
+	 */
+	function featureDescription( name ) {
+		return combatService.featureDescription( arguments.name );
+	}
+
+	/**
+	 * View helper: { count, options } for the currently selected class's
+	 * skill_proficiencies choice (see CombatService.parseClassSkillChoice()).
+	 * Empty options for no class selected.
+	 */
+	function classSkillChoiceFor( classId ) {
+		for ( var cls in variables.data.classes ) {
+			if ( cls.id == arguments.classId ) {
+				return combatService.parseClassSkillChoice( cls.skillProficiencies );
+			}
+		}
+		return { "count": 0, "options": [] };
+	}
+
+	/**
+	 * Toggles one skill in/out of selectedClassSkills, capped at the
+	 * selected class's choice count — same pattern as toggleChoiceAbility().
+	 */
+	function toggleClassSkill( skill ) {
+		var choice = classSkillChoiceFor( variables.data.selectedClassId );
+		var selected = variables.data.selectedClassSkills;
+		var index = arrayFindNoCase( selected, arguments.skill );
+		if ( index > 0 ) {
+			arrayDeleteAt( selected, index );
+			return;
+		}
+		if ( selected.len() < choice.count ) {
+			selected.append( arguments.skill );
+		}
 	}
 
 	/**
@@ -168,7 +340,86 @@ class extends="cbwire.models.Component" {
 	 */
 	function selectSpecies( species ) {
 		variables.data.selectedSpecies = arguments.species;
+		variables.data.selectedSubrace = "";
+		variables.data.selectedChoiceAbilities = [];
+		variables.data.selectedSpeciesSkills = [];
 		variables.data.formError = "";
+	}
+
+	function selectSubrace( subrace ) {
+		variables.data.selectedSubrace = arguments.subrace;
+		variables.data.selectedChoiceAbilities = [];
+		variables.data.selectedSpeciesSkills = [];
+		variables.data.formError = "";
+	}
+
+	/**
+	 * Toggles one ability in/out of selectedChoiceAbilities, for species that
+	 * grant "N abilities of your choice" (e.g. Half-Elf: 2 abilities, +1
+	 * each) — capped at the resolved species' choiceAbilityCount.
+	 */
+	function toggleChoiceAbility( ability ) {
+		var detail = speciesDetailFor( effectiveSpeciesName() );
+		var selected = variables.data.selectedChoiceAbilities;
+		var index = arrayFindNoCase( selected, arguments.ability );
+		if ( index > 0 ) {
+			arrayDeleteAt( selected, index );
+			return;
+		}
+		// Per RAW, a "N other ability scores of your choice" bonus (e.g.
+		// Half-Elf's Cha +2 fixed, then 2 others of your choice +1) can't
+		// land on an ability that already got the species' fixed bonus —
+		// this also guards against a stale/replayed click, not just the
+		// template not rendering that option.
+		if ( arrayFindNoCase( choiceAbilityOptions( detail ), arguments.ability ) == 0 ) {
+			return;
+		}
+		if ( selected.len() < detail.choiceAbilityCount ) {
+			selected.append( arguments.ability );
+		}
+	}
+
+	/**
+	 * View helper: which abilities are still eligible for a species' "N
+	 * abilities of your choice" bonus — every ability except one that
+	 * already has that species' fixed bonus (can't stack the choice bonus
+	 * on top of the fixed one).
+	 */
+	function choiceAbilityOptions( detail ) {
+		var options = [];
+		for ( var ability in variables.data.abilityOrder ) {
+			if ( arguments.detail.abilityBonuses[ ability ] == 0 ) {
+				options.append( ability );
+			}
+		}
+		return options;
+	}
+
+	/**
+	 * View helper: every SRD skill name, for a species skill-choice picker
+	 * (e.g. Half-Elf's Skill Versatility) to loop over.
+	 */
+	function allSkillNames() {
+		return combatService.allSkillNames();
+	}
+
+	/**
+	 * Toggles one skill in/out of selectedSpeciesSkills, for species that
+	 * grant "N skills of your choice" (Half-Elf's Skill Versatility) —
+	 * capped at the resolved species' choiceSkillCount. Same pattern as
+	 * toggleChoiceAbility()/toggleClassSkill().
+	 */
+	function toggleSpeciesSkill( skill ) {
+		var detail = speciesDetailFor( effectiveSpeciesName() );
+		var selected = variables.data.selectedSpeciesSkills;
+		var index = arrayFindNoCase( selected, arguments.skill );
+		if ( index > 0 ) {
+			arrayDeleteAt( selected, index );
+			return;
+		}
+		if ( selected.len() < detail.choiceSkillCount ) {
+			selected.append( arguments.skill );
+		}
 	}
 
 	function selectBackground( background ) {
@@ -251,16 +502,27 @@ class extends="cbwire.models.Component" {
 		}
 
 		var scores = variables.data.assignedScores;
+		// classSkills persists every player-chosen skill regardless of
+		// source — the class's own choice plus any species "skills of your
+		// choice" grant (e.g. Half-Elf's Skill Versatility) — both are
+		// stored in the same characters.chosen_skill_proficiencies column.
+		var chosenSkills = duplicate( variables.data.selectedClassSkills );
+		for ( var skill in variables.data.selectedSpeciesSkills ) {
+			chosenSkills.append( skill );
+		}
 		variables.data.createdCharacterId = characterService.createCharacter(
 			name = variables.data.characterName,
 			classId = variables.data.selectedClassId,
 			str = scores.str, dex = scores.dex, con = scores.con,
 			intScore = scores.int, wis = scores.wis, cha = scores.cha,
-			species = variables.data.selectedSpecies,
+			species = effectiveSpeciesName(),
 			background = variables.data.selectedBackground,
 			alignment = variables.data.selectedAlignment,
 			knownCantrip = variables.data.selectedCantripName,
-			knownSpell = variables.data.selectedSpellName
+			knownSpell = variables.data.selectedSpellName,
+			choiceAbilities = variables.data.selectedChoiceAbilities,
+			classSkills = chosenSkills,
+			fightingStyle = variables.data.selectedFightingStyle
 		);
 		variables.data.formError = "";
 		// Playing this character next is the natural next step, so make it
@@ -282,10 +544,30 @@ class extends="cbwire.models.Component" {
 	private function _validateStep( step ) {
 		switch ( arguments.step ) {
 			case 1:
-				return len( variables.data.selectedClassId ) ? "" : "Choose a class to continue.";
+				if ( !len( variables.data.selectedClassId ) ) {
+					return "Choose a class to continue.";
+				}
+				var skillChoice = classSkillChoiceFor( variables.data.selectedClassId );
+				if ( skillChoice.count > 0 && variables.data.selectedClassSkills.len() != skillChoice.count ) {
+					return "Choose #skillChoice.count# skill#( skillChoice.count == 1 ? "" : "s" )# to continue.";
+				}
+				if ( hasFightingStyleAtCreation( variables.data.selectedClassId ) && !len( variables.data.selectedFightingStyle ) ) {
+					return "Choose a Fighting Style to continue.";
+				}
+				return "";
 			case 2:
 				if ( !len( variables.data.selectedSpecies ) ) {
 					return "Choose a species to continue.";
+				}
+				if ( subracesFor( variables.data.selectedSpecies ).len() && !len( variables.data.selectedSubrace ) ) {
+					return "Choose a #variables.data.selectedSpecies# subrace to continue.";
+				}
+				var speciesDetail = speciesDetailFor( effectiveSpeciesName() );
+				if ( speciesDetail.choiceAbilityCount > 0 && variables.data.selectedChoiceAbilities.len() != speciesDetail.choiceAbilityCount ) {
+					return "Choose #speciesDetail.choiceAbilityCount# ability score#( speciesDetail.choiceAbilityCount == 1 ? "" : "s" )# to increase.";
+				}
+				if ( speciesDetail.choiceSkillCount > 0 && variables.data.selectedSpeciesSkills.len() != speciesDetail.choiceSkillCount ) {
+					return "Choose #speciesDetail.choiceSkillCount# skill#( speciesDetail.choiceSkillCount == 1 ? "" : "s" )# to continue.";
 				}
 				return len( variables.data.selectedBackground ) ? "" : "Choose a background to continue.";
 			case 3:

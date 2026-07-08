@@ -18,6 +18,9 @@ class extends="cbwire.models.Component" {
 		"spellOptions":         [],
 		"selectedCantripName":  "",
 		"selectedSpellName":    "",
+		"cantripChoice":        { "pending": false, "availableCantrips": [] },
+		"spellChoice":          { "pending": false, "availableSpells": [], "level": 0 },
+		"expertiseChoice":      { "pending": false, "availableSkills": [] },
 		"addWeaponId":          "",
 		"addWeaponCategory":    "melee",
 		"tab":                  "weapons",
@@ -59,6 +62,96 @@ class extends="cbwire.models.Component" {
 			variables.data.selectedCantripName = variables.data.character.knownCantripName;
 			variables.data.selectedSpellName   = variables.data.character.knownSpellName;
 		}
+		variables.data.cantripChoice   = combatService.pendingCantripChoice( charId );
+		variables.data.spellChoice     = combatService.pendingSpellChoice( charId );
+		variables.data.expertiseChoice = combatService.pendingExpertiseChoice( charId );
+	}
+
+	/**
+	 * Thin wrapper (a CBWIRE template only sees this component's own methods,
+	 * not injected properties) so characterSheet.bxm can show each skill
+	 * proficiency chip's governing ability as a tooltip.
+	 */
+	function skillAbility( name ) {
+		return combatService.skillAbility( arguments.name );
+	}
+
+	/**
+	 * The actual d20 check bonus for one of this character's skill
+	 * proficiencies (ability modifier + Proficiency Bonus) — see
+	 * CombatService.skillCheckBonus().
+	 */
+	function skillCheckBonus( name ) {
+		return combatService.skillCheckBonus( variables.data.character, arguments.name );
+	}
+
+	/**
+	 * View helper: the Fighting Style options to pick from — see
+	 * CombatService.FIGHTING_STYLE_NAMES.
+	 */
+	function fightingStyleNames() {
+		return combatService.fightingStyleNames();
+	}
+
+	function featDescription( name ) {
+		return combatService.featDescription( arguments.name );
+	}
+
+	function featureDescription( name ) {
+		return combatService.featureDescription( arguments.name );
+	}
+
+	/**
+	 * Grants a player-chosen Fighting Style feat, for the "Choose Your
+	 * Fighting Style" panel shown whenever character.fightingStyleChoice.
+	 * pending is true (see CharacterService.chooseFightingStyle()). Not
+	 * forced — the panel simply reappears next visit if left unchosen.
+	 */
+	function chooseFightingStyle( styleName ) {
+		characterService.chooseFightingStyle( session.charid, arguments.styleName );
+		variables.data.character = characterService.getCharacterSheet( session.charid );
+	}
+
+	/**
+	 * Assigns a subclass, for the "Choose Your Subclass" panel shown
+	 * whenever character.subclassChoice.pending is true (see
+	 * CharacterService.chooseSubclass()). Not forced — the panel simply
+	 * reappears next visit if left unchosen.
+	 */
+	function chooseSubclass( subclassId ) {
+		characterService.chooseSubclass( session.charid, arguments.subclassId );
+		variables.data.character = characterService.getCharacterSheet( session.charid );
+	}
+
+	/**
+	 * Learns a new cantrip, for the "Learn a Cantrip" panel shown whenever
+	 * cantripChoice.pending is true (see CombatService.pendingCantripChoice()).
+	 * Not forced — the panel simply reappears next visit if left unchosen.
+	 */
+	function chooseCantrip( cantripName ) {
+		characterService.chooseCantrip( session.charid, arguments.cantripName );
+		_loadSheet();
+	}
+
+	/**
+	 * Learns a new leveled spell, for the "Learn a Spell" panel shown
+	 * whenever spellChoice.pending is true (see CombatService.pendingSpellChoice()).
+	 * Not forced — the panel simply reappears next visit if left unchosen.
+	 */
+	function chooseSpell( spellName ) {
+		characterService.chooseSpell( session.charid, arguments.spellName );
+		_loadSheet();
+	}
+
+	/**
+	 * Grants Expertise in one already-proficient skill, for the "Choose
+	 * Expertise" panel shown whenever expertiseChoice.pending is true (see
+	 * CombatService.pendingExpertiseChoice()). Repeatable — the panel
+	 * reappears until both Expertise picks are made.
+	 */
+	function chooseExpertise( skillName ) {
+		characterService.chooseExpertise( session.charid, arguments.skillName );
+		_loadSheet();
 	}
 
 	function setTab( tab ) {

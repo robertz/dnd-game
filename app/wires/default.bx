@@ -84,15 +84,24 @@ class extends="cbwire.models.Component" {
 		// plays out visibly instead of resolving all at once.
 		"autoBattling": false,
 		// Ability Score Improvement level-up screen (see confirmAbilityScoreImprovement()):
-		// "single" picks one ability for +2, "double" picks two for +1 each.
+		// "single" picks one ability for +2, "double" picks two for +1 each,
+		// "feat" takes a feat instead (see confirmFeatChoice()).
 		"asiMode": "single",
 		"asiAbility1": "str",
 		"asiAbility2": "dex",
+		"asiSelectedFeat": "",
+		// Skilled feat's secondary "choose 3 skills" sub-choice — see toggleAsiSkill().
+		"asiSelectedSkills": [],
 		// True once we've persisted HP/slots to the DB after this encounter ended.
 		"stateSaved": false,
 		// False until at least one opponent has line of sight to the player.
 		// Combat actions and enemy turns are blocked until initiative rolls.
-		"initiativeRolled": false
+		"initiativeRolled": false,
+		// How many Hit Dice to spend as part of the next Short Rest — see
+		// takeShortRest()/adjustRestDice(). A Short Rest can be taken for 0
+		// dice too (just for the Second Wind/Rage recovery), so this only
+		// caps at whatever's actually left unspent, not a minimum of 1.
+		"restDiceCount": 1
 	}
 
 	/**
@@ -113,7 +122,11 @@ class extends="cbwire.models.Component" {
 	 * A character loaded at 0 HP (persisted from a defeat — canRest() blocks
 	 * resting immediately after a defeat, so a freshly-defeated character has
 	 * no other way to recover) is fully healed before the new encounter
-	 * starts, rather than being permanently stuck at 0 HP.
+	 * starts, rather than being permanently stuck at 0 HP. This bypasses the
+	 * normal 24-hour Long Rest cooldown (ignoreCooldown=true) — a player who
+	 * rested recently and then got defeated anyway must still be able to
+	 * start their next encounter at full HP, not stuck at 0 because the
+	 * real-rest gate says no.
 	 */
 	function onMount( event, rc, prc, params ) {
 		variables.data.player = combatService.loadCharacter( session.charid );
@@ -122,7 +135,7 @@ class extends="cbwire.models.Component" {
 			combatService.longRest( variables.data.player );
 		}
 		if ( variables.data.player.hitPoints <= 0 ) {
-			combatService.longRest( variables.data.player );
+			combatService.longRest( variables.data.player, true );
 		}
 		_enterMap( rc );
 		variables.data.log.prepend( "You enter the dungeon. Move toward the enemies to begin combat." );
@@ -616,6 +629,25 @@ class extends="cbwire.models.Component" {
 	}
 
 	/**
+	 * Whether the Off-Hand Attack button should show: normally only while
+	 * the bonus action is unspent, but Weapon Mastery's Nick property lets
+	 * the off-hand attack skip the bonus action entirely, once per turn — so
+	 * it can still be available even after Second Wind/Rage already spent
+	 * the bonus action this turn.
+	 */
+	function canOffHandAttack() {
+		if ( !variables.data.bonusActionUsed ) {
+			return true;
+		}
+		var mainWeapon = combatService.equippedWeapon( variables.data.player, "melee" );
+		return (
+			!isNull( mainWeapon ) && structKeyExists( mainWeapon, "mastery" ) && mainWeapon.mastery == "Nick" &&
+			structKeyExists( variables.data.player, "features" ) && arrayFindNoCase( variables.data.player.features, "Weapon Mastery" ) > 0 &&
+			!( structKeyExists( variables.data.player, "usedNickThisTurn" ) && variables.data.player.usedNickThisTurn )
+		);
+	}
+
+	/**
 	 * True if (x, y) is a floor tile the player could path to and stand on
 	 * this turn — used by the template to highlight reachable tiles, since
 	 * walls make raw Chebyshev distance an unreliable proxy for reachability.
@@ -639,7 +671,7 @@ class extends="cbwire.models.Component" {
 	function tileReachable( x, y ) {
 		if (
 			variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" ||
-			variables.data.player.hitPoints <= 0 || combatService.hasCondition( variables.data.player, "Restrained" )
+			variables.data.player.hitPoints <= 0 || combatService.cantMove( variables.data.player )
 		) {
 			return false;
 		}
@@ -714,7 +746,7 @@ class extends="cbwire.models.Component" {
 	function movePlayer( x, y ) {
 		if (
 			variables.data.gameOver || variables.data.autoBattling || variables.data.currentTurn != "player" ||
-			variables.data.player.hitPoints <= 0 || combatService.hasCondition( variables.data.player, "Restrained" )
+			variables.data.player.hitPoints <= 0 || combatService.cantMove( variables.data.player )
 		) {
 			return;
 		}
@@ -756,7 +788,7 @@ class extends="cbwire.models.Component" {
 	function attack() {
 		if (
 			variables.data.gameOver || !variables.data.initiativeRolled || variables.data.autoBattling || variables.data.currentTurn != "player" ||
-			variables.data.player.hitPoints <= 0 ||
+			variables.data.player.hitPoints <= 0 || combatService.isIncapacitated( variables.data.player ) ||
 			variables.data.attacksUsedThisTurn >= combatService.attacksPerTurn( variables.data.player )
 		) {
 			return;
@@ -789,12 +821,39 @@ class extends="cbwire.models.Component" {
 	}
 
 	/**
+	 * Paladin's Smite (level 2): a melee weapon attack that spends a spell
+	 * slot for bonus Radiant damage if it hits — see
+	 * combatService.smiteAttack(). Uses the same Attack-action bookkeeping
+	 * as attack() (Extra Attack still grants further swings afterward).
+	 */
+	function smite( slotLevel ) {
+		if (
+			variables.data.gameOver || !variables.data.initiativeRolled || variables.data.autoBattling || variables.data.currentTurn != "player" ||
+			variables.data.player.hitPoints <= 0 || combatService.isIncapacitated( variables.data.player ) ||
+			variables.data.attacksUsedThisTurn >= combatService.attacksPerTurn( variables.data.player )
+		) {
+			return;
+		}
+		_syncSelectedOpponent();
+
+		variables.data.attacksUsedThisTurn += 1;
+		variables.data.actionUsed = true;
+		combatService.smiteAttack( variables.data, arguments.slotLevel );
+		_saveSelectedOpponentIndex();
+
+		if ( !variables.data.gameOver && variables.data.attacksUsedThisTurn >= combatService.attacksPerTurn( variables.data.player ) ) {
+			combatService.endPlayerTurn( variables.data );
+		}
+		_maybeSaveProgress();
+	}
+
+	/**
 	 * Grapples the opponent instead of attacking (Grappler feat). Requires
 	 * being adjacent; on success, the opponent is Grappled and (with the
 	 * Grappler feat) subsequent attacks against them get Advantage.
 	 */
 	function attemptGrapple() {
-		if ( variables.data.gameOver || !variables.data.initiativeRolled || variables.data.autoBattling || variables.data.currentTurn != "player" || variables.data.actionUsed || variables.data.player.hitPoints <= 0 ) {
+		if ( variables.data.gameOver || !variables.data.initiativeRolled || variables.data.autoBattling || variables.data.currentTurn != "player" || variables.data.actionUsed || variables.data.player.hitPoints <= 0 || combatService.isIncapacitated( variables.data.player ) ) {
 			return;
 		}
 		_syncSelectedOpponent();
@@ -811,7 +870,7 @@ class extends="cbwire.models.Component" {
 	 * them, Disadvantage on their own attacks) until the fight ends.
 	 */
 	function attemptShove() {
-		if ( variables.data.gameOver || !variables.data.initiativeRolled || variables.data.autoBattling || variables.data.currentTurn != "player" || variables.data.actionUsed || variables.data.player.hitPoints <= 0 ) {
+		if ( variables.data.gameOver || !variables.data.initiativeRolled || variables.data.autoBattling || variables.data.currentTurn != "player" || variables.data.actionUsed || variables.data.player.hitPoints <= 0 || combatService.isIncapacitated( variables.data.player ) ) {
 			return;
 		}
 		_syncSelectedOpponent();
@@ -826,7 +885,7 @@ class extends="cbwire.models.Component" {
 	 * Dragonborn Breath Weapon: once per encounter, in place of a weapon attack.
 	 */
 	function useBreathWeapon() {
-		if ( variables.data.gameOver || !variables.data.initiativeRolled || variables.data.autoBattling || variables.data.currentTurn != "player" || variables.data.actionUsed || variables.data.player.hitPoints <= 0 ) {
+		if ( variables.data.gameOver || !variables.data.initiativeRolled || variables.data.autoBattling || variables.data.currentTurn != "player" || variables.data.actionUsed || variables.data.player.hitPoints <= 0 || combatService.isIncapacitated( variables.data.player ) ) {
 			return;
 		}
 		_syncSelectedOpponent();
@@ -849,6 +908,22 @@ class extends="cbwire.models.Component" {
 	}
 
 	/**
+	 * Thin wrapper (see wallAutotileClass()'s comment for why these exist) so
+	 * default.bxm can show each condition chip's SRD rules text as a tooltip.
+	 */
+	function conditionDescription( name ) {
+		return combatService.conditionDescription( arguments.name );
+	}
+
+	function featDescription( name ) {
+		return combatService.featDescription( arguments.name );
+	}
+
+	function featureDescription( name ) {
+		return combatService.featureDescription( arguments.name );
+	}
+
+	/**
 	 * Consumes one unit of an item from variables.data.items (e.g. drinking a
 	 * Potion of Healing) — usable both mid-combat (as the player's action,
 	 * same action-economy slot as Attack/Grapple/Shove) and freely while
@@ -861,7 +936,10 @@ class extends="cbwire.models.Component" {
 		if ( variables.data.gameOver || variables.data.autoBattling || variables.data.player.hitPoints <= 0 ) {
 			return;
 		}
-		if ( variables.data.initiativeRolled && ( variables.data.currentTurn != "player" || variables.data.actionUsed ) ) {
+		if (
+			variables.data.initiativeRolled &&
+			( variables.data.currentTurn != "player" || variables.data.actionUsed || combatService.isIncapacitated( variables.data.player ) )
+		) {
 			return;
 		}
 		var index = -1;
@@ -892,12 +970,12 @@ class extends="cbwire.models.Component" {
 	 * Casts the player's known cantrip (from their class, or Magic Initiate)
 	 * in place of a weapon attack.
 	 */
-	function castCantrip() {
-		if ( variables.data.gameOver || !variables.data.initiativeRolled || variables.data.autoBattling || variables.data.currentTurn != "player" || variables.data.actionUsed || variables.data.player.hitPoints <= 0 ) {
+	function castCantrip( name = "" ) {
+		if ( variables.data.gameOver || !variables.data.initiativeRolled || variables.data.autoBattling || variables.data.currentTurn != "player" || variables.data.actionUsed || variables.data.player.hitPoints <= 0 || combatService.isIncapacitated( variables.data.player ) ) {
 			return;
 		}
 		_syncSelectedOpponent();
-		combatService.castCantrip( variables.data );
+		combatService.castCantrip( variables.data, arguments.name );
 		_saveSelectedOpponentIndex();
 		if ( !variables.data.gameOver ) {
 			combatService.endPlayerTurn( variables.data );
@@ -906,16 +984,17 @@ class extends="cbwire.models.Component" {
 	}
 
 	/**
-	 * Casts the player's known 1st-level spell (Magic Missile, Cure Wounds, or
-	 * Healing Word, depending on class) in place of a weapon attack, spending
-	 * a spell slot (or Magic Initiate's bonus spell if they have no slots).
+	 * Casts one of the player's known leveled spells (Magic Missile, Cure
+	 * Wounds, Healing Word, etc., depending on class and what they've
+	 * learned) in place of a weapon attack, spending the spell's own
+	 * slot level (or Magic Initiate's bonus spell if they have no slots).
 	 */
-	function castLeveledSpell() {
-		if ( variables.data.gameOver || !variables.data.initiativeRolled || variables.data.autoBattling || variables.data.currentTurn != "player" || variables.data.actionUsed || variables.data.player.hitPoints <= 0 ) {
+	function castLeveledSpell( name = "" ) {
+		if ( variables.data.gameOver || !variables.data.initiativeRolled || variables.data.autoBattling || variables.data.currentTurn != "player" || variables.data.actionUsed || variables.data.player.hitPoints <= 0 || combatService.isIncapacitated( variables.data.player ) ) {
 			return;
 		}
 		_syncSelectedOpponent();
-		combatService.castLeveledSpell( variables.data );
+		combatService.castLeveledSpell( variables.data, arguments.name );
 		_saveSelectedOpponentIndex();
 		if ( !variables.data.gameOver ) {
 			combatService.endPlayerTurn( variables.data );
@@ -930,11 +1009,52 @@ class extends="cbwire.models.Component" {
 	function offHandAttack() {
 		if (
 			variables.data.gameOver || !variables.data.initiativeRolled || variables.data.autoBattling || variables.data.currentTurn != "player" ||
-			variables.data.player.hitPoints <= 0
+			variables.data.player.hitPoints <= 0 || combatService.isIncapacitated( variables.data.player )
 		) {
 			return;
 		}
 		combatService.offHandAttack( variables.data );
+		_maybeSaveProgress();
+	}
+
+	/**
+	 * Second Wind (Fighter 1): a bonus action heal, once per encounter — see
+	 * CombatService.useSecondWind().
+	 */
+	function useSecondWind() {
+		if (
+			variables.data.gameOver || !variables.data.initiativeRolled || variables.data.autoBattling || variables.data.currentTurn != "player" ||
+			variables.data.player.hitPoints <= 0 || combatService.isIncapacitated( variables.data.player )
+		) {
+			return;
+		}
+		combatService.useSecondWind( variables.data );
+		_maybeSaveProgress();
+	}
+
+	/**
+	 * Enters a Rage (Barbarian 1) — a bonus action, doesn't end the turn.
+	 * See CombatService.startRage().
+	 */
+	function startRage() {
+		if (
+			variables.data.gameOver || !variables.data.initiativeRolled || variables.data.autoBattling || variables.data.currentTurn != "player" ||
+			variables.data.player.hitPoints <= 0 || combatService.isIncapacitated( variables.data.player )
+		) {
+			return;
+		}
+		combatService.startRage( variables.data );
+		_maybeSaveProgress();
+	}
+
+	/**
+	 * Ends an active Rage early — no action cost, see CombatService.endRage().
+	 */
+	function endRage() {
+		if ( variables.data.gameOver || !variables.data.initiativeRolled || variables.data.autoBattling || variables.data.currentTurn != "player" ) {
+			return;
+		}
+		combatService.endRage( variables.data );
 		_maybeSaveProgress();
 	}
 
@@ -958,13 +1078,70 @@ class extends="cbwire.models.Component" {
 	}
 
 	/**
-	 * Switches the level-up screen between "+2 to one ability" and "+1 to
-	 * two abilities" (see confirmAbilityScoreImprovement()).
+	 * Switches the level-up screen between "+2 to one ability", "+1 to two
+	 * abilities" (see confirmAbilityScoreImprovement()), and "feat" (see
+	 * confirmFeatChoice()).
 	 */
 	function setAsiMode( mode ) {
-		if ( arguments.mode == "single" || arguments.mode == "double" ) {
+		if ( arguments.mode == "single" || arguments.mode == "double" || arguments.mode == "feat" ) {
 			variables.data.asiMode = arguments.mode;
 		}
+	}
+
+	/**
+	 * View helper: the feats still pickable at this level-up (repeatable
+	 * ones, or non-repeatable ones not already held) — see CombatService.
+	 * availableLevelUpFeats().
+	 */
+	function availableLevelUpFeats() {
+		return combatService.availableLevelUpFeats( variables.data.player );
+	}
+
+	function selectAsiFeat( name ) {
+		variables.data.asiSelectedFeat = arguments.name;
+		variables.data.asiSelectedSkills = [];
+	}
+
+	/**
+	 * View helper: every SRD skill name, for the Skilled feat's secondary
+	 * skill picker to loop over.
+	 */
+	function allSkillNames() {
+		return combatService.allSkillNames();
+	}
+
+	/**
+	 * Toggles one skill in/out of asiSelectedSkills, for the Skilled feat's
+	 * "choose 3 skills" sub-choice — capped at 3.
+	 */
+	function toggleAsiSkill( skill ) {
+		var selected = variables.data.asiSelectedSkills;
+		var index = arrayFindNoCase( selected, arguments.skill );
+		if ( index > 0 ) {
+			arrayDeleteAt( selected, index );
+			return;
+		}
+		if ( selected.len() < 3 ) {
+			selected.append( arguments.skill );
+		}
+	}
+
+	/**
+	 * Takes a feat instead of the level-up screen's Ability Score
+	 * Improvement — the "feat" asiMode's counterpart to
+	 * confirmAbilityScoreImprovement(). Skilled additionally requires
+	 * exactly 3 chosen skills (see toggleAsiSkill()).
+	 */
+	function confirmFeatChoice() {
+		if ( !len( variables.data.asiSelectedFeat ) ) {
+			return;
+		}
+		if ( variables.data.asiSelectedFeat == "Skilled" && variables.data.asiSelectedSkills.len() != 3 ) {
+			return;
+		}
+		combatService.grantChosenFeat( variables.data, variables.data.asiSelectedFeat, variables.data.asiSelectedSkills );
+		variables.data.asiSelectedFeat = "";
+		variables.data.asiSelectedSkills = [];
 	}
 
 	/**
@@ -1068,32 +1245,91 @@ class extends="cbwire.models.Component" {
 	}
 
 	/**
-	 * Short Rest action: spends one Hit Die (1d[hitDieSize] + CON modifier) to
-	 * recover HP. Available any time the player isn't in combat, while the
-	 * character has remaining Hit Dice and isn't at full HP.
+	 * A human-readable "Day N, HH:MM" reading of the character's in-game
+	 * clock (player.gameClockSeconds) — Day 1 starts at 00:00.
 	 */
-	function spendHitDie() {
-		var player = variables.data.player;
-		if ( !canRest() || player.hitDiceSpent >= player.hitDiceMax || player.hitPoints >= player.maxHitPoints ) {
-			return;
-		}
-		var result = combatService.shortRest( player );
-		var sign   = result.conMod >= 0 ? "+" : "";
-		variables.data.log.prepend( "#player.name# spends a Hit Die (1d#player.hitDieSize#): rolled #result.roll##sign##result.conMod# = +#result.healing# HP (#player.hitPoints#/#player.maxHitPoints# HP)." );
+	function gameClockLabel() {
+		var totalSeconds = variables.data.player.gameClockSeconds;
+		var day = int( totalSeconds / 86400 ) + 1;
+		var secondsIntoDay = totalSeconds % 86400;
+		var hh = int( secondsIntoDay / 3600 );
+		var mm = int( ( secondsIntoDay % 3600 ) / 60 );
+		return "Day #day#, " & numberFormat( hh, "00" ) & ":" & numberFormat( mm, "00" );
 	}
 
 	/**
-	 * Long Rest action: restores all HP, recovers half of spent hit dice
-	 * (minimum 1), and resets all spell slots. Available any time the player
-	 * isn't in combat.
+	 * How many more in-game hours until another Long Rest is allowed — see
+	 * combatService.hoursUntilNextLongRest(). 0 means available right now.
+	 */
+	function hoursUntilNextLongRest() {
+		return combatService.hoursUntilNextLongRest( variables.data.player );
+	}
+
+	/**
+	 * How many Hit Dice are actually available to spend on the next Short
+	 * Rest — the smaller of restDiceCount and however many are left unspent.
+	 * Used by the template to cap/display the dice-count stepper.
+	 */
+	function maxRestDice() {
+		var player = variables.data.player;
+		return max( 0, player.hitDiceMax - player.hitDiceSpent );
+	}
+
+	/**
+	 * Adjusts restDiceCount by `delta`, clamped to [0, maxRestDice()] — the
+	 * template's +/- stepper for how many Hit Dice the next Short Rest
+	 * should spend.
+	 */
+	function adjustRestDice( delta ) {
+		variables.data.restDiceCount = max( 0, min( maxRestDice(), variables.data.restDiceCount + arguments.delta ) );
+	}
+
+	/**
+	 * Short Rest action: a 1-in-game-hour activity (see
+	 * combatService.shortRest()) that spends up to restDiceCount Hit Dice
+	 * (1d[hitDieSize] + CON modifier each) to recover HP, and recovers
+	 * Second Wind and one Rage use. Available any time the player isn't in
+	 * combat — even at full HP/no Hit Dice left, purely for the Second
+	 * Wind/Rage recovery (spending 0 dice is fine).
+	 */
+	function takeShortRest() {
+		if ( !canRest() ) {
+			return;
+		}
+		var player = variables.data.player;
+		var diceCount = min( variables.data.restDiceCount, maxRestDice() );
+		var result = combatService.shortRest( player, diceCount );
+
+		if ( result.rolls.len() ) {
+			var sign = result.conMod >= 0 ? "+" : "";
+			var rollList = arrayToList( result.rolls.map( ( r ) => "#r##sign##result.conMod#" ), " + " );
+			variables.data.log.prepend( "#player.name# takes a Short Rest, spending #result.rolls.len()# Hit Die#( result.rolls.len() == 1 ? '' : 'ce' )# (1d#player.hitDieSize#): #rollList# = +#result.healing# HP (#player.hitPoints#/#player.maxHitPoints# HP)." );
+		} else {
+			variables.data.log.prepend( "#player.name# takes a Short Rest." );
+		}
+		variables.data.restDiceCount = min( variables.data.restDiceCount, maxRestDice() );
+	}
+
+	/**
+	 * Long Rest action: an 8-in-game-hour activity (see
+	 * combatService.longRest()) that restores all HP, recovers half of
+	 * spent hit dice (minimum 1), resets all spell slots, and recovers
+	 * every other Long-Rest-only resource. Blocked if one was already taken
+	 * within the last 24 in-game hours. Available any time the player isn't
+	 * in combat.
 	 */
 	function takeLongRest() {
 		if ( !canRest() ) {
 			return;
 		}
-		combatService.longRest( variables.data.player );
 		var player = variables.data.player;
-		variables.data.log.prepend( "#player.name# takes a Long Rest — fully restored (#player.maxHitPoints#/#player.maxHitPoints# HP). All spell slots recovered." );
+		var result = combatService.longRest( player );
+		if ( !result.success ) {
+			variables.data.log.prepend( "#player.name# can't take another Long Rest yet — about #result.hoursUntilNext# more hour#( result.hoursUntilNext == 1 ? '' : 's' )# of in-game time needed." );
+			return;
+		}
+		variables.data.restDiceCount = maxRestDice();
+		variables.data.log.prepend( "#player.name# takes a Long Rest — fully restored (#player.maxHitPoints#/#player.maxHitPoints# HP). All spell slots and other resources recovered." );
 	}
 
 	/**

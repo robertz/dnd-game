@@ -18,9 +18,10 @@ class extends="cbwire.models.Component" {
 		"spellOptions":         [],
 		"selectedCantripName":  "",
 		"selectedSpellName":    "",
-		"cantripChoice":        { "pending": false, "availableCantrips": [] },
-		"spellChoice":          { "pending": false, "availableSpells": [], "level": 0 },
-		"expertiseChoice":      { "pending": false, "availableSkills": [] },
+		"cantripChoice":           { "pending": false, "availableCantrips": [] },
+		"spellChoice":             { "pending": false, "availableSpells": [], "level": 0 },
+		"expertiseChoice":         { "pending": false, "availableSkills": [] },
+		"magicInitiateChoice":     { "pendingCantrips": 0, "availableCantrips": [], "pendingSpell": false, "availableSpells": [] },
 		"addWeaponId":          "",
 		"addWeaponCategory":    "melee",
 		"tab":                  "weapons",
@@ -62,9 +63,10 @@ class extends="cbwire.models.Component" {
 			variables.data.selectedCantripName = variables.data.character.knownCantripName;
 			variables.data.selectedSpellName   = variables.data.character.knownSpellName;
 		}
-		variables.data.cantripChoice   = combatService.pendingCantripChoice( charId );
-		variables.data.spellChoice     = combatService.pendingSpellChoice( charId );
-		variables.data.expertiseChoice = combatService.pendingExpertiseChoice( charId );
+		variables.data.cantripChoice        = combatService.pendingCantripChoice( charId );
+		variables.data.spellChoice          = combatService.pendingSpellChoice( charId );
+		variables.data.expertiseChoice      = combatService.pendingExpertiseChoice( charId );
+		variables.data.magicInitiateChoice  = combatService.pendingMagicInitiateChoice( charId );
 	}
 
 	/**
@@ -162,6 +164,24 @@ class extends="cbwire.models.Component" {
 	 */
 	function chooseSpell( spellName ) {
 		characterService.chooseSpell( session.charid, arguments.spellName );
+		_loadSheet();
+	}
+
+	/**
+	 * Picks one of the 2 Magic Initiate cantrips, for the panel shown
+	 * whenever magicInitiateChoice.pendingCantrips > 0.
+	 */
+	function chooseMagicInitiateCantrip( cantripName ) {
+		combatService.chooseMagicInitiateCantrip( session.charid, arguments.cantripName );
+		_loadSheet();
+	}
+
+	/**
+	 * Picks the Magic Initiate 1st-level spell, for the panel shown
+	 * whenever magicInitiateChoice.pendingSpell is true.
+	 */
+	function chooseMagicInitiateSpell( spellName ) {
+		combatService.chooseMagicInitiateSpell( session.charid, arguments.spellName );
 		_loadSheet();
 	}
 

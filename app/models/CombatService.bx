@@ -173,8 +173,12 @@ class singleton {
 
 			// A spell replaces the whole Attack action, not one swing of it —
 			// only worth considering on the turn's first action, before any
-			// Extra Attack swings have already committed to a weapon.
-			if ( arguments.state.attacksUsedThisTurn == 0 && _autoCastPlayerSpell( arguments.state, opponent ) ) {
+			// Extra Attack swings have already committed to a weapon, and only
+			// when the player isn't already standing next to a foe with a melee
+			// weapon ready (adjacent + melee = weapon attack wins).
+			var hasMeleeWeapon = !isNull( equippedWeapon( player, "melee" ) );
+			var bloodied = player.hitPoints <= player.maxHitPoints / 2;
+			if ( arguments.state.attacksUsedThisTurn == 0 && ( distance > 1 || !hasMeleeWeapon || bloodied ) && _autoCastPlayerSpell( arguments.state, opponent ) ) {
 				return;
 			}
 
@@ -209,7 +213,9 @@ class singleton {
 			for ( var spell in player.knownLeveledSpells ) {
 				if ( spell.type == "heal" && hasSpellResource( player, spell.level ) ) {
 					castLeveledSpell( arguments.state, spell.name );
-					return true;
+					if ( arguments.state.actionUsed ) {
+						return true;
+					}
 				}
 			}
 		}
@@ -217,11 +223,13 @@ class singleton {
 		if ( structKeyExists( player, "knownLeveledSpells" ) ) {
 			for ( var spell in player.knownLeveledSpells ) {
 				if (
-					( spell.type == "attack" || spell.type == "save" ) && hasSpellResource( player, spell.level ) &&
+					( spell.type == "attack" || spell.type == "save" || spell.type == "damage" ) && hasSpellResource( player, spell.level ) &&
 					_isSpellTargetValid( arguments.state, player, arguments.opponent, spell )
 				) {
 					castLeveledSpell( arguments.state, spell.name );
-					return true;
+					if ( arguments.state.actionUsed ) {
+						return true;
+					}
 				}
 			}
 		}
@@ -230,7 +238,9 @@ class singleton {
 			for ( var cantrip in player.knownCantrips ) {
 				if ( _isSpellTargetValid( arguments.state, player, arguments.opponent, cantrip ) ) {
 					castCantrip( arguments.state, cantrip.name );
-					return true;
+					if ( arguments.state.actionUsed ) {
+						return true;
+					}
 				}
 			}
 		}
@@ -3964,6 +3974,16 @@ class singleton {
 			_grantSkilledSkills( player, arguments.chosenSkills );
 		}
 
+		if ( arguments.featName == "Magic Initiate" && structKeyExists( player, "characterId" ) ) {
+			queryExecute(
+				"UPDATE characters SET pending_magic_initiate_cantrips = 2, pending_magic_initiate_spell = 1 WHERE id = :characterId",
+				{ "characterId": player.characterId },
+				{ datasource: "gameserver" }
+			);
+			player.hasMagicInitiate = true;
+			_assignSpellcasting( player );
+		}
+
 		arguments.state.log.prepend( "#player.name# takes the #arguments.featName# feat instead of an Ability Score Improvement." );
 	}
 
@@ -4412,6 +4432,79 @@ class singleton {
 	}
 
 	/**
+	 * Returns pending Magic Initiate spell/cantrip picks for the character:
+	 * `{ pendingCantrips, availableCantrips, pendingSpell, availableSpells }`.
+	 * Uses the Wizard spell list as the source for Magic Initiate picks.
+	 */
+	function pendingMagicInitiateChoice( characterId ) {
+		var charRow = queryExecute(
+			"SELECT known_cantrips, known_spells, pending_magic_initiate_cantrips, pending_magic_initiate_spell
+			 FROM characters WHERE id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+		if ( charRow.recordCount == 0 ) {
+			return { "pendingCantrips": 0, "availableCantrips": [], "pendingSpell": false, "availableSpells": [] };
+		}
+
+		var pendingCantrips = charRow.pending_magic_initiate_cantrips[ 1 ];
+		var pendingSpellFlag = charRow.pending_magic_initiate_spell[ 1 ];
+		var knownCantrips    = len( charRow.known_cantrips[ 1 ] ) ? listToArray( charRow.known_cantrips[ 1 ] ) : [];
+		var knownSpells      = len( charRow.known_spells[ 1 ] ) ? listToArray( charRow.known_spells[ 1 ] ) : [];
+
+		var availableCantrips = [];
+		if ( pendingCantrips > 0 ) {
+			for ( var cantrip in listCastableSpells( "Wizard", 0 ) ) {
+				if ( arrayFindNoCase( knownCantrips, cantrip.name ) == 0 ) {
+					availableCantrips.append( cantrip );
+				}
+			}
+		}
+
+		var availableSpells = [];
+		if ( pendingSpellFlag ) {
+			for ( var spell in listCastableSpells( "Wizard", 1 ) ) {
+				if ( arrayFindNoCase( knownSpells, spell.name ) == 0 ) {
+					availableSpells.append( spell );
+				}
+			}
+		}
+
+		return {
+			"pendingCantrips":    pendingCantrips,
+			"availableCantrips":  availableCantrips,
+			"pendingSpell":       pendingSpellFlag,
+			"availableSpells":    availableSpells
+		};
+	}
+
+	/**
+	 * Records one Magic Initiate cantrip pick, decrementing the pending count.
+	 */
+	function chooseMagicInitiateCantrip( characterId, cantripName ) {
+		_appendKnownSpellName( arguments.characterId, "known_cantrips", arguments.cantripName );
+		queryExecute(
+			"UPDATE characters
+			 SET pending_magic_initiate_cantrips = GREATEST( 0, pending_magic_initiate_cantrips - 1 )
+			 WHERE id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+	}
+
+	/**
+	 * Records the Magic Initiate 1st-level spell pick, clearing the pending flag.
+	 */
+	function chooseMagicInitiateSpell( characterId, spellName ) {
+		_appendKnownSpellName( arguments.characterId, "known_spells", arguments.spellName );
+		queryExecute(
+			"UPDATE characters SET pending_magic_initiate_spell = 0 WHERE id = :characterId",
+			{ "characterId": arguments.characterId },
+			{ datasource: "gameserver" }
+		);
+	}
+
+	/**
 	 * Appends `spellName` to a character's comma-separated known_cantrips/
 	 * known_spells column, unless already present. Shared by
 	 * chooseCantrip()/chooseSpell(); `columnName` is always one of those two
@@ -4513,6 +4606,21 @@ class singleton {
 			arguments.player.ragesUsed -= 1;
 		}
 		_recomputeRagesRemaining( arguments.player );
+
+		// Warlocks recover all Pact Magic spell slots on a short rest.
+		var isWarlock = arguments.player.class == "Warlock";
+		if ( !isWarlock && structKeyExists( arguments.player, "classes" ) ) {
+			for ( var classEntry in arguments.player.classes ) {
+				if ( classEntry.className == "Warlock" ) {
+					isWarlock = true;
+					break;
+				}
+			}
+		}
+		if ( isWarlock ) {
+			arguments.player.spentSpellSlots = {};
+			_recomputeSpellSlots( arguments.player );
+		}
 
 		saveCharacterState( arguments.player );
 		return { "rolls": rolls, "healing": healing, "conMod": arguments.player.modifiers.con };

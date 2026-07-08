@@ -134,6 +134,38 @@
 				</div>
 			</bx:if>
 
+			<bx:if magicInitiateChoice.pendingCantrips GT 0>
+				<div class="parchment-panel asi-panel" style="margin-bottom: 1rem;">
+					<h3 class="fantasy-heading" style="margin: 0 0 0.3rem;">Magic Initiate: Choose a Cantrip (#magicInitiateChoice.pendingCantrips# remaining)</h3>
+					<p class="stat-subtitle" style="margin: 0 0 0.5rem;">You may pick this now, or come back later.</p>
+					<div class="creation-grid">
+						<bx:loop array="#magicInitiateChoice.availableCantrips#" index="miCantripOption">
+							<div
+								class="creation-card creation-card-compact"
+								wire:click="chooseMagicInitiateCantrip('#miCantripOption.name#')"
+								title="#describeSpell( miCantripOption )#"
+							>#miCantripOption.name#</div>
+						</bx:loop>
+					</div>
+				</div>
+			</bx:if>
+
+			<bx:if magicInitiateChoice.pendingSpell>
+				<div class="parchment-panel asi-panel" style="margin-bottom: 1rem;">
+					<h3 class="fantasy-heading" style="margin: 0 0 0.3rem;">Magic Initiate: Choose a 1st-Level Spell</h3>
+					<p class="stat-subtitle" style="margin: 0 0 0.5rem;">You may pick this now, or come back later.</p>
+					<div class="creation-grid">
+						<bx:loop array="#magicInitiateChoice.availableSpells#" index="miSpellOption">
+							<div
+								class="creation-card creation-card-compact"
+								wire:click="chooseMagicInitiateSpell('#miSpellOption.name#')"
+								title="#describeSpell( miSpellOption )#"
+							>#miSpellOption.name#</div>
+						</bx:loop>
+					</div>
+				</div>
+			</bx:if>
+
 			<div class="ability-grid">
 				<bx:loop array="#['str','dex','con','int','wis','cha']#" index="abbrev">
 					<div class="ability-box">

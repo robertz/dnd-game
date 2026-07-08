@@ -1042,7 +1042,7 @@ class extends="testbox.system.BaseSpec" {
 
 				it( "casts a known damage spell instead of attacking when a slot is available and the target is in range", () => {
 					var state = makeState();
-					state.player.position = { "x": 19, "y": 20 };
+					state.player.position = { "x": 5, "y": 5 }; // distance 15 — in range but not adjacent, so no melee preference
 					state.player.modifiers = { "str": 0, "dex": 0, "con": 0, "int": 3, "wis": 0, "cha": 0 };
 					state.player.proficiencyBonus = 2;
 					state.player.spellcastingAbility = "int";
@@ -1090,7 +1090,7 @@ class extends="testbox.system.BaseSpec" {
 
 				it( "casts a known cantrip when no leveled spell slot is available", () => {
 					var state = makeState();
-					state.player.position = { "x": 19, "y": 20 };
+					state.player.position = { "x": 5, "y": 5 }; // distance 15 — in range but not adjacent, so no melee preference
 					state.player.modifiers = { "str": 0, "dex": 0, "con": 0, "int": 3, "wis": 0, "cha": 0 };
 					state.player.proficiencyBonus = 2;
 					state.player.spellcastingAbility = "int";
@@ -1412,6 +1412,32 @@ class extends="testbox.system.BaseSpec" {
 					expect( result.healing ).toBe( 0 );
 					expect( player.hitPoints ).toBe( 5 );
 					expect( player.usedSecondWind ).toBeFalse();
+				} );
+
+				it( "shortRest() restores all spell slots for a Warlock", () => {
+					// Level-3 Warlock has [4,2] per SPELL_SLOTS_FULL_CASTER — both
+					// first- and second-level slots spent; shortRest must clear them.
+					var player = makeCombatant( 0, 0, {
+						"characterId": -1, "class": "Warlock", "level": 3, "hasMagicInitiate": false,
+						"modifiers": { "str": 0, "dex": 0, "con": 0, "int": 0, "wis": 0, "cha": 2 },
+						"hitDieSize": 8, "hitDiceMax": 3, "hitDiceSpent": 0,
+						"hitPoints": 20, "maxHitPoints": 20,
+						"features": [], "ragesUsed": 0,
+						"usedSecondWind": false, "usedBreathWeapon": false, "usedRelentlessEndurance": false,
+						"usedHeroicInspiration": false, "usedMagicInitiateSpell": false,
+						"gameClockSeconds": 0, "lastLongRestSeconds": javaCast( "null", 0 ),
+						"spentSpellSlots": { "1": 4, "2": 2 }
+					} );
+					service.shortRest( player, 0 );
+					expect( player.spentSpellSlots ).toBeEmpty();
+					expect( player.spellSlots[ "1" ] ).toBe( 4 );
+					expect( player.spellSlots[ "2" ] ).toBe( 2 );
+				} );
+
+				it( "shortRest() does NOT restore spell slots for a non-Warlock caster", () => {
+					var player = makeRestPlayer( { "class": "Wizard", "level": 3, "spentSpellSlots": { "1": 2 } } );
+					service.shortRest( player, 0 );
+					expect( player.spentSpellSlots[ "1" ] ).toBe( 2 );
 				} );
 
 				it( "longRest() fully heals, resets slots/rages, and recovers every Long-Rest-only resource", () => {

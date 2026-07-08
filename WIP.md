@@ -267,6 +267,33 @@ Skilled's mechanical effect (3 more skills) still applies correctly since
 that doesn't depend on the row existing twice, but there's no "times taken"
 counter for feats that would need one.
 
+**Follow-up: Magic Initiate now grants a real spell/cantrip picker.**
+Previously `grantChosenFeat()` recorded the feat in the DB and set
+`player.hasMagicInitiate = true` (triggering the Wizard-list fallback in
+`_assignSpellcasting()`), but never gave the player a way to choose *which*
+2 cantrips and 1 first-level spell to add — they always got the hardcoded
+Fire Bolt + Magic Missile defaults. Fixed with the existing
+`pendingCantripChoice`/`pendingSpellChoice` pattern:
+
+- Migration `016_magic_initiate_picks.sql`: two new columns on `characters`
+  — `pending_magic_initiate_cantrips` (INT, starts at 2 when the feat is
+  taken, decrements per pick) and `pending_magic_initiate_spell` (TINYINT,
+  cleared once the spell is chosen).
+- `grantChosenFeat()`: when `featName == "Magic Initiate"`, sets those
+  columns to `2`/`1` and calls `_assignSpellcasting()` immediately so the
+  fallback cantrip/spell load as a placeholder until the player picks.
+- `pendingMagicInitiateChoice(characterId)`: returns available Wizard-list
+  cantrips and level-1 spells excluding those already known. Wizard is used
+  as the source class for all Magic Initiate picks (a simplification: RAW
+  lets you choose any caster class, but tracking that choice requires a
+  separate column; Wizard's list is broad enough for the demo).
+- `chooseMagicInitiateCantrip()` / `chooseMagicInitiateSpell()`: append to
+  `known_cantrips`/`known_spells` and decrement/clear the pending column.
+- Character sheet: two new panels ("Magic Initiate: Choose a Cantrip (N
+  remaining)" and "Magic Initiate: Choose a 1st-Level Spell") shown while
+  the respective pending count is > 0, same skippable/revisitable shape as
+  all other pending-choice panels.
+
 ## 10. Fighting Style and Half-Elf's Skill Versatility were auto-picked
 **Resolved** (per the "never auto-assign a player choice" rule — see
 memory). Two more silent auto-picks converted to real UI:
@@ -510,6 +537,16 @@ no time); Short Rest has no upper limit on how many can be taken per day
 (matches RAW, which only limits Long Rest); exhaustion/food/water aren't
 modeled, so nothing else currently reads the clock besides rest gating.
 
+**Follow-up: Warlocks now recover all spell slots on a Short Rest.** The
+initial Short Rest implementation recovered Second Wind and one Rage use
+but left spell slots untouched for all classes. Warlocks (Pact Magic) are
+the only class whose slots recharge on a Short Rest rather than a Long Rest
+— `shortRest()` now detects whether `player.class == "Warlock"` (or any
+multiclass entry has `className == "Warlock"`) and, if so, clears
+`spentSpellSlots` and calls `_recomputeSpellSlots()` before saving state.
+2 new unit tests added: one confirming Warlock slots are restored, one
+confirming non-Warlock casters' slots are unchanged.
+
 **Follow-up regression, found and fixed same day**: reported as "started a
 new battle with 0 HP." `default.bx`'s `onMount()` auto-heals a character
 who loads at 0 HP (persisted from a defeat, or from being stabilized-but-
@@ -618,6 +655,21 @@ sealed off from the player by a wall with no gap) and ran the real
 confirmed `staleAutoRounds` reaches 3 and auto-battle stops itself with
 neither side ever able to land a hit, then removed the debug code
 (verified via `diff` against the committed version).
+
+**Follow-up: `player.inCombat` could stay `true` after all mobs were
+defeated.** `_updateCombatState()` (which is the only place that sets
+`player.inCombat`) bails early when `gameOver = true` without first
+clearing the flag. If a mob died mid-step (e.g. via an opportunity attack
+inside `movePlayer()`) or the enemy killed the player during `endTurn()`'s
+inline `runEnemyTurn()` call, the snapshot sent back to the client could
+show "In combat!" in the status bar with no visible mobs on screen. Three
+fixes: (1) `_updateCombatState()` now sets `player.inCombat = false`
+before the `gameOver` early return; (2) `movePlayer()` now calls
+`_maybeSaveProgress()` after `_updateCombatState()`, so an
+opportunity-attack kill that sets `gameOver = true` is immediately
+persisted and `inCombat` cleared in the same response; (3) `endTurn()`
+now calls `_maybeSaveProgress()` after `endPlayerTurn()`, covering the
+player-defeat-on-enemy-turn path.
 
 ## 16. No multiclassing
 Every character was locked to one `class_id`/`level` pair for life. Added
@@ -742,6 +794,31 @@ replaces the whole Attack action, so it doesn't interact with Extra
 Attack's multiple weapon swings). Like the enemy AI it mirrors, this
 doesn't hold slots in reserve for a tougher fight later — auto-battle
 spends what it has the moment it's useful.
+
+**Follow-up bugs found and fixed after the initial implementation:**
+
+- **Spell slots reported as exhausted but casting continued.** Two root
+  causes: (1) `_autoCastPlayerSpell()` returned `true` unconditionally
+  after calling `castLeveledSpell()`, even when `_castLeveledSpellFor()`
+  silently aborted (no slot available, no Magic Initiate fallback) — the
+  action was claimed but nothing was actually cast; fixed by gating
+  `return true` on `state.actionUsed`. (2) The hardcoded Magic Initiate
+  Magic Missile fallback uses `type: "damage"`, but the leveled-spell loop
+  only checked for `"attack"` and `"save"` — so `usedMagicInitiateSpell`
+  was never set, and `hasSpellResource()` kept returning `true` for Magic
+  Initiate characters even after the bonus spell was used; fixed by adding
+  `|| spell.type == "damage"` to that condition. 2 new unit tests added
+  for the conditional-return behaviour (previously untested).
+- **Auto-battle preferred spells over melee when adjacent.** Even standing
+  right next to a mob with a sword equipped, auto-battle would spend a
+  spell slot or cantrip every turn. Fixed in `playerDecideAndAct()`:
+  `_autoCastPlayerSpell()` is now skipped when `distance <= 1` AND the
+  player has a melee weapon equipped, deferring to a normal weapon attack
+  instead — the same preference a reasonable fighter would show. Exception:
+  healing spells can still fire when adjacent if the player is bloodied
+  (HP ≤ 50%), since that outweighs the melee advantage. 2 existing unit
+  tests adjusted (they placed the caster adjacent to the target, which now
+  correctly triggers the melee preference instead of spellcasting).
 
 Also added a spell tooltip while here (a related, smaller ask from the
 same session): Cast buttons in combat now show a `title` with the spell's

@@ -502,6 +502,7 @@ class extends="cbwire.models.Component" {
 	 */
 	private function _updateCombatState() {
 		if ( variables.data.gameOver ) {
+			variables.data.player.inCombat = false;
 			return;
 		}
 		var player = variables.data.player;
@@ -777,6 +778,7 @@ class extends="cbwire.models.Component" {
 		variables.data.log.prepend( "#player.name# moves to (#arguments.x#, #arguments.y#)." );
 		combatService.checkOpportunityAttacks( variables.data, player, true, startPosition );
 		_updateCombatState();
+		_maybeSaveProgress();
 		_checkLoot();
 		_checkEncounter();
 		_checkMapTransition();
@@ -1200,6 +1202,7 @@ class extends="cbwire.models.Component" {
 			return;
 		}
 		combatService.endPlayerTurn( variables.data );
+		_maybeSaveProgress();
 	}
 
 	/**

@@ -83,44 +83,6 @@
 			</bx:if>
 		</bx:if>
 
-		<bx:if canRest()>
-		<bx:set hitDiceRemaining = player.hitDiceMax - player.hitDiceSpent>
-		<bx:set restDiceMax = maxRestDice()>
-		<bx:set longRestWait = hoursUntilNextLongRest()>
-		<div class="parchment-panel rest-panel">
-			<h2 class="fantasy-heading">Rest</h2>
-			<div class="stat-inline">
-				<span><strong>HP</strong> #max( player.hitPoints, 0 )#/#player.maxHitPoints#</span>
-				<span><strong>Hit Dice</strong> #hitDiceRemaining#/#player.hitDiceMax# (1d#player.hitDieSize#)</span>
-				<bx:if structKeyExists( player, "isSpellcaster" ) && player.isSpellcaster && structCount( player.spellSlots ) gt 0>
-					<span><strong>Slots</strong> <bx:loop collection="#player.spellSlots#" item="sl">L#sl#:#player.spellSlots[ sl ]# </bx:loop></span>
-				</bx:if>
-			</div>
-			<p class="stat-subtitle" style="margin: 0.3rem 0 0;">#gameClockLabel()#</p>
-			<div class="turn-actions" style="align-items: center;">
-				<label class="stat-subtitle" style="margin: 0;">
-					Hit Dice to spend
-					<button type="button" class="btn" wire:click="adjustRestDice(-1)" #( restDiceCount lte 0 ? "disabled" : "" )#>-</button>
-					<strong>#restDiceCount#</strong>
-					<button type="button" class="btn" wire:click="adjustRestDice(1)" #( restDiceCount gte restDiceMax ? "disabled" : "" )#>+</button>
-				</label>
-				<button
-					type="button"
-					class="btn btn-attack"
-					wire:click="takeShortRest()"
-					title="Advances the clock by 1 hour; recovers Second Wind and one Rage use."
-				>Short Rest (1 hr)</button>
-				<button
-					type="button"
-					class="btn"
-					wire:click="takeLongRest()"
-					#( longRestWait gt 0 ? "disabled" : "" )#
-					title="Advances the clock by 8 hours; full recovery.#( longRestWait gt 0 ? ' Available in about ' & longRestWait & ' more hour(s) of in-game time.' : '' )#"
-				>Long Rest (8 hr)#( longRestWait gt 0 ? " — available in ~#longRestWait#h" : "" )#</button>
-			</div>
-		</div>
-		</bx:if>
-
 		<bx:set viewport = viewportBounds()>
 		<!--- Built once for the whole grid rather than re-scanned per tile —
 		      see opponentPositionIndex()/poiPositionIndex()'s doc comments. --->
@@ -155,6 +117,28 @@
 				</bx:loop>
 			</div>
 		</div>
+
+		<bx:if !gameOver && !initiativeRolled && canRest()>
+			<bx:set restDiceMax = maxRestDice()>
+			<bx:set longRestWait = hoursUntilNextLongRest()>
+			<div class="turn-actions rest-bar" style="align-items: center; flex-wrap: wrap;">
+				<span class="stat-subtitle" style="margin: 0;">#gameClockLabel()#</span>
+				<span class="stat-subtitle" style="margin: 0;">HD: <button type="button" class="btn btn-sm" wire:click="adjustRestDice(-1)" #( restDiceCount lte 0 ? "disabled" : "" )#>-</button> #restDiceCount# <button type="button" class="btn btn-sm" wire:click="adjustRestDice(1)" #( restDiceCount gte restDiceMax ? "disabled" : "" )#>+</button></span>
+				<button
+					type="button"
+					class="btn btn-attack"
+					wire:click="takeShortRest()"
+					title="Spend #restDiceCount# Hit #( restDiceCount == 1 ? 'Die' : 'Dice' )# (1d#player.hitDieSize#). Advances the clock by 1 hour; recovers Second Wind and one Rage use."
+				>Short Rest</button>
+				<button
+					type="button"
+					class="btn"
+					wire:click="takeLongRest()"
+					#( longRestWait gt 0 ? "disabled" : "" )#
+					title="Advances the clock by 8 hours; full recovery.#( longRestWait gt 0 ? ' Available in about ' & longRestWait & ' more hour(s) of in-game time.' : '' )#"
+				>Long Rest#( longRestWait gt 0 ? " (~#longRestWait#h)" : "" )#</button>
+			</div>
+		</bx:if>
 
 		<bx:if !gameOver && initiativeRolled>
 			<bx:if structKeyExists( player, "isSpellcaster" ) && player.isSpellcaster && structCount( player.spellSlots ) gt 0>

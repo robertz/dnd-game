@@ -540,16 +540,15 @@
 		}
 
 		@keyframes mob-defeated {
-			0% { opacity: 1; transform: scale(1); filter: grayscale(0.7); }
-			15% { opacity: 0.15; }
-			30% { opacity: 1; }
-			45% { opacity: 0.15; }
-			60% { opacity: 1; }
-			100% { opacity: 0; transform: scale(0.85) translateY(6px); filter: grayscale(1); }
+			0% { opacity: 1; transform: scale(1); filter: grayscale(0.7); box-shadow: 0 0 0 0 rgba(180, 30, 30, 0); }
+			12% { box-shadow: 0 0 14px 2px rgba(180, 30, 30, 0.65); }
+			35% { opacity: 1; transform: scale(1); filter: grayscale(0.85); box-shadow: 0 0 0 0 rgba(180, 30, 30, 0); }
+			100% { opacity: 0; transform: scale(0.9) translateY(8px); filter: grayscale(1); box-shadow: 0 0 0 0 rgba(180, 30, 30, 0); }
 		}
 
 		.stat-card-defeated {
-			animation: mob-defeated 1.4s ease-in-out forwards;
+			animation: mob-defeated 1.6s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+			animation-delay: 0.15s;
 			pointer-events: none;
 		}
 
@@ -639,6 +638,24 @@
 			margin: 0 0.2rem 0.2rem 0;
 			font-size: 0.78rem;
 			cursor: help;
+		}
+
+		/* Above the combat action bar — one chip per spell level, gold while
+		   slots remain, dimmed/grayed once that level is fully spent. */
+		.spell-slot-bar {
+			margin: 0 0 0.5rem;
+		}
+
+		.spell-slot-bar .condition-chip {
+			background: rgba(185, 146, 47, 0.15);
+			border-color: var(--gold);
+			cursor: default;
+		}
+
+		.spell-slot-bar .spell-slot-empty {
+			background: rgba(60, 55, 45, 0.4);
+			border-color: ##6b6255;
+			color: ##9a927f;
 		}
 
 		/* Same shape as .condition-chip, neutral gold coloring — for a skill

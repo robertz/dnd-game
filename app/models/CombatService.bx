@@ -434,7 +434,7 @@ class singleton {
 		if (
 			structKeyExists( arguments.opponent, "knownLeveledSpell" ) && !isNull( arguments.opponent.knownLeveledSpell ) &&
 			arguments.opponent.knownLeveledSpell.type == "heal" && arguments.opponent.hitPoints <= arguments.opponent.maxHitPoints / 2 &&
-			_hasSpellResource( arguments.opponent, 1 )
+			hasSpellResource( arguments.opponent, 1 )
 		) {
 			_castLeveledSpellFor( arguments.state, arguments.opponent, player, true, arguments.opponent.knownLeveledSpell );
 			return;
@@ -442,7 +442,7 @@ class singleton {
 
 		if (
 			structKeyExists( arguments.opponent, "knownLeveledSpell" ) && !isNull( arguments.opponent.knownLeveledSpell ) &&
-			arguments.opponent.knownLeveledSpell.type == "damage" && _hasSpellResource( arguments.opponent, 1 ) &&
+			arguments.opponent.knownLeveledSpell.type == "damage" && hasSpellResource( arguments.opponent, 1 ) &&
 			_isSpellTargetValid( arguments.state, arguments.opponent, player, arguments.opponent.knownLeveledSpell )
 		) {
 			_castLeveledSpellFor( arguments.state, arguments.opponent, player, true, arguments.opponent.knownLeveledSpell );
@@ -2524,9 +2524,11 @@ class singleton {
 	 * True if `combatant` could actually cast a spell right now — a slot at
 	 * or above `minimumLevel`, or an unused Magic Initiate bonus spell.
 	 * Doesn't spend anything; lets the enemy AI decide whether casting is
-	 * worth attempting before committing to it via _castLeveledSpellFor().
+	 * worth attempting before committing to it via _castLeveledSpellFor(),
+	 * and lets the combat screen disable a "Cast" button for a leveled
+	 * spell it can't actually pay for right now.
 	 */
-	private function _hasSpellResource( combatant, minimumLevel ) {
+	function hasSpellResource( combatant, minimumLevel ) {
 		if ( structKeyExists( arguments.combatant, "spellSlots" ) ) {
 			for ( var level = arguments.minimumLevel; level <= 9; level++ ) {
 				if ( structKeyExists( arguments.combatant.spellSlots, level ) && arguments.combatant.spellSlots[ level ] > 0 ) {

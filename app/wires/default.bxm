@@ -157,6 +157,14 @@
 		</div>
 
 		<bx:if !gameOver && initiativeRolled>
+			<bx:if structKeyExists( player, "isSpellcaster" ) && player.isSpellcaster && structCount( player.spellSlots ) gt 0>
+				<p class="stat-note spell-slot-bar">
+					<strong>Spell Slots</strong>
+					<bx:loop collection="#player.spellSlots#" item="actionBarSlotLevel">
+						<span class="condition-chip#( player.spellSlots[ actionBarSlotLevel ] lte 0 ? ' spell-slot-empty' : '' )#">L#actionBarSlotLevel#: #player.spellSlots[ actionBarSlotLevel ]#</span>
+					</bx:loop>
+				</p>
+			</bx:if>
 			<div class="turn-actions">
 				<bx:if autoBattling>
 					<div wire:poll.900ms="autoStep()" class="auto-battle-indicator">⚔ Auto-battling…</div>
@@ -196,7 +204,13 @@
 								</bx:if>
 								<bx:if structKeyExists( player, "knownLeveledSpells" )>
 									<bx:loop array="#player.knownLeveledSpells#" index="knownSpell">
-										<button type="button" class="btn btn-attack" wire:click="castLeveledSpell('#knownSpell.name#')">Cast #knownSpell.name#</button>
+										<button
+											type="button"
+											class="btn btn-attack"
+											wire:click="castLeveledSpell('#knownSpell.name#')"
+											#( hasSpellResource( knownSpell.level ) ? "" : "disabled" )#
+											title="#( hasSpellResource( knownSpell.level ) ? '' : 'No level-#knownSpell.level#+ spell slots left' )#"
+										>Cast #knownSpell.name#</button>
 									</bx:loop>
 								</bx:if>
 							</bx:if>

@@ -1670,6 +1670,33 @@ class extends="testbox.system.BaseSpec" {
 				} );
 			} );
 
+			describe( "hasSpellResource() (gates the combat screen's Cast buttons)", () => {
+				it( "is true when a slot at or above the minimum level is available", () => {
+					var combatant = makeCombatant( 0, 0, { "spellSlots": { "1": 0, "2": 1 } } );
+					expect( service.hasSpellResource( combatant, 1 ) ).toBeTrue();
+				} );
+
+				it( "is false when every slot at or above the minimum level is spent", () => {
+					var combatant = makeCombatant( 0, 0, { "spellSlots": { "1": 0, "2": 0 } } );
+					expect( service.hasSpellResource( combatant, 1 ) ).toBeFalse();
+				} );
+
+				it( "ignores a slot below the minimum level", () => {
+					var combatant = makeCombatant( 0, 0, { "spellSlots": { "1": 5, "3": 0 } } );
+					expect( service.hasSpellResource( combatant, 3 ) ).toBeFalse();
+				} );
+
+				it( "is true with no slots left but an unused Magic Initiate bonus spell", () => {
+					var combatant = makeCombatant( 0, 0, { "spellSlots": { "1": 0 }, "hasMagicInitiate": true, "usedMagicInitiateSpell": false } );
+					expect( service.hasSpellResource( combatant, 1 ) ).toBeTrue();
+				} );
+
+				it( "is false once the Magic Initiate bonus spell is also used up", () => {
+					var combatant = makeCombatant( 0, 0, { "spellSlots": { "1": 0 }, "hasMagicInitiate": true, "usedMagicInitiateSpell": true } );
+					expect( service.hasSpellResource( combatant, 1 ) ).toBeFalse();
+				} );
+			} );
+
 			describe( "concentration checks (resolveAttack())", () => {
 				it( "maintains concentration on a successful Constitution save after taking damage", () => {
 					var attacker = { "name": "Attacker" };

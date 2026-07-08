@@ -924,6 +924,16 @@ class extends="cbwire.models.Component" {
 	}
 
 	/**
+	 * Whether the player could actually pay for a leveled spell of
+	 * `minimumLevel` right now — a slot at or above that level, or an
+	 * unused Magic Initiate bonus spell (see combatService.hasSpellResource()).
+	 * Used by the template to disable a "Cast" button it can't afford.
+	 */
+	function hasSpellResource( minimumLevel ) {
+		return combatService.hasSpellResource( variables.data.player, arguments.minimumLevel );
+	}
+
+	/**
 	 * Consumes one unit of an item from variables.data.items (e.g. drinking a
 	 * Potion of Healing) — usable both mid-combat (as the player's action,
 	 * same action-economy slot as Attack/Grapple/Shove) and freely while

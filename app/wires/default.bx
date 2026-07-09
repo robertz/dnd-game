@@ -16,7 +16,7 @@ class extends="cbwire.models.Component" {
 	// actual grid is. Keeps rendering (and the DOM) bounded to what's on
 	// screen instead of the whole map, which matters once a level is bigger
 	// than a single screenful (e.g. the 40x30 grandDungeon).
-	VIEWPORT_RADIUS = 7;
+	VIEWPORT_RADIUS = 12;
 
 	// How many mobs spawn in one encounter — randomized within this range so
 	// fights vary without needing per-level authored spawn points; positions
@@ -37,13 +37,14 @@ class extends="cbwire.models.Component" {
 	 * SRD `monsters` table.
 	 */
 	data = {
-		// Placeholder — replaced with a real level (tiles, spawn points) from
-		// MapService in onMount(). Keeping a plain width/height here means
-		// "grid" exists as a data property before the component mounts.
-		"grid": {
-			"width": 20,
-			"height": 20
-		},
+		// Current map identity and its session-mutable POI list. The large
+		// tiles/decorations geometry is intentionally NOT stored here — it would
+		// bloat the CBWIRE snapshot (serialized to the browser on every request)
+		// by O(width*height) entries. _grid() reloads it from MapService's
+		// server-side in-memory cache on each request instead.
+		"moduleSlug": "",
+		"mapSlug": "",
+		"gridPois": [],
 		"player": {},
 		// The player's consumable/misc item inventory (see CharacterService's
 		// getItemInventory()) — loaded in onMount() and refreshed whenever it
@@ -158,16 +159,25 @@ class extends="cbwire.models.Component" {
 	 *  target map's authored playerSpawn.
 	 */
 	private function _enterMap( rc, spawnOverride = {} ) {
+		var grid = {};
 		if ( structKeyExists( arguments.rc, "module" ) && structKeyExists( arguments.rc, "map" ) ) {
-			variables.data.grid = mapService.getModuleMap( arguments.rc.module, arguments.rc.map );
+			variables.data.moduleSlug = arguments.rc.module;
+			variables.data.mapSlug    = arguments.rc.map;
+			grid = mapService.getModuleMap( arguments.rc.module, arguments.rc.map );
 		} else if ( structKeyExists( session, "adventureModule" ) && len( session.adventureModule ) ) {
-			variables.data.grid = mapService.getModuleMap( session.adventureModule, session.adventureMap );
+			variables.data.moduleSlug = session.adventureModule;
+			variables.data.mapSlug    = session.adventureMap;
+			grid = mapService.getModuleMap( session.adventureModule, session.adventureMap );
 		} else {
-			variables.data.grid = mapService.getLevel( "grandDungeon" );
+			variables.data.moduleSlug = "";
+			variables.data.mapSlug    = "grandDungeon";
+			grid = mapService.getLevel( "grandDungeon" );
 		}
+		variables.data.gridPois = grid.pois;
+		variables._gridCache    = grid;
 		variables.data.player.position = ( structKeyExists( arguments.spawnOverride, "x" ) && structKeyExists( arguments.spawnOverride, "y" ) )
 			? { "x": arguments.spawnOverride.x, "y": arguments.spawnOverride.y }
-			: { "x": variables.data.grid.playerSpawn.x, "y": variables.data.grid.playerSpawn.y };
+			: { "x": grid.playerSpawn.x, "y": grid.playerSpawn.y };
 
 		var opponents = _buildInitialRoster();
 		variables.data.opponents = opponents;
@@ -197,14 +207,14 @@ class extends="cbwire.models.Component" {
 	private function _buildInitialRoster() {
 		var player = variables.data.player;
 		var spawnPois = [];
-		for ( var poi in variables.data.grid.pois ) {
+		for ( var poi in _grid().pois ) {
 			if ( poi.type == "spawn" ) {
 				arrayAppend( spawnPois, poi );
 			}
 		}
 
 		if ( spawnPois.len() == 0 ) {
-			var spawnPoint = variables.data.grid.opponentSpawn;
+			var spawnPoint = _grid().opponentSpawn;
 			var mobs = combatService.randomMonstersForLevel( player.level, randRange( MIN_MOB_COUNT, MAX_MOB_COUNT ) );
 			return _scatterMobs( mobs, spawnPoint, [ player.position ] );
 		}
@@ -268,7 +278,7 @@ class extends="cbwire.models.Component" {
 		if ( arguments.mobs.len() == 0 ) {
 			return [];
 		}
-		var positions = combatService.randomOpenTilesNear( variables.data.grid, arguments.center, MOB_SCATTER_RADIUS, arguments.mobs.len(), arguments.takenPositions );
+		var positions = combatService.randomOpenTilesNear( _grid(), arguments.center, MOB_SCATTER_RADIUS, arguments.mobs.len(), arguments.takenPositions );
 		var scattered = [];
 		for ( var i = 1; i <= arguments.mobs.len(); i++ ) {
 			var mob = arguments.mobs[ i ];
@@ -310,7 +320,7 @@ class extends="cbwire.models.Component" {
 		}
 		var remaining = [];
 		var collected = false;
-		for ( var poi in variables.data.grid.pois ) {
+		for ( var poi in _grid().pois ) {
 			if ( !collected && poi.type == "loot" && poi.x == variables.data.player.position.x && poi.y == variables.data.player.position.y ) {
 				collected = true;
 				_grantLoot( poi.payload );
@@ -320,7 +330,8 @@ class extends="cbwire.models.Component" {
 			}
 		}
 		if ( collected ) {
-			variables.data.grid.pois = remaining;
+			variables.data.gridPois   = remaining;
+			variables._gridCache.pois = remaining;
 		}
 	}
 
@@ -372,7 +383,7 @@ class extends="cbwire.models.Component" {
 		}
 		var remaining = [];
 		var triggered = false;
-		for ( var poi in variables.data.grid.pois ) {
+		for ( var poi in _grid().pois ) {
 			if (
 				!triggered && poi.type == "encounter" &&
 				max( abs( poi.x - variables.data.player.position.x ), abs( poi.y - variables.data.player.position.y ) ) <= 1
@@ -385,7 +396,8 @@ class extends="cbwire.models.Component" {
 			}
 		}
 		if ( triggered ) {
-			variables.data.grid.pois = remaining;
+			variables.data.gridPois   = remaining;
+			variables._gridCache.pois = remaining;
 		}
 	}
 
@@ -414,7 +426,7 @@ class extends="cbwire.models.Component" {
 		}
 
 		var takenPositions = [ player.position ];
-		var mobPositions = combatService.randomOpenTilesNear( variables.data.grid, player.position, MOB_SCATTER_RADIUS, mobs.len(), takenPositions );
+		var mobPositions = combatService.randomOpenTilesNear( _grid(), player.position, MOB_SCATTER_RADIUS, mobs.len(), takenPositions );
 
 		var names = [];
 		for ( var i = 1; i <= mobs.len(); i++ ) {
@@ -458,7 +470,7 @@ class extends="cbwire.models.Component" {
 		if ( variables.data.gameOver || ( structKeyExists( variables.data.player, "inCombat" ) && variables.data.player.inCombat ) ) {
 			return;
 		}
-		for ( var poi in variables.data.grid.pois ) {
+		for ( var poi in _grid().pois ) {
 			if ( poi.type == "transition" && poi.x == variables.data.player.position.x && poi.y == variables.data.player.position.y ) {
 				session.adventureModule = poi.payload.targetModule;
 				session.adventureMap = poi.payload.targetMap;
@@ -512,7 +524,7 @@ class extends="cbwire.models.Component" {
 			var withinViewport = opp.position.x >= bounds.minCol && opp.position.x <= bounds.maxCol
 				&& opp.position.y >= bounds.minRow && opp.position.y <= bounds.maxRow;
 			opp.visible = ( opp.hitPoints <= 0 )
-				|| ( withinViewport && combatService.hasLineOfSight( variables.data.grid, opp.position, player.position ) );
+				|| ( withinViewport && combatService.hasLineOfSight( _grid(), opp.position, player.position ) );
 			if ( opp.hitPoints > 0 && opp.visible ) {
 				nowInCombat = true;
 			}
@@ -543,7 +555,7 @@ class extends="cbwire.models.Component" {
 	 * are ever rendered.
 	 */
 	function viewportBounds() {
-		var grid = variables.data.grid;
+		var grid = _grid();
 		var player = variables.data.player;
 
 		var minCol = max( 1, min( player.position.x - VIEWPORT_RADIUS, grid.width - ( VIEWPORT_RADIUS * 2 ) ) );
@@ -579,7 +591,7 @@ class extends="cbwire.models.Component" {
 	 */
 	function poiPositionIndex() {
 		var index = {};
-		for ( var poi in variables.data.grid.pois ) {
+		for ( var poi in _grid().pois ) {
 			if ( listFindNoCase( "loot,transition", poi.type ) ) {
 				index[ poi.x & "," & poi.y ] = poi.type;
 			}
@@ -668,7 +680,7 @@ class extends="cbwire.models.Component" {
 	 * directly.
 	 */
 	function wallAutotileClass( x, y ) {
-		return mapService.wallAutotileClass( variables.data.grid, arguments.x, arguments.y );
+		return mapService.wallAutotileClass( _grid(), arguments.x, arguments.y );
 	}
 
 	function tileReachable( x, y ) {
@@ -689,6 +701,34 @@ class extends="cbwire.models.Component" {
 	}
 
 	/**
+	 * Public accessor so the template can read grid.tiles/grid.decorations
+	 * without those arrays living in variables.data (see _grid()'s doc comment).
+	 * Usage in default.bxm: <bx:set grid = currentGrid()>
+	 */
+	function currentGrid() {
+		return _grid();
+	}
+
+	/**
+	 * Returns the full decoded grid struct (tiles, decorations, width, height,
+	 * spawns, pois) for the current map. Loads from MapService's server-side
+	 * in-memory cache once per request, then reuses the result — the geometry
+	 * is never stored in variables.data (which CBWIRE serializes to the browser
+	 * on every round-trip) because tiles+decorations are O(width*height) and
+	 * make the snapshot unacceptably large on maps bigger than ~32x32.
+	 */
+	private function _grid() {
+		if ( !structKeyExists( variables, "_gridCache" ) ) {
+			var geo = len( variables.data.moduleSlug )
+				? mapService.getModuleMap( variables.data.moduleSlug, variables.data.mapSlug )
+				: mapService.getLevel( variables.data.mapSlug );
+			geo.pois         = variables.data.gridPois;
+			variables._gridCache = geo;
+		}
+		return variables._gridCache;
+	}
+
+	/**
 	 * Lazily computes (once per request, via a plain instance variable
 	 * rather than variables.data — this is a derived cache, not state that
 	 * belongs in the serialized wire snapshot) every tile within the
@@ -698,7 +738,7 @@ class extends="cbwire.models.Component" {
 	private function _reachableSet() {
 		if ( !structKeyExists( variables, "_reachableSetCache" ) ) {
 			variables._reachableSetCache = combatService.reachableSquares(
-				variables.data.grid, variables.data.player.position, variables.data.movementRemaining
+				_grid(), variables.data.player.position, variables.data.movementRemaining
 			);
 		}
 		return variables._reachableSetCache;
@@ -762,11 +802,11 @@ class extends="cbwire.models.Component" {
 		if ( !isNull( _opponentAt( arguments.x, arguments.y ) ) ) {
 			return;
 		}
-		if ( !combatService.isWalkable( variables.data.grid, arguments.x, arguments.y ) ) {
+		if ( !combatService.isWalkable( _grid(), arguments.x, arguments.y ) ) {
 			return;
 		}
 
-		var distance = combatService.pathDistance( variables.data.grid, player.position, { "x": arguments.x, "y": arguments.y } );
+		var distance = combatService.pathDistance( _grid(), player.position, { "x": arguments.x, "y": arguments.y } );
 		if ( distance < 0 || distance > variables.data.movementRemaining ) {
 			variables.data.log.prepend( "#player.name# can't reach that tile — only #variables.data.movementRemaining# square(s) of movement left." );
 			return;
@@ -801,7 +841,7 @@ class extends="cbwire.models.Component" {
 
 		var player = variables.data.player;
 		var opponent = variables.data.opponent;
-		var choice = combatService.pickWeaponForDistance( player, combatService.chebyshev( player, opponent ), variables.data.grid, opponent.position );
+		var choice = combatService.pickWeaponForDistance( player, combatService.chebyshev( player, opponent ), _grid(), opponent.position );
 		if ( isNull( choice ) ) {
 			variables.data.log.prepend( "#opponent.name# is out of reach." );
 			return;

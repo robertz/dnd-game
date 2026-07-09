@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <!-- wall background -->
+  <rect width="16" height="16" fill="#090705"/>
+  <rect x="0" y="0" width="10" height="5" fill="#1c1510"/>
+  <rect x="12" y="0" width="4" height="5" fill="#1c1510"/>
+  <rect x="0" y="6" width="4" height="5" fill="#181210"/>
+  <rect x="6" y="6" width="10" height="5" fill="#181210"/>
+  <rect x="0" y="12" width="10" height="4" fill="#1c1510"/>
+  <rect x="12" y="12" width="4" height="4" fill="#1c1510"/>
+  <!-- torch bracket -->
+  <rect x="7" y="8" width="2" height="5" fill="#3a2a10"/>
+  <rect x="6" y="11" width="4" height="1.5" fill="#3a2a10"/>
+  <!-- flame glow -->
+  <ellipse cx="8" cy="6" rx="3.5" ry="4" fill="#c05010" opacity="0.35"/>
+  <!-- flame body -->
+  <ellipse cx="8" cy="6.5" rx="2" ry="3" fill="#e07020"/>
+  <!-- flame core -->
+  <ellipse cx="8" cy="7" rx="1.2" ry="2" fill="#f0a030"/>
+  <!-- flame tip -->
+  <ellipse cx="8" cy="5" rx="0.7" ry="1.5" fill="#f8d060"/>
+</svg>

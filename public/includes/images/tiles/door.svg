@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <!-- floor base (bottom corners visible) -->
+  <rect width="16" height="16" fill="#1a1410"/>
+  <rect x="1" y="9" width="2" height="6" fill="#453322"/>
+  <rect x="13" y="9" width="2" height="6" fill="#4e3c2a"/>
+  <!-- stone door frame (sides + top) -->
+  <rect x="0" y="0" width="3" height="16" fill="#1a1410"/>
+  <rect x="13" y="0" width="3" height="16" fill="#1a1410"/>
+  <rect x="3" y="0" width="10" height="2" fill="#1a1410"/>
+  <!-- door panel (wood) -->
+  <rect x="3" y="2" width="10" height="14" fill="#4a2a08"/>
+  <!-- wood planks -->
+  <rect x="5" y="2" width="1" height="14" fill="#3c2208" opacity="0.6"/>
+  <rect x="10" y="2" width="1" height="14" fill="#3c2208" opacity="0.6"/>
+  <!-- top highlight -->
+  <rect x="3" y="2" width="10" height="1" fill="#6a4018" opacity="0.8"/>
+  <!-- iron banding -->
+  <rect x="3" y="6" width="10" height="1.5" fill="#2a2020" opacity="0.7"/>
+  <rect x="3" y="10" width="10" height="1.5" fill="#2a2020" opacity="0.7"/>
+  <!-- handle -->
+  <circle cx="11" cy="9" r="1" fill="#b9922f"/>
+</svg>

@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <rect width="16" height="16" fill="#1a1410"/>
+  <rect x="1" y="1" width="6" height="6" fill="#4e3c2a"/>
+  <rect x="9" y="1" width="6" height="6" fill="#473524"/>
+  <rect x="1" y="9" width="6" height="6" fill="#453322"/>
+  <rect x="9" y="9" width="6" height="6" fill="#4e3c2a"/>
+  <!-- left crystal -->
+  <polygon points="4,14 3,9 5,7 6,12" fill="#386090"/>
+  <polygon points="4,14 3,9 3.5,9.5" fill="#5088b8" opacity="0.6"/>
+  <!-- center crystal (tallest) -->
+  <polygon points="8,15 6,8 8,3 10,8" fill="#4a78b0"/>
+  <polygon points="8,15 6,8 7,8" fill="#70a8d8" opacity="0.5"/>
+  <!-- right crystal -->
+  <polygon points="12,14 11,8 13,6 14,11" fill="#386090"/>
+  <polygon points="12,14 11,8 11.5,8.5" fill="#5088b8" opacity="0.6"/>
+  <!-- tips -->
+  <circle cx="8" cy="3.5" r="0.7" fill="#a8d8f0" opacity="0.8"/>
+  <circle cx="5" cy="7.5" r="0.5" fill="#90c0e0" opacity="0.7"/>
+  <circle cx="13" cy="6.5" r="0.5" fill="#90c0e0" opacity="0.7"/>
+</svg>

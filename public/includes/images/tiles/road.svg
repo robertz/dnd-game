@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <!-- road base (packed dirt/gravel) -->
+  <rect width="16" height="16" fill="#1e1a12"/>
+  <!-- cobblestone pattern, rows offset -->
+  <!-- row 1 -->
+  <rect x="0" y="1" width="5" height="3" rx="0.5" fill="#2a241a"/>
+  <rect x="7" y="0" width="5" height="4" rx="0.5" fill="#262018"/>
+  <rect x="14" y="1" width="2" height="3" rx="0.5" fill="#2a241a"/>
+  <!-- row 2 (offset) -->
+  <rect x="0" y="6" width="3" height="3" rx="0.5" fill="#262018"/>
+  <rect x="5" y="5" width="6" height="4" rx="0.5" fill="#2a241a"/>
+  <rect x="13" y="5" width="3" height="4" rx="0.5" fill="#262018"/>
+  <!-- row 3 -->
+  <rect x="0" y="11" width="5" height="4" rx="0.5" fill="#2a241a"/>
+  <rect x="7" y="11" width="5" height="4" rx="0.5" fill="#262018"/>
+  <rect x="14" y="11" width="2" height="4" rx="0.5" fill="#2a241a"/>
+  <!-- stone top highlights -->
+  <rect x="0" y="1" width="5" height="0.7" fill="#362e22" opacity="0.8"/>
+  <rect x="5" y="5" width="6" height="0.7" fill="#362e22" opacity="0.8"/>
+  <rect x="0" y="11" width="5" height="0.7" fill="#362e22" opacity="0.8"/>
+  <rect x="7" y="11" width="5" height="0.7" fill="#362e22" opacity="0.8"/>
+</svg>

@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <rect width="16" height="16" fill="#1a1410"/>
+  <rect x="1" y="1" width="6" height="6" fill="#4e3c2a"/>
+  <rect x="9" y="1" width="6" height="6" fill="#473524"/>
+  <rect x="1" y="9" width="6" height="6" fill="#453322"/>
+  <rect x="9" y="9" width="6" height="6" fill="#4e3c2a"/>
+  <!-- spike base plate -->
+  <rect x="1" y="11" width="14" height="3" fill="#1e1810"/>
+  <!-- three spikes -->
+  <polygon points="2,14 4,5 6,14" fill="#7a7a8c"/>
+  <polygon points="2,14 3,9 4,14" fill="#a0a0b0" opacity="0.5"/>
+  <polygon points="6,14 8,5 10,14" fill="#7a7a8c"/>
+  <polygon points="6,14 7,9 8,14" fill="#a0a0b0" opacity="0.5"/>
+  <polygon points="10,14 12,5 14,14" fill="#7a7a8c"/>
+  <polygon points="10,14 11,9 12,14" fill="#a0a0b0" opacity="0.5"/>
+</svg>

@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <rect width="16" height="16" fill="#1a1410"/>
+  <rect x="1" y="1" width="6" height="6" fill="#4e3c2a"/>
+  <rect x="9" y="1" width="6" height="6" fill="#473524"/>
+  <rect x="1" y="9" width="6" height="6" fill="#453322"/>
+  <rect x="9" y="9" width="6" height="6" fill="#4e3c2a"/>
+  <!-- chest body -->
+  <rect x="2" y="9" width="12" height="6" fill="#5c3c12"/>
+  <!-- chest lid -->
+  <rect x="2" y="5" width="12" height="5" fill="#6e4c1e"/>
+  <rect x="2" y="4" width="12" height="2" rx="1" fill="#7a5824"/>
+  <rect x="2" y="4" width="12" height="1" fill="#8a6830" opacity="0.8"/>
+  <!-- lock band -->
+  <rect x="2" y="8.5" width="12" height="1.5" fill="#c09840"/>
+  <!-- lock hasp -->
+  <rect x="6.5" y="7" width="3" height="3" rx="0.5" fill="#c09840"/>
+  <rect x="7.5" y="8" width="1" height="2" fill="#2a2010"/>
+  <!-- corner reinforcements -->
+  <rect x="2" y="4" width="1.5" height="11" fill="#c09840" opacity="0.5"/>
+  <rect x="12.5" y="4" width="1.5" height="11" fill="#c09840" opacity="0.5"/>
+</svg>

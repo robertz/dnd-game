@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <!-- wall background -->
+  <rect width="16" height="16" fill="#090705"/>
+  <rect x="0" y="0" width="10" height="5" fill="#1c1510"/>
+  <rect x="12" y="0" width="4" height="5" fill="#1c1510"/>
+  <rect x="0" y="6" width="4" height="5" fill="#181210"/>
+  <rect x="6" y="6" width="10" height="5" fill="#181210"/>
+  <rect x="0" y="12" width="10" height="4" fill="#1c1510"/>
+  <rect x="12" y="12" width="4" height="4" fill="#1c1510"/>
+  <!-- pillar cap and base -->
+  <rect x="4" y="1" width="8" height="2" fill="#2c2418"/>
+  <rect x="4" y="13" width="8" height="2" fill="#2c2418"/>
+  <!-- pillar shaft -->
+  <rect x="5" y="3" width="6" height="10" fill="#221a10"/>
+  <!-- highlight on left edge of shaft -->
+  <rect x="5" y="3" width="1.5" height="10" fill="#302618" opacity="0.7"/>
+  <!-- shadow on right edge -->
+  <rect x="9.5" y="3" width="1.5" height="10" fill="#0a0806" opacity="0.6"/>
+</svg>

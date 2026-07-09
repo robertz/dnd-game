@@ -84,6 +84,7 @@
 		</bx:if>
 
 		<bx:set viewport = viewportBounds()>
+		<bx:set grid = currentGrid()>
 		<!--- Built once for the whole grid rather than re-scanned per tile —
 		      see opponentPositionIndex()/poiPositionIndex()'s doc comments. --->
 		<bx:set opponentIndex = opponentPositionIndex()>

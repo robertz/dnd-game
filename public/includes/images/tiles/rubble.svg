@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <rect width="16" height="16" fill="#1a1410"/>
+  <rect x="1" y="1" width="6" height="6" fill="#4e3c2a"/>
+  <rect x="9" y="1" width="6" height="6" fill="#473524"/>
+  <rect x="1" y="9" width="6" height="6" fill="#453322"/>
+  <rect x="9" y="9" width="6" height="6" fill="#4e3c2a"/>
+  <!-- rubble chunks -->
+  <polygon points="1,15 4,11 7,14 5,16" fill="#382c1e"/>
+  <polygon points="1,15 2,12 4,11" fill="#4a3c28" opacity="0.8"/>
+  <polygon points="8,10 12,9 14,12 10,13" fill="#342818"/>
+  <polygon points="8,10 9,9 12,9" fill="#463824" opacity="0.8"/>
+  <polygon points="2,7 5,5 7,8 4,9" fill="#382c1e"/>
+  <polygon points="2,7 3,5 5,5" fill="#4a3c28" opacity="0.8"/>
+  <polygon points="10,3 13,2 14,5 11,6" fill="#342818"/>
+  <polygon points="10,3 11,2 13,2" fill="#463824" opacity="0.8"/>
+</svg>

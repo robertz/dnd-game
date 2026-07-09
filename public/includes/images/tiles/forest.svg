@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <!-- dark forest floor -->
+  <rect width="16" height="16" fill="#0a1508"/>
+  <!-- tree trunks -->
+  <rect x="4" y="11" width="2" height="5" fill="#2a1a08"/>
+  <rect x="10" y="12" width="2" height="4" fill="#2a1a08"/>
+  <!-- left tree canopy (layered) -->
+  <polygon points="5,10 9,16 1,16" fill="#0f1e0c"/>
+  <polygon points="5,7 9,13 1,13" fill="#122212"/>
+  <polygon points="5,4 8,9 2,9" fill="#163016"/>
+  <polygon points="5,1 7.5,6 2.5,6" fill="#1a3a1a"/>
+  <!-- right tree canopy (layered, offset) -->
+  <polygon points="11,11 15,16 7,16" fill="#0f1e0c"/>
+  <polygon points="11,8 15,14 7,14" fill="#122212"/>
+  <polygon points="11,5 14,10 8,10" fill="#163016"/>
+  <polygon points="11,2 13.5,7 8.5,7" fill="#1a3a1a"/>
+  <!-- canopy highlights (top-left lit) -->
+  <polygon points="5,1 6,3.5 4,3.5" fill="#224c22" opacity="0.7"/>
+  <polygon points="11,2 12,4.5 10,4.5" fill="#224c22" opacity="0.7"/>
+</svg>

@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <!-- deep water base -->
+  <rect width="16" height="16" fill="#091c2c"/>
+  <!-- mid-depth gradient blocks -->
+  <rect x="0" y="5" width="16" height="11" fill="#0a1e30" opacity="0.5"/>
+  <!-- wave lines -->
+  <path d="M0,4 Q2,2.5 4,4 Q6,5.5 8,4 Q10,2.5 12,4 Q14,5.5 16,4" stroke="#184868" stroke-width="1.2" fill="none"/>
+  <path d="M0,8 Q2,6.5 4,8 Q6,9.5 8,8 Q10,6.5 12,8 Q14,9.5 16,8" stroke="#143e5c" stroke-width="1.2" fill="none"/>
+  <path d="M0,12 Q2,10.5 4,12 Q6,13.5 8,12 Q10,10.5 12,12 Q14,13.5 16,12" stroke="#103452" stroke-width="1" fill="none"/>
+  <!-- specular highlights on wave crests -->
+  <line x1="1" y1="3" x2="3" y2="3" stroke="#3080b0" stroke-width="0.7" opacity="0.5"/>
+  <line x1="9" y1="3" x2="11" y2="3" stroke="#3080b0" stroke-width="0.7" opacity="0.5"/>
+  <line x1="4" y1="7" x2="7" y2="7" stroke="#2060a0" stroke-width="0.7" opacity="0.4"/>
+  <line x1="12" y1="7" x2="15" y2="7" stroke="#2060a0" stroke-width="0.7" opacity="0.4"/>
+</svg>

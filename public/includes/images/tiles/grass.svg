@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <!-- grass base -->
+  <rect width="16" height="16" fill="#1c3410"/>
+  <rect x="0" y="8" width="8" height="8" fill="#182e0e"/>
+  <rect x="9" y="0" width="7" height="8" fill="#182e0e"/>
+  <!-- grass blades (lower half) -->
+  <line x1="2" y1="16" x2="1" y2="12" stroke="#2e501c" stroke-width="1"/>
+  <line x1="4" y1="16" x2="4" y2="11" stroke="#284818" stroke-width="1"/>
+  <line x1="6" y1="16" x2="6" y2="13" stroke="#2e501c" stroke-width="1"/>
+  <line x1="8" y1="16" x2="9" y2="12" stroke="#284818" stroke-width="1"/>
+  <line x1="11" y1="16" x2="10" y2="12" stroke="#2e501c" stroke-width="1"/>
+  <line x1="13" y1="16" x2="13" y2="11" stroke="#284818" stroke-width="1"/>
+  <line x1="15" y1="16" x2="15" y2="13" stroke="#2e501c" stroke-width="1"/>
+  <!-- grass blades (upper half) -->
+  <line x1="1" y1="8" x2="1" y2="4" stroke="#243e14" stroke-width="1"/>
+  <line x1="3" y1="8" x2="3" y2="5" stroke="#243e14" stroke-width="1"/>
+  <line x1="5" y1="8" x2="4" y2="4" stroke="#1e3810" stroke-width="1"/>
+  <line x1="10" y1="8" x2="10" y2="3" stroke="#243e14" stroke-width="1"/>
+  <line x1="12" y1="7" x2="12" y2="4" stroke="#1e3810" stroke-width="1"/>
+  <line x1="14" y1="8" x2="15" y2="4" stroke="#243e14" stroke-width="1"/>
+</svg>

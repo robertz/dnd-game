@@ -288,10 +288,9 @@ main.scroll {
 .tile {
 	aspect-ratio: 1;
 	width: clamp(16px, 2.6vw, 34px);
-	background-color: rgb(46, 36, 22);
-	background-image: url(../includes/images/tiles/floor-0x72.png);
+	background-color: rgb(78, 60, 42);
+	background-image: url(../includes/images/tiles/floor.svg);
 	background-size: cover;
-	image-rendering: pixelated;
 	display: flex;
 	align-items: center;
 	justify-content: center;
@@ -334,9 +333,8 @@ main.scroll {
 }
 
 .tile-wall {
-	background-image: url(../includes/images/tiles/wall-0x72.png);
+	background-image: url(../includes/images/tiles/wall.svg);
 	background-size: cover;
-	image-rendering: pixelated;
 	box-shadow: inset 1px 1px 0 rgba(255,255,255,0.06), inset -1px -1px 0 rgba(0,0,0,0.5);
 	cursor: default;
 }
@@ -348,69 +346,60 @@ main.scroll {
 .tile-wall-corner-tl, .tile-wall-corner-tr, .tile-wall-corner-bl, .tile-wall-corner-br,
 .tile-wall-top, .tile-wall-bottom, .tile-wall-edge-l, .tile-wall-edge-r {
 	background-size: cover;
-	image-rendering: pixelated;
 	box-shadow: inset 1px 1px 0 rgba(255,255,255,0.06), inset -1px -1px 0 rgba(0,0,0,0.5);
 	cursor: default;
 }
-.tile-wall-corner-tl { background-image: url(../includes/images/tiles/wall-corner-tl-kenney.png); }
-.tile-wall-corner-tr { background-image: url(../includes/images/tiles/wall-corner-tr-kenney.png); }
-.tile-wall-corner-bl { background-image: url(../includes/images/tiles/wall-corner-bl-kenney.png); }
-.tile-wall-corner-br { background-image: url(../includes/images/tiles/wall-corner-br-kenney.png); }
-.tile-wall-top       { background-image: url(../includes/images/tiles/wall-top-kenney.png); }
-.tile-wall-bottom    { background-image: url(../includes/images/tiles/wall-bottom-kenney.png); }
-.tile-wall-edge-l    { background-image: url(../includes/images/tiles/wall-edge-l-kenney.png); }
-.tile-wall-edge-r    { background-image: url(../includes/images/tiles/wall-edge-r-kenney.png); }
+.tile-wall-corner-tl { background-image: url(../includes/images/tiles/wall-corner-tl.svg); }
+.tile-wall-corner-tr { background-image: url(../includes/images/tiles/wall-corner-tr.svg); }
+.tile-wall-corner-bl { background-image: url(../includes/images/tiles/wall-corner-bl.svg); }
+.tile-wall-corner-br { background-image: url(../includes/images/tiles/wall-corner-br.svg); }
+.tile-wall-top       { background-image: url(../includes/images/tiles/wall-top.svg); }
+.tile-wall-bottom    { background-image: url(../includes/images/tiles/wall-bottom.svg); }
+.tile-wall-edge-l    { background-image: url(../includes/images/tiles/wall-edge-l.svg); }
+.tile-wall-edge-r    { background-image: url(../includes/images/tiles/wall-edge-r.svg); }
 
 .tile-torch {
-	background-image: url(../includes/images/tiles/torch-0x72.png);
+	background-image: url(../includes/images/tiles/torch.svg);
 	background-size: cover;
-	image-rendering: pixelated;
 	box-shadow: inset 1px 1px 0 rgba(255,255,255,0.06), inset -1px -1px 0 rgba(0,0,0,0.5);
 	cursor: default;
 }
 
 .tile-pillar {
-	background-image: url(../includes/images/tiles/pillar-0x72.png);
+	background-image: url(../includes/images/tiles/pillar.svg);
 	background-size: cover;
-	image-rendering: pixelated;
 	box-shadow: inset 1px 1px 0 rgba(255,255,255,0.06), inset -1px -1px 0 rgba(0,0,0,0.5);
 	cursor: default;
 }
 
 .tile-door {
-	background-image: url(../includes/images/tiles/door-0x72.png);
+	background-image: url(../includes/images/tiles/door.svg);
 	background-size: cover;
-	image-rendering: pixelated;
 }
 
 .tile-spikes {
-	background-image: url(../includes/images/tiles/spikes-0x72.png);
+	background-image: url(../includes/images/tiles/spikes.svg);
 	background-size: cover;
-	image-rendering: pixelated;
 }
 
 .tile-chest {
-	background-image: url(../includes/images/tiles/chest-0x72.png);
+	background-image: url(../includes/images/tiles/chest.svg);
 	background-size: cover;
-	image-rendering: pixelated;
 }
 
 .tile-rubble {
-	background-image: url(../includes/images/tiles/rubble-0x72.png);
+	background-image: url(../includes/images/tiles/rubble.svg);
 	background-size: cover;
-	image-rendering: pixelated;
 }
 
 .tile-crystal {
-	background-image: url(../includes/images/tiles/crystal-0x72.png);
+	background-image: url(../includes/images/tiles/crystal.svg);
 	background-size: cover;
-	image-rendering: pixelated;
 }
 
 .tile-banner {
-	background-image: url(../includes/images/tiles/banner-0x72.png);
+	background-image: url(../includes/images/tiles/banner.svg);
 	background-size: cover;
-	image-rendering: pixelated;
 	box-shadow: inset 1px 1px 0 rgba(255,255,255,0.06), inset -1px -1px 0 rgba(0,0,0,0.5);
 	cursor: default;
 }
@@ -418,42 +407,36 @@ main.scroll {
 /* Outdoor terrain — grass/road/sand are walkable floor variants;
    water, forest and mountain are impassable, styled like tile-wall. */
 .tile-sand {
-	background-image: url(../includes/images/tiles/sand-kenney.png);
+	background-image: url(../includes/images/tiles/sand.svg);
 	background-size: cover;
-	image-rendering: pixelated;
 }
 .tile-grass {
-	background-image: url(../includes/images/tiles/grass-kenney.png);
+	background-image: url(../includes/images/tiles/grass.svg);
 	background-size: cover;
-	image-rendering: pixelated;
 }
 
 .tile-road {
-	background-image: url(../includes/images/tiles/road-kenney.png);
+	background-image: url(../includes/images/tiles/road.svg);
 	background-size: cover;
-	image-rendering: pixelated;
 }
 
 .tile-water {
-	background-image: url(../includes/images/tiles/water-kenney.png);
+	background-image: url(../includes/images/tiles/water.svg);
 	background-size: cover;
-	image-rendering: pixelated;
 	box-shadow: inset 1px 1px 0 rgba(255,255,255,0.08), inset -1px -1px 0 rgba(0,0,0,0.5);
 	cursor: default;
 }
 
 .tile-forest {
-	background-image: url(../includes/images/tiles/forest-kenney.png);
+	background-image: url(../includes/images/tiles/forest.svg);
 	background-size: cover;
-	image-rendering: pixelated;
 	box-shadow: inset 1px 1px 0 rgba(255,255,255,0.06), inset -1px -1px 0 rgba(0,0,0,0.5);
 	cursor: default;
 }
 
 .tile-mountain {
-	background-image: url(../includes/images/tiles/mountain-kenney.png);
+	background-image: url(../includes/images/tiles/mountain.svg);
 	background-size: cover;
-	image-rendering: pixelated;
 	box-shadow: inset 1px 1px 0 rgba(255,255,255,0.06), inset -1px -1px 0 rgba(0,0,0,0.5);
 	cursor: default;
 }
@@ -596,7 +579,7 @@ main.scroll {
 }
 
 .attack-stat {
-	color: var(--blood);
+	color: var(--gold-bright);
 	font-weight: bold;
 }
 
@@ -611,8 +594,8 @@ main.scroll {
 
 .condition-chip {
 	display: inline-block;
-	background: rgba(110, 20, 20, 0.25);
-	border: 1px solid var(--blood-bright);
+	background: rgba(185, 146, 47, 0.12);
+	border: 1px solid var(--gold);
 	border-radius: 20px;
 	padding: 0.05rem 0.5rem;
 	margin: 0 0.2rem 0.2rem 0;

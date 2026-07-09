@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+  <!-- sand base -->
+  <rect width="16" height="16" fill="#3c3018"/>
+  <!-- subtle dune ripples -->
+  <path d="M0,6 Q4,4 8,6 Q12,8 16,6" stroke="#463820" stroke-width="1" fill="none" opacity="0.6"/>
+  <path d="M0,10 Q4,8 8,10 Q12,12 16,10" stroke="#463820" stroke-width="1" fill="none" opacity="0.6"/>
+  <!-- lighter sand patches -->
+  <ellipse cx="3" cy="3" rx="2.5" ry="1.5" fill="#48381c" opacity="0.7"/>
+  <ellipse cx="12" cy="5" rx="2" ry="1.5" fill="#48381c" opacity="0.7"/>
+  <ellipse cx="6" cy="12" rx="3" ry="1.5" fill="#483a1c" opacity="0.7"/>
+  <ellipse cx="13" cy="13" rx="2" ry="1" fill="#48381c" opacity="0.7"/>
+  <!-- sand grain dots -->
+  <circle cx="2" cy="7" r="0.5" fill="#503e1e" opacity="0.7"/>
+  <circle cx="7" cy="4" r="0.5" fill="#503e1e" opacity="0.7"/>
+  <circle cx="10" cy="9" r="0.5" fill="#503e1e" opacity="0.7"/>
+  <circle cx="4" cy="14" r="0.5" fill="#503e1e" opacity="0.7"/>
+  <circle cx="14" cy="3" r="0.5" fill="#503e1e" opacity="0.7"/>
+  <circle cx="1" cy="12" r="0.5" fill="#503e1e" opacity="0.7"/>
+  <circle cx="13" cy="8" r="0.5" fill="#2e2610" opacity="0.5"/>
+</svg>
